@@ -203,7 +203,11 @@
         });
       }
     }
-
+if (!window._weDebugLogged) {
+  console.log('[WE-Tracker] Row-Keys:', Object.keys(rows[0]));
+  console.log('[WE-Tracker] Row-Sample:', JSON.stringify(rows[0]));
+  window._weDebugLogged = true;
+}
     // Berechnete Felder für jede TE befüllen
     for (const te of teMap.values()) {
       berechneTE(te);
