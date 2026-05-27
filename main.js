@@ -2060,15 +2060,29 @@
     _ganttHTML(tes) {
       const jetzt = new Date();
 
-      // ── Zeitbereich ermitteln ──
-      // Alle vorhandenen Start- und Endzeitpunkte je TE sammeln
+      // ── Ausreißer-Filterung ──
+      // TEs deren frühester Timestamp älter als 7 Tage ist werden im Gantt
+      // ausgeblendet — sie würden die Achse auf Monate aufspannen.
+      // Im Kachel- und Detail-View bleiben sie weiterhin sichtbar.
+      const GANTT_FENSTER_TAGE = 7;
+      const cutoff = new Date(jetzt.getTime() - GANTT_FENSTER_TAGE * 86400000);
+
+      const tesFuerGantt = tes.filter(te => {
+        const fruehester = te.tsAnkunft ?? te.geplantStart;
+        return fruehester && fruehester >= cutoff;
+      });
+
+      if (tesFuerGantt.length === 0) {
+        return `<div class="view-placeholder" style="min-height:200px;">Keine TEs im Zeitfenster (letzte ${GANTT_FENSTER_TAGE} Tage)</div>`;
+      }
+
+      // ── Zeitbereich aus gefilterten TEs ermitteln ──
       const alleDaten = [];
-      for (const te of tes) {
-        if (te.geplantStart)     alleDaten.push(te.geplantStart);
-        if (te.geplantEnde)      alleDaten.push(te.geplantEnde);
-        if (te.tsAnkunft)        alleDaten.push(te.tsAnkunft);
-        if (te.tsAbfahrt)        alleDaten.push(te.tsAbfahrt);
-        // Falls noch keine Abfahrt: Jetzt-Zeit als provisorisches Ende
+      for (const te of tesFuerGantt) {
+        if (te.geplantStart)  alleDaten.push(te.geplantStart);
+        if (te.geplantEnde)   alleDaten.push(te.geplantEnde);
+        if (te.tsAnkunft)     alleDaten.push(te.tsAnkunft);
+        if (te.tsAbfahrt)     alleDaten.push(te.tsAbfahrt);
         if (!te.tsAbfahrt && te.tsAnkunft) alleDaten.push(jetzt);
       }
 
@@ -2076,35 +2090,57 @@
         return `<div class="view-placeholder" style="min-height:200px;">Keine Zeitstempel vorhanden</div>`;
       }
 
-      // Achse auf volle Stunden runden + Puffer
       const rawMin = Math.min(...alleDaten.map(d => d.getTime()));
       const rawMax = Math.max(...alleDaten.map(d => d.getTime()));
-      const pufferMs  = Math.max((rawMax - rawMin) * 0.05, 30 * 60000);
+      const pufferMs = Math.max((rawMax - rawMin) * 0.04, 30 * 60000);
 
       // Auf volle Stunde abrunden/aufrunden
       const achseStart = new Date(Math.floor((rawMin - pufferMs) / 3600000) * 3600000);
       const achseEnde  = new Date(Math.ceil( (rawMax + pufferMs) / 3600000) * 3600000);
       const spanMs     = achseEnde.getTime() - achseStart.getTime();
+      const spanStunden = spanMs / 3600000;
 
       // Prozent-Position auf der Achse
       const pct = (d) => ((d.getTime() - achseStart.getTime()) / spanMs * 100).toFixed(3);
 
-      // ── Stunden-Ticks ──
+      // ── Adaptive Ticks ──
+      // < 24h  → 1h-Ticks mit Uhrzeit
+      // 24–72h → 2h-Ticks mit Uhrzeit
+      // > 72h  → 6h-Ticks mit Datum+Uhrzeit
+      let tickIntervallH, tickFormat;
+      if (spanStunden <= 24) {
+        tickIntervallH = 1;
+        tickFormat = (d) => fmtTime(d);
+      } else if (spanStunden <= 72) {
+        tickIntervallH = 2;
+        tickFormat = (d) => fmtTime(d);
+      } else {
+        tickIntervallH = 6;
+        tickFormat = (d) => {
+          const tag  = d.toLocaleDateString('de-DE', { day:'2-digit', month:'2-digit' });
+          const zeit = fmtTime(d);
+          return d.getHours() === 0 ? tag : zeit;
+        };
+      }
+
       const ticks = [];
       const tickStart = new Date(achseStart);
       while (tickStart <= achseEnde) {
-        ticks.push(new Date(tickStart));
-        tickStart.setHours(tickStart.getHours() + 1);
+        // Nur Ticks die auf das Intervall passen
+        if (tickStart.getHours() % tickIntervallH === 0) {
+          ticks.push(new Date(tickStart));
+        }
+        tickStart.setTime(tickStart.getTime() + 3600000); // +1h
       }
 
       const ticksHTML = ticks.map(t =>
         `<div class="gantt-tick" style="left:${pct(t)}%">
            <div class="gantt-tick-line"></div>
-           <div class="gantt-tick-label">${fmtTime(t)}</div>
+           <div class="gantt-tick-label">${esc(tickFormat(t))}</div>
          </div>`
       ).join('');
 
-      // Vertikale Gitterlinien (eine pro Stunde)
+      // Vertikale Gitterlinien — nur bei Haupt-Ticks
       const gridLines = ticks.map(t =>
         `<div class="gantt-grid-line" style="left:${pct(t)}%"></div>`
       ).join('');
@@ -2118,7 +2154,7 @@
         : '';
 
       // ── Zeilen ──
-      const zeilenHTML = tes.map(te => this._ganttZeileHTML(te, pct, achseStart, achseEnde, gridLines, nowLineHTML)).join('');
+      const zeilenHTML = tesFuerGantt.map(te => this._ganttZeileHTML(te, pct, achseStart, achseEnde, gridLines, nowLineHTML)).join('');
 
       return `
         <div class="gantt-wrap">
