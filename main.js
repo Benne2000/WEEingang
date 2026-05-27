@@ -107,21 +107,37 @@
   // Formatiert eine Zahl mit deutschem Tausender-Trennzeichen
   const fmtNum = (x) => Math.round(Number(x || 0)).toLocaleString('de-DE');
 
-  // Liest einen Dimension-Wert aus einer BW-Datenzeile
-  // BW-Feldnamen können variieren – versucht mehrere Schlüssel
+  // SAC liefert Felder als { id: "...", label: "..." } mit _0-Suffix.
+  // Diese Funktion normalisiert einen Rohwert auf einen primitiven String.
+  const extractVal = (v) => {
+    if (v == null) return null;
+    // SAC-Objekt: { id, label } → id bevorzugen (technischer Wert)
+    if (typeof v === 'object' && 'id' in v) return String(v.id).trim();
+    return String(v).trim();
+  };
+
+  // Liest einen Dimension-Wert aus einer BW-Datenzeile.
+  // Versucht jeden Key sowohl mit _0-Suffix (SAC) als auch direkt (Fallback).
   const readDim = (row, ...keys) => {
     for (const key of keys) {
-      const v = row[key];
-      if (!isNull(v)) return String(v).trim();
+      for (const k of [`${key}_0`, key]) {
+        const raw = extractVal(row[k]);
+        if (!isNull(raw)) return raw;
+      }
     }
     return null;
   };
 
-  // Liest einen Measure-Wert aus einer BW-Datenzeile
+  // Liest einen Measure-Wert aus einer BW-Datenzeile.
+  // SAC liefert Measures als { raw: 144, formatted: "144" }.
   const readVal = (row, ...keys) => {
     for (const key of keys) {
-      const v = row[key];
-      if (v != null && !isNull(String(v))) return Number(v);
+      for (const k of [`${key}_0`, key]) {
+        const v = row[k];
+        if (v == null) continue;
+        const num = (typeof v === 'object' && 'raw' in v) ? v.raw : v;
+        if (num != null && !isNull(String(num))) return Number(num);
+      }
     }
     return null;
   };
@@ -203,11 +219,7 @@
         });
       }
     }
-if (!window._weDebugLogged) {
-  console.log('[WE-Tracker] Row-Keys:', Object.keys(rows[0]));
-  console.log('[WE-Tracker] Row-Sample:', JSON.stringify(rows[0]));
-  window._weDebugLogged = true;
-}
+
     // Berechnete Felder für jede TE befüllen
     for (const te of teMap.values()) {
       berechneTE(te);
