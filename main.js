@@ -2057,48 +2057,15 @@
       };
     }
 
-    _ganttHTML(tes) {
+    _ganttHTML(tes, fensterStart, fensterEnde) {
       const jetzt = new Date();
 
-      // ── Ausreißer-Filterung ──
-      // TEs deren frühester Timestamp älter als 7 Tage ist werden im Gantt
-      // ausgeblendet — sie würden die Achse auf Monate aufspannen.
-      // Im Kachel- und Detail-View bleiben sie weiterhin sichtbar.
-      const GANTT_FENSTER_TAGE = 7;
-      const cutoff = new Date(jetzt.getTime() - GANTT_FENSTER_TAGE * 86400000);
-
-      const tesFuerGantt = tes.filter(te => {
-        const fruehester = te.tsAnkunft ?? te.geplantStart;
-        return fruehester && fruehester >= cutoff;
-      });
-
-      if (tesFuerGantt.length === 0) {
-        return `<div class="view-placeholder" style="min-height:200px;">Keine TEs im Zeitfenster (letzte ${GANTT_FENSTER_TAGE} Tage)</div>`;
-      }
-
-      // ── Zeitbereich aus gefilterten TEs ermitteln ──
-      const alleDaten = [];
-      for (const te of tesFuerGantt) {
-        if (te.geplantStart)  alleDaten.push(te.geplantStart);
-        if (te.geplantEnde)   alleDaten.push(te.geplantEnde);
-        if (te.tsAnkunft)     alleDaten.push(te.tsAnkunft);
-        if (te.tsAbfahrt)     alleDaten.push(te.tsAbfahrt);
-        if (!te.tsAbfahrt && te.tsAnkunft) alleDaten.push(jetzt);
-      }
-
-      if (alleDaten.length === 0) {
-        return `<div class="view-placeholder" style="min-height:200px;">Keine Zeitstempel vorhanden</div>`;
-      }
-
-      const rawMin = Math.min(...alleDaten.map(d => d.getTime()));
-      const rawMax = Math.max(...alleDaten.map(d => d.getTime()));
-      const pufferMs = Math.max((rawMax - rawMin) * 0.04, 30 * 60000);
-
-      // Auf volle Stunde abrunden/aufrunden
-      const achseStart = new Date(Math.floor((rawMin - pufferMs) / 3600000) * 3600000);
-      const achseEnde  = new Date(Math.ceil( (rawMax + pufferMs) / 3600000) * 3600000);
-      const spanMs     = achseEnde.getTime() - achseStart.getTime();
-      const spanStunden = spanMs / 3600000;
+      // ── Achse = exakt das gewählte Fenster ──
+      const achseStart   = fensterStart;
+      const achseEnde    = fensterEnde;
+      const spanMs       = achseEnde.getTime() - achseStart.getTime();
+      const spanStunden  = spanMs / 3600000;
+      const tesFuerGantt = tes; // bereits von _renderGantt gefiltert
 
       // Prozent-Position auf der Achse
       const pct = (d) => ((d.getTime() - achseStart.getTime()) / spanMs * 100).toFixed(3);
