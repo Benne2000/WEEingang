@@ -2061,8 +2061,9 @@
       const jetzt = new Date();
 
       // ── Achse = exakt das gewählte Fenster ──
-      const achseStart   = fensterStart;
-      const achseEnde    = fensterEnde;
+      // Fallback falls Parameter fehlen (z.B. beim ersten Render)
+      const achseStart   = fensterStart instanceof Date ? fensterStart : new Date(jetzt.getFullYear(), jetzt.getMonth(), jetzt.getDate());
+      const achseEnde    = fensterEnde   instanceof Date ? fensterEnde  : new Date(achseStart.getTime() + 86400000);
       const spanMs       = achseEnde.getTime() - achseStart.getTime();
       const spanStunden  = spanMs / 3600000;
       const tesFuerGantt = tes; // bereits von _renderGantt gefiltert
