@@ -1397,6 +1397,102 @@
         height:        4px;
         border-radius: 2px;
       }
+
+      /* Zeitraum-Chips (in filter-bar) */
+      .zeitraum-chips { display: flex; gap: 4px; flex-wrap: wrap; }
+
+      .zeitraum-chip {
+        padding:       3px 10px;
+        border-radius: 20px;
+        font-family:   var(--font-mono);
+        font-size:     10px;
+        font-weight:   500;
+        border:        1px solid var(--c-border2);
+        color:         var(--c-text2);
+        background:    transparent;
+        cursor:        pointer;
+        transition:    all 0.15s;
+        white-space:   nowrap;
+      }
+
+      .zeitraum-chip:hover  { border-color: var(--c-red-border); color: var(--c-text); }
+      .zeitraum-chip.active { background: var(--c-blue); border-color: var(--c-blue); color: #fff; }
+
+      /* Gantt-Steuerleiste */
+      .gantt-ctrl {
+        display:       flex;
+        align-items:   center;
+        gap:           10px;
+        padding:       8px 16px;
+        background:    var(--c-bg3);
+        border-bottom: 1px solid var(--c-border);
+        flex-wrap:     wrap;
+        flex-shrink:   0;
+      }
+
+      .gantt-nav { display: flex; align-items: center; gap: 6px; }
+
+      .gantt-nav-btn {
+        width: 28px; height: 28px;
+        border-radius: var(--r-sm);
+        border:  1px solid var(--c-border2);
+        color:   var(--c-text2);
+        font-size: 14px;
+        display: flex; align-items: center; justify-content: center;
+        cursor: pointer;
+        transition: background 0.12s, color 0.12s;
+      }
+
+      .gantt-nav-btn:hover { background: var(--c-bg4); color: var(--c-text); }
+
+      .gantt-nav-date {
+        font-family:  var(--font-mono);
+        font-size:    12px;
+        font-weight:  600;
+        color:        var(--c-text);
+        min-width:    130px;
+        text-align:   center;
+        white-space:  nowrap;
+      }
+
+      .gantt-heute-btn {
+        padding: 3px 9px;
+        border-radius: var(--r-sm);
+        border: 1px solid var(--c-border2);
+        font-family: var(--font-mono);
+        font-size: 9px; font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--c-text3);
+        cursor: pointer;
+        transition: all 0.12s;
+      }
+
+      .gantt-heute-btn:hover { background: var(--c-bg4); color: var(--c-text); }
+
+      .gantt-ctrl-sep { flex: 1; }
+
+      .gantt-fenster-tabs {
+        display: flex;
+        border: 1px solid var(--c-border2);
+        border-radius: var(--r-sm);
+        overflow: hidden;
+      }
+
+      .gantt-fenster-tab {
+        padding: 4px 11px;
+        font-family: var(--font-mono);
+        font-size: 9px; font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--c-text3);
+        cursor: pointer;
+        transition: background 0.12s, color 0.12s;
+        white-space: nowrap;
+      }
+
+      .gantt-fenster-tab:hover  { background: var(--c-bg4); color: var(--c-text2); }
+      .gantt-fenster-tab.active { background: var(--c-red-dim); color: #e74c3c; }
     </style>
 
     <!-- ── DOM ────────────────────────────────────────────────────────── -->
@@ -1456,7 +1552,14 @@
         <!-- ── VIEW 1: KACHELN ── -->
         <div class="view active" id="view-kacheln">
           <div class="filter-bar">
-            <span class="filter-label">Status</span>
+            <span class="filter-label">Zeitraum</span>
+            <div class="zeitraum-chips">
+              <button class="zeitraum-chip active" data-zeitraum="heute">Heute</button>
+              <button class="zeitraum-chip" data-zeitraum="woche">Diese Woche</button>
+              <button class="zeitraum-chip" data-zeitraum="7tage">Letzte 7 Tage</button>
+              <button class="zeitraum-chip" data-zeitraum="monat">Monat</button>
+            </div>
+            <span class="filter-label" style="margin-left:6px">Status</span>
             <div class="filter-chips" id="filter-chips">
               <button class="filter-chip active" data-filter="alle">Alle</button>
               <button class="filter-chip" data-filter="erwartet">Erwartet</button>
@@ -1480,9 +1583,21 @@
 
         <!-- ── VIEW 3: GANTT ── -->
         <div class="view" id="view-gantt">
-          <div id="gantt-content">
-            <!-- Wird in Schritt 4 durch renderGantt() befüllt -->
+          <div class="gantt-ctrl">
+            <div class="gantt-nav">
+              <button class="gantt-nav-btn" id="gantt-prev">&#8592;</button>
+              <div class="gantt-nav-date" id="gantt-nav-date">–</div>
+              <button class="gantt-nav-btn" id="gantt-next">&#8594;</button>
+            </div>
+            <button class="gantt-heute-btn" id="gantt-heute">Heute</button>
+            <div class="gantt-ctrl-sep"></div>
+            <div class="gantt-fenster-tabs">
+              <button class="gantt-fenster-tab active" data-fenster="tag">Tag</button>
+              <button class="gantt-fenster-tab" data-fenster="3tage">3 Tage</button>
+              <button class="gantt-fenster-tab" data-fenster="woche">Woche</button>
+            </div>
           </div>
+          <div id="gantt-content"></div>
         </div>
 
       </div>
@@ -1503,9 +1618,12 @@
       // Interner State
       this._teMap       = new Map();    // { teNr → TEObjekt }
       this._activeTE    = null;         // aktuell im Detail angezeigte TE-Nummer
-      this._activeFilter = 'alle';      // aktiver Status-Filter
-      this._theme       = 'dark';       // 'dark' | 'light'
-      this._ac          = new AbortController(); // für alle Event-Listener
+      this._activeFilter  = 'alle';     // aktiver Status-Filter
+      this._theme         = 'dark';     // 'dark' | 'light'
+      this._ac            = new AbortController();
+      this._activeZeitraum = 'heute';   // 'heute'|'woche'|'7tage'|'monat'
+      this._ganttDatum    = new Date(); // Anker-Datum Gantt
+      this._ganttFenster  = 'tag';      // 'tag'|'3tage'|'woche'
     }
 
     connectedCallback() {
@@ -1540,13 +1658,42 @@
         this._switchView('kacheln');
       }, opts);
 
-      // Filter-Chips
+      // Filter-Chips (Status)
       this._shadow.querySelectorAll('.filter-chip').forEach(chip => {
         chip.addEventListener('click', () => {
           this._activeFilter = chip.dataset.filter;
           this._shadow.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
           chip.classList.add('active');
           this._renderKacheln();
+        }, opts);
+      });
+
+      // Zeitraum-Chips
+      this._shadow.querySelectorAll('.zeitraum-chip').forEach(chip => {
+        chip.addEventListener('click', () => {
+          this._activeZeitraum = chip.dataset.zeitraum;
+          this._shadow.querySelectorAll('.zeitraum-chip').forEach(c => c.classList.remove('active'));
+          chip.classList.add('active');
+          this._updateKPIs();
+          this._renderKacheln();
+        }, opts);
+      });
+
+      // Gantt-Navigation
+      this._$('gantt-prev')?.addEventListener('click', () => this._ganttNavigiere(-1), opts);
+      this._$('gantt-next')?.addEventListener('click', () => this._ganttNavigiere(+1), opts);
+      this._$('gantt-heute')?.addEventListener('click', () => {
+        this._ganttDatum = new Date();
+        this._renderGantt();
+      }, opts);
+
+      // Gantt-Fenster-Tabs
+      this._shadow.querySelectorAll('.gantt-fenster-tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+          this._ganttFenster = tab.dataset.fenster;
+          this._shadow.querySelectorAll('.gantt-fenster-tab').forEach(t => t.classList.remove('active'));
+          tab.classList.add('active');
+          this._renderGantt();
         }, opts);
       });
     }
@@ -1596,22 +1743,55 @@
 
     // ── KPI-Leiste aktualisieren ─────────────────────────────────────────
 
+    _zeitraumBereich() {
+      const jetzt = new Date();
+      const heute = new Date(jetzt.getFullYear(), jetzt.getMonth(), jetzt.getDate());
+      switch (this._activeZeitraum) {
+        case 'heute':
+          return { von: heute, bis: new Date(heute.getTime() + 86400000) };
+        case 'woche': {
+          const tag = heute.getDay();
+          const diff = (tag === 0 ? -6 : 1 - tag);
+          const mo = new Date(heute.getTime() + diff * 86400000);
+          return { von: mo, bis: new Date(mo.getTime() + 7 * 86400000) };
+        }
+        case '7tage':
+          return { von: new Date(heute.getTime() - 6 * 86400000), bis: new Date(heute.getTime() + 86400000) };
+        case 'monat': {
+          const von = new Date(heute.getFullYear(), heute.getMonth(), 1);
+          return { von, bis: new Date(heute.getFullYear(), heute.getMonth() + 1, 1) };
+        }
+        default:
+          return { von: new Date(0), bis: new Date(9999, 0) };
+      }
+    }
+
+    _tesFuerZeitraum() {
+      const { von, bis } = this._zeitraumBereich();
+      return [...this._teMap.values()].filter(te => {
+        const anker = te.geplantStart ?? te.tsAnkunft;
+        return anker && anker >= von && anker < bis;
+      });
+    }
+
     _updateKPIs() {
-      const tes = [...this._teMap.values()];
+      const tes        = this._tesFuerZeitraum();
       const aktiv      = tes.filter(t => ['ankunft', 'entladen'].includes(t.status)).length;
       const verzoegert = tes.filter(t => t.status === 'verzögert').length;
       const abgefahren = tes.filter(t => t.status === 'abgefahren').length;
 
-      this._$('kpi-gesamt').textContent    = tes.length;
-      this._$('kpi-aktiv').textContent     = aktiv;
+      this._$('kpi-gesamt').textContent     = tes.length;
+      this._$('kpi-aktiv').textContent      = aktiv;
       this._$('kpi-verzoegert').textContent = verzoegert;
       this._$('kpi-abgefahren').textContent = abgefahren;
 
-      // Datum aus erster TE ableiten
-      const ersteDatum = tes[0]?.tsAnkunft ?? tes[0]?.geplantStart;
-      if (ersteDatum) {
-        this._$('header-date').textContent = `Wareneingang · ${fmtDate(ersteDatum)}`;
-      }
+      const labels = {
+        heute:  'Heute · ' + new Date().toLocaleDateString('de-DE',{day:'2-digit',month:'2-digit',year:'numeric'}),
+        woche:  'Diese Woche',
+        '7tage':'Letzte 7 Tage',
+        monat:  new Date().toLocaleDateString('de-DE',{month:'long',year:'numeric'}),
+      };
+      this._$('header-date').textContent = 'Wareneingang · ' + (labels[this._activeZeitraum] ?? '');
     }
 
     // ── Render: Kacheln ──────────────────────────────────────────────────
@@ -1638,7 +1818,7 @@
           te.produkte.some(p => p.halle === this._halleFilter);
       };
 
-      const tes = [...this._teMap.values()]
+      const tes = this._tesFuerZeitraum()
         .filter(te => statusMatch(te) && halleMatch(te));
 
       if (tes.length === 0) {
@@ -2036,19 +2216,56 @@
 
     // ── Render: Gantt ────────────────────────────────────────────────────
 
+    _ganttFensterBereich() {
+      const anker = new Date(this._ganttDatum);
+      anker.setHours(0, 0, 0, 0);
+      switch (this._ganttFenster) {
+        case '3tage':
+          return { start: anker, ende: new Date(anker.getTime() + 3 * 86400000) };
+        case 'woche': {
+          const tag = anker.getDay();
+          const diff = (tag === 0 ? -6 : 1 - tag);
+          const mo = new Date(anker.getTime() + diff * 86400000);
+          return { start: mo, ende: new Date(mo.getTime() + 7 * 86400000) };
+        }
+        default: // 'tag'
+          return { start: anker, ende: new Date(anker.getTime() + 86400000) };
+      }
+    }
+
+    _ganttNavigiere(richtung) {
+      const schrittTage = { tag: 1, '3tage': 3, woche: 7 }[this._ganttFenster] ?? 1;
+      this._ganttDatum = new Date(this._ganttDatum.getTime() + richtung * schrittTage * 86400000);
+      this._renderGantt();
+    }
+
     _renderGantt() {
       const content = this._$('gantt-content');
       if (!content) return;
 
-      const tes = [...this._teMap.values()];
+      const { start, ende } = this._ganttFensterBereich();
+
+      // Datum-Label in Steuerleiste
+      const navDate = this._$('gantt-nav-date');
+      if (navDate) {
+        const fmt = (d) => d.toLocaleDateString('de-DE', { day:'2-digit', month:'2-digit' });
+        navDate.textContent = this._ganttFenster === 'tag'
+          ? this._ganttDatum.toLocaleDateString('de-DE', { weekday:'short', day:'2-digit', month:'2-digit', year:'2-digit' })
+          : fmt(start) + ' – ' + fmt(new Date(ende.getTime() - 86400000));
+      }
+
+      const tes = [...this._teMap.values()].filter(te => {
+        const anker = te.geplantStart ?? te.tsAnkunft;
+        return anker && anker >= start && anker < ende;
+      });
+
       if (tes.length === 0) {
-        content.innerHTML = `<div class="view-placeholder" style="min-height:200px;">Keine Daten</div>`;
+        content.innerHTML = '<div class="view-placeholder" style="min-height:200px;margin-top:0;">Keine TEs im gewählten Zeitfenster</div>';
         return;
       }
 
-      content.innerHTML = this._ganttHTML(tes);
+      content.innerHTML = this._ganttHTML(tes, start, ende);
 
-      // Klick auf Ist-Balken → Detail öffnen (Delegation)
       content.onclick = (e) => {
         const bar = e.target.closest('.gantt-bar-ist[data-te]');
         if (bar) this._renderDetail(bar.dataset.te);
