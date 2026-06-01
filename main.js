@@ -1028,6 +1028,88 @@
       .tc-info-icon { font-size: 10px; opacity: 0.65; }
 
       /* Δ-Zeit Badge */
+      /* Ladestellen-Filter-Chips */
+      .ls-filter-chips { display: flex; gap: 4px; flex-wrap: wrap; }
+
+      .ls-filter-chip {
+        padding:       3px 10px;
+        border-radius: 20px;
+        font-size:     11px;
+        font-weight:   500;
+        border:        1px solid var(--c-border2);
+        color:         var(--c-text2);
+        background:    transparent;
+        cursor:        pointer;
+        transition:    all 0.15s;
+        white-space:   nowrap;
+      }
+      .ls-filter-chip:hover { border-color: rgba(192,57,43,.4); color: var(--c-text); }
+      .ls-filter-chip.active { background: var(--c-bg4); border-color: var(--c-border2); color: var(--c-text); }
+      .ls-chip-bsl.active  { background: rgba(142,68,173,.2);  border-color: rgba(142,68,173,.5); color: #c39bd3; }
+      .ls-chip-cont.active { background: rgba(230,126,34,.2);  border-color: rgba(230,126,34,.5); color: #f0a500; }
+      .ls-chip-land.active { background: var(--c-green-dim);   border-color: rgba(39,174,96,.4);  color: #58d68d; }
+
+      /* Gruppierungs-Toggle */
+      .group-toggle-btn {
+        display:        inline-flex;
+        align-items:    center;
+        gap:            6px;
+        padding:        4px 11px;
+        border-radius:  var(--r-sm);
+        border:         1px solid var(--c-border2);
+        font-family:    var(--font-mono);
+        font-size:      10px;
+        font-weight:    600;
+        letter-spacing: 0.07em;
+        text-transform: uppercase;
+        color:          var(--c-text3);
+        background:     transparent;
+        cursor:         pointer;
+        transition:     all 0.15s;
+        margin-left:    4px;
+        flex-shrink:    0;
+      }
+      .group-toggle-btn:hover { background: var(--c-bg3); color: var(--c-text2); }
+      .group-toggle-btn.active {
+        background:   rgba(41,128,185,.15);
+        border-color: rgba(41,128,185,.4);
+        color:        #5dade2;
+      }
+
+      /* Ladestellen-Gruppen-Header in Kacheln-View */
+      .ls-gruppe-header {
+        grid-column:    1 / -1;
+        display:        flex;
+        align-items:    center;
+        gap:            8px;
+        padding:        8px 2px 6px;
+        border-bottom:  1px solid var(--c-border);
+        margin-bottom:  4px;
+      }
+      .ls-gruppe-title {
+        font-family:    var(--font-mono);
+        font-size:      10px;
+        font-weight:    700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .ls-gruppe-count {
+        font-family:  var(--font-mono);
+        font-size:    9px;
+        color:        var(--c-text3);
+        background:   var(--c-bg3);
+        padding:      1px 7px;
+        border-radius: 10px;
+      }
+      .ls-gruppe-line {
+        flex: 1; height: 1px; background: var(--c-border);
+      }
+      .ls-gruppe-dauer {
+        font-family: var(--font-mono);
+        font-size:   9px;
+        color:       var(--c-text3);
+      }
+
       /* Ladestellen-Badge auf Kachel */
       .ls-badge {
         display:        inline-flex;
@@ -2071,6 +2153,16 @@
               <button class="filter-chip" data-filter="verzögert">Verzögert</button>
               <button class="filter-chip" data-filter="abgefahren">Abgefahren</button>
             </div>
+            <span class="filter-label" style="margin-left:6px">Ladestelle</span>
+            <div class="ls-filter-chips">
+              <button class="ls-filter-chip active" data-ls="alle">Alle</button>
+              <button class="ls-filter-chip ls-chip-bsl" data-ls="BSL">🚛 BSL</button>
+              <button class="ls-filter-chip ls-chip-cont" data-ls="Container">🏗 Container</button>
+              <button class="ls-filter-chip ls-chip-land" data-ls="Landverkehr">🚚 Landverkehr</button>
+            </div>
+            <button class="group-toggle-btn" id="group-toggle-btn" title="Nach Ladestelle gruppieren">
+              <span id="group-toggle-icon">⊟</span> Gruppieren
+            </button>
           </div>
           <div class="te-grid" id="te-grid">
           </div>
@@ -2138,6 +2230,8 @@
       this._countdownTimer = null;      // setInterval-Handle
       this._clockTimer     = null;      // Uhr-Timer-Handle
       this._autoRefresh    = false;     // Auto-Aktualisierung aktiv?
+      this._lsFilter       = 'alle';    // Ladestellen-Filter: 'alle'|'BSL'|'Container'|'Landverkehr'
+      this._gruppiertLS    = false;     // Kacheln nach Ladestelle gruppieren
     }
 
     connectedCallback() {
@@ -2208,6 +2302,26 @@
           this._renderKacheln();
         }, opts);
       });
+
+      // Ladestellen-Filter-Chips
+      this._shadow.querySelectorAll('.ls-filter-chip').forEach(chip => {
+        chip.addEventListener('click', () => {
+          this._lsFilter = chip.dataset.ls;
+          this._shadow.querySelectorAll('.ls-filter-chip').forEach(c => c.classList.remove('active'));
+          chip.classList.add('active');
+          this._renderKacheln();
+        }, opts);
+      });
+
+      // Gruppierungs-Toggle
+      this._$('group-toggle-btn')?.addEventListener('click', () => {
+        this._gruppiertLS = !this._gruppiertLS;
+        const btn  = this._$('group-toggle-btn');
+        const icon = this._$('group-toggle-icon');
+        btn?.classList.toggle('active', this._gruppiertLS);
+        if (icon) icon.textContent = this._gruppiertLS ? '⊞' : '⊟';
+        this._renderKacheln();
+      }, opts);
 
       // Gantt-Navigation
       this._$('gantt-prev')?.addEventListener('click', () => this._ganttNavigiere(-1), opts);
@@ -2452,15 +2566,53 @@
           te.produkte.some(p => p.halle === this._halleFilter);
       };
 
+      // Ladestellen-Filter
+      const lsMatch = (te) => {
+        if (this._lsFilter === 'alle') return true;
+        return (te.ladestelle ?? 'Landverkehr') === this._lsFilter;
+      };
+
       const tes = this._tesFuerZeitraum()
-        .filter(te => statusMatch(te) && halleMatch(te));
+        .filter(te => statusMatch(te) && halleMatch(te) && lsMatch(te));
 
       if (tes.length === 0) {
         grid.innerHTML = `<div class="te-grid-empty">Keine TEs für diesen Filter</div>`;
         return;
       }
 
-      grid.innerHTML = tes.map(te => this._teKachelHTML(te)).join('');
+      if (this._gruppiertLS) {
+        // ── Gruppiert nach Ladestelle ──
+        const LS_ORDER = ['BSL', 'Container', 'Landverkehr'];
+        const LS_META  = {
+          BSL:         { icon: '🚛', col: 'rgba(142,68,173,0.85)', dauer: 'Ø 4–8h'     },
+          Container:   { icon: '🏗', col: 'rgba(230,126,34,0.85)', dauer: 'Ø 2–4h'     },
+          Landverkehr: { icon: '🚚', col: 'rgba(39,174,96,0.85)',  dauer: 'Ø 30–90min' },
+        };
+        const byLS = {};
+        for (const te of tes) {
+          const ls = te.ladestelle ?? 'Landverkehr';
+          if (!byLS[ls]) byLS[ls] = [];
+          byLS[ls].push(te);
+        }
+        grid.innerHTML = LS_ORDER
+          .filter(ls => byLS[ls]?.length > 0)
+          .map(ls => {
+            const m  = LS_META[ls];
+            const gr = byLS[ls];
+            const vz = gr.filter(t => t.status === 'verzögert').length;
+            const header = `<div class="ls-gruppe-header">
+              <span class="ls-gruppe-title" style="color:${m.col}">${m.icon} ${ls}</span>
+              <span class="ls-gruppe-count">${gr.length} TE${gr.length !== 1 ? 's' : ''}</span>
+              ${vz ? `<span class="ls-gruppe-count" style="background:var(--c-red-dim);color:#e74c3c">${vz} verzögert</span>` : ''}
+              <div class="ls-gruppe-line"></div>
+              <span class="ls-gruppe-dauer">${m.dauer}</span>
+            </div>`;
+            return header + gr.map(te => this._teKachelHTML(te)).join('');
+          }).join('');
+      } else {
+        // ── Ungroupiert ──
+        grid.innerHTML = tes.map(te => this._teKachelHTML(te)).join('');
+      }
 
       // Klick-Handler: Delegation auf Grid-Ebene — ein Listener für alle Karten
       // (vorher jeden einzelnen click-handler pro Karte setzen würde bei vielen TEs
@@ -2474,7 +2626,7 @@
     // Ladestellen-Badge HTML
     _lsBadgeHTML(ladestelle) {
       const map  = { BSL: 'ls-bsl', Container: 'ls-cont', Landverkehr: 'ls-land' };
-      const icon = { BSL: '⚓', Container: '📦', Landverkehr: '🚛' };
+      const icon = { BSL: '🚛', Container: '🏗', Landverkehr: '🚚' };
       const cls  = map[ladestelle] ?? 'ls-land';
       const ico  = icon[ladestelle] ?? '🚛';
       return `<span class="ls-badge ${cls}">${ico} ${esc(ladestelle)}</span>`;
@@ -2983,9 +3135,9 @@
       // ── Zeilen nach Ladestelle gruppiert ──
       const LS_ORDER = ['BSL', 'Container', 'Landverkehr'];
       const LS_META  = {
-        BSL:         { icon: '⚓', col: 'rgba(142,68,173,0.85)', dauer: '4–8h'     },
-        Container:   { icon: '📦', col: 'rgba(230,126,34,0.85)', dauer: '2–4h'     },
-        Landverkehr: { icon: '🚛', col: 'rgba(39,174,96,0.85)',  dauer: '30–90min' },
+        BSL:         { icon: '🚛', col: 'rgba(142,68,173,0.85)', dauer: '4–8h'     },
+        Container:   { icon: '🏗', col: 'rgba(230,126,34,0.85)', dauer: '2–4h'     },
+        Landverkehr: { icon: '🚚', col: 'rgba(39,174,96,0.85)',  dauer: '30–90min' },
       };
       const byLS = {};
       for (const te of tesFuerGantt) {
