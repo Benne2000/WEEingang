@@ -1904,6 +1904,68 @@
       .tc2-bottom { display: flex; align-items: center; gap: 8px; padding-left: 5px; }
       .tc2-sup { font-size: 10px; color: var(--c-text3); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .tc2-info { font-size: 10px; color: var(--c-text3); display: flex; align-items: center; gap: 3px; flex-shrink: 0; }
+
+      /* Freie Tore Toggle */
+      .frei-toggle-btn {
+        display:        inline-flex;
+        align-items:    center;
+        gap:            5px;
+        padding:        3px 9px;
+        border-radius:  var(--r-sm);
+        border:         1px solid var(--c-border2);
+        font-family:    var(--font-mono);
+        font-size:      9px;
+        font-weight:    600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color:          var(--c-text3);
+        background:     transparent;
+        cursor:         pointer;
+        transition:     all 0.15s;
+        flex-shrink:    0;
+      }
+      .frei-toggle-btn:hover { background: var(--c-bg4); color: var(--c-text2); }
+      .frei-toggle-btn.active {
+        background:   var(--c-green-dim);
+        border-color: rgba(39,174,96,0.35);
+        color:        #58d68d;
+      }
+
+      /* Freie-Tore-Container */
+      .frei-tore-wrap {
+        display:     none;
+        grid-column: 1 / -1;
+        padding:     10px 0 4px;
+        border-top:  1px solid var(--c-border);
+        margin-top:  4px;
+      }
+      .frei-tore-wrap.visible { display: block; }
+
+      .frei-tore-label {
+        font-family:    var(--font-mono);
+        font-size:      9px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color:          var(--c-text3);
+        margin-bottom:  6px;
+        display:        block;
+      }
+      .frei-tore-strip { display: flex; flex-wrap: wrap; gap: 4px; }
+      .frei-tor-tag {
+        font-family:    var(--font-mono);
+        font-size:      10px;
+        color:          var(--c-text3);
+        background:     var(--c-bg2);
+        border:         1px dashed var(--c-border2);
+        border-radius:  var(--r-sm);
+        padding:        3px 8px;
+        transition:     all 0.12s;
+      }
+      .frei-tor-tag:hover {
+        border-color: var(--c-green);
+        color:        #58d68d;
+        background:   var(--c-green-dim);
+      }
     </style>
 
     <!-- ── DOM ────────────────────────────────────────────────────────── -->
@@ -3132,6 +3194,20 @@
         if (h.verz.length > 0) headerCls += ' engpass';
         else if (auslastung >= 80) headerCls += ' voll';
 
+        // Freie Tore: alle Tore dieser Halle die keine aktive TE haben
+        const belegteTorenummern = new Set(h.belegt.map(te => te.tor).filter(Boolean));
+        const alleTorenummern    = HALLE_TORE_MAP[h.halle] ?? [];
+        const freie              = alleTorenummern.filter(tor => !belegteTorenummern.has(tor));
+        const freieToreAnzahl    = freie.length;
+
+        const freieToreHTML = freie.length > 0 ? `
+          <div class="frei-tore-wrap" id="frei-${esc(h.halle)}">
+            <span class="frei-tore-label">${freie.length} freie Tore</span>
+            <div class="frei-tore-strip">
+              ${freie.map(tor => `<span class="frei-tor-tag">${esc(tor)}</span>`).join('')}
+            </div>
+          </div>` : '';
+
         // Tor-Karten für belegte TEs
         const torKarten = h.belegt.map(te => this._torKarteHTML(te)).join('');
 
@@ -3147,24 +3223,47 @@
             <div class="h-sep"></div>
             <span class="h-util-pct">${auslastung}%</span>
           </div>
+          ${freieToreAnzahl > 0 ? `
+          <button class="frei-toggle-btn" data-halle="${esc(h.halle)}" title="Freie Tore ein-/ausblenden">
+            <span>○</span> ${freieToreAnzahl} frei
+          </button>` : ''}
           <div class="halle-body">
             ${torKarten || '<div style="grid-column:1/-1;padding:12px;font-family:var(--font-mono);font-size:10px;color:var(--c-text3)">Keine aktiven TEs</div>'}
+            ${freieToreHTML}
           </div>
         </div>`;
       }).join('');
 
       content.innerHTML = bannerHTML + sektionen;
 
-      // Accordion-Toggle + Klick auf Tor-Karte
+      // Accordion-Toggle + Frei-Toggle + Klick auf Tor-Karte
       content.onclick = (e) => {
+        // Frei-Tore-Toggle — vor Accordion prüfen damit Button-Klick
+        // nicht den Accordion des Eltern-Headers auslöst
+        const freiBtn = e.target.closest('.frei-toggle-btn');
+        if (freiBtn) {
+          e.stopPropagation();
+          const halle = freiBtn.dataset.halle;
+          const wrap  = this._shadow.getElementById('frei-' + halle);
+          if (wrap) {
+            const isVisible = wrap.classList.toggle('visible');
+            freiBtn.classList.toggle('active', isVisible);
+            freiBtn.querySelector('span').textContent = isVisible ? '●' : '○';
+          }
+          return;
+        }
+
+        // Accordion-Toggle
         const header = e.target.closest('.halle-header');
         if (header) {
-          const body = header.nextElementSibling;
+          const body   = header.nextElementSibling;
           const toggle = header.querySelector('.h-toggle');
           body.classList.toggle('open');
           toggle.classList.toggle('open');
           return;
         }
+
+        // Klick auf Tor-Karte → Detail
         const karte = e.target.closest('.tor-karte[data-te]');
         if (karte) this._renderDetail(karte.dataset.te);
       };
