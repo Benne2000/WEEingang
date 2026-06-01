@@ -214,6 +214,8 @@
         teMap.set(teNr, {
           te:              teNr,
           teHinweis:       readDim(row, 'dimension_te_hinweis', 'TE_HINWEIS'),
+          ladestelle:      readDim(row, 'dimension_ladestelle') ?? 'Landverkehr',
+          tor:             readDim(row, 'dimension_tor'),
           liefernummer:    readDim(row, 'dimension_liefernummer', 'LIFNR'),
           bestellnummer:   readDim(row, 'dimension_bestellnummer', 'EBELN'),
           lieferantNr:     readDim(row, 'dimension_lieferant_nr', 'LIFNR_NR'),
@@ -1026,6 +1028,37 @@
       .tc-info-icon { font-size: 10px; opacity: 0.65; }
 
       /* Δ-Zeit Badge */
+      /* Ladestellen-Badge auf Kachel */
+      .ls-badge {
+        display:        inline-flex;
+        align-items:    center;
+        gap:            4px;
+        padding:        2px 7px;
+        border-radius:  var(--r-sm);
+        font-family:    var(--font-mono);
+        font-size:      9px;
+        font-weight:    600;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        flex-shrink:    0;
+      }
+      .ls-bsl  { background: rgba(142,68,173,.15); color: #c39bd3; }
+      .ls-cont { background: rgba(230,126,34,.15);  color: #f0a500; }
+      .ls-land { background: var(--c-green-dim);    color: #58d68d; }
+
+      /* Tor-Badge auf Kachel */
+      .tor-badge-card {
+        font-family:    var(--font-mono);
+        font-size:      10px;
+        font-weight:    700;
+        color:          var(--c-text3);
+        background:     var(--c-bg3);
+        border:         1px solid var(--c-border2);
+        border-radius:  var(--r-sm);
+        padding:        2px 6px;
+        flex-shrink:    0;
+      }
+
       .tc-delta {
         margin-left:    auto;
         font-family:    var(--font-mono);
@@ -1513,7 +1546,7 @@
       .gantt-row-label {
         width:      200px;
         min-width:  200px;
-        padding:    10px 16px;
+        padding:    8px 14px;
         border-right: 1px solid var(--c-border);
         flex-shrink: 0;
       }
@@ -1532,8 +1565,11 @@
         white-space:    nowrap;
         overflow:       hidden;
         text-overflow:  ellipsis;
-        max-width:      168px;
+        max-width:      172px;
         margin-top:     2px;
+        display:        flex;
+        align-items:    center;
+        gap:            5px;
       }
 
       /* ── Balkenbereich ── */
@@ -1647,6 +1683,36 @@
         width:         16px;
         height:        4px;
         border-radius: 2px;
+      }
+
+      /* Gantt Gruppen-Header */
+      .gantt-group-header {
+        display:       flex;
+        align-items:   center;
+        gap:           8px;
+        padding:       7px 16px;
+        background:    var(--c-bg3);
+        border-top:    1px solid var(--c-border2);
+        border-bottom: 1px solid var(--c-border);
+      }
+      .gantt-group-header:first-child { border-top: none; }
+      .gantt-group-accent {
+        width: 3px; align-self: stretch; border-radius: 2px; flex-shrink: 0;
+      }
+      .gantt-group-title {
+        font-family:    var(--font-mono);
+        font-size:      10px;
+        font-weight:    700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .gantt-group-count {
+        font-family:  var(--font-mono);
+        font-size:    9px;
+        color:        var(--c-text3);
+        background:   var(--c-bg4);
+        padding:      1px 7px;
+        border-radius: 10px;
       }
 
       /* Zeitraum-Chips (in filter-bar) */
@@ -2344,6 +2410,15 @@
       };
     }
 
+    // Ladestellen-Badge HTML
+    _lsBadgeHTML(ladestelle) {
+      const map  = { BSL: 'ls-bsl', Container: 'ls-cont', Landverkehr: 'ls-land' };
+      const icon = { BSL: '⚓', Container: '📦', Landverkehr: '🚛' };
+      const cls  = map[ladestelle] ?? 'ls-land';
+      const ico  = icon[ladestelle] ?? '🚛';
+      return `<span class="ls-badge ${cls}">${ico} ${esc(ladestelle)}</span>`;
+    }
+
     // Baut das HTML für eine einzelne TE-Kachel
     _teKachelHTML(te) {
       const status = te.status;
@@ -2409,12 +2484,11 @@
               <div class="tc-supplier">${esc(te.lieferantName ?? '–')}</div>
             </div>
             <span class="tc-badge badge-${esc(status)}">${esc(badgeLabel)}</span>
+            ${te.tor ? `<span class="tor-badge-card">${esc(te.tor)}</span>` : ''}
           </div>
           <div class="tc-progress">${schritte}</div>
           <div class="tc-footer">
-            ${te.transportmittel
-              ? `<span class="tc-info"><span class="tc-info-icon">🚛</span>${esc(te.transportmittel)}</span>`
-              : ''}
+            ${this._lsBadgeHTML(te.ladestelle ?? 'Landverkehr')}
             ${anzahlProdukte > 0
               ? `<span class="tc-info"><span class="tc-info-icon">📦</span>${anzahlProdukte} Produkt${anzahlProdukte !== 1 ? 'e' : ''}</span>`
               : ''}
@@ -2845,8 +2919,35 @@
            </div>`
         : '';
 
-      // ── Zeilen ──
-      const zeilenHTML = tesFuerGantt.map(te => this._ganttZeileHTML(te, pct, achseStart, achseEnde, gridLines, nowLineHTML)).join('');
+      // ── Zeilen nach Ladestelle gruppiert ──
+      const LS_ORDER = ['BSL', 'Container', 'Landverkehr'];
+      const LS_META  = {
+        BSL:         { icon: '⚓', col: 'rgba(142,68,173,0.85)', dauer: '4–8h'     },
+        Container:   { icon: '📦', col: 'rgba(230,126,34,0.85)', dauer: '2–4h'     },
+        Landverkehr: { icon: '🚛', col: 'rgba(39,174,96,0.85)',  dauer: '30–90min' },
+      };
+      const byLS = {};
+      for (const te of tesFuerGantt) {
+        const ls = te.ladestelle ?? 'Landverkehr';
+        if (!byLS[ls]) byLS[ls] = [];
+        byLS[ls].push(te);
+      }
+      const zeilenHTML = LS_ORDER
+        .filter(ls => byLS[ls]?.length > 0)
+        .map(ls => {
+          const m  = LS_META[ls];
+          const gr = byLS[ls];
+          const vz = gr.filter(t => t.status === 'verzögert').length;
+          const gh = `<div class="gantt-group-header">
+            <div class="gantt-group-accent" style="background:${m.col}"></div>
+            <span class="gantt-group-title" style="color:${m.col}">${m.icon} ${ls}</span>
+            <span class="gantt-group-count">${gr.length} TE${gr.length !== 1 ? 's' : ''}</span>
+            ${vz ? `<span class="gantt-group-count" style="background:var(--c-red-dim);color:#e74c3c">${vz} verzögert</span>` : ''}
+            <div style="flex:1"></div>
+            <span style="font-family:var(--font-mono);font-size:9px;color:var(--c-text3)">Ø ${m.dauer}</span>
+          </div>`;
+          return gh + gr.map(te => this._ganttZeileHTML(te, pct, achseStart, achseEnde, gridLines, nowLineHTML)).join('');
+        }).join('');
 
       return `
         <div class="gantt-wrap">
@@ -2858,7 +2959,7 @@
               <div class="gantt-axis">${ticksHTML}</div>
             </div>
 
-            <!-- Datenzeilen -->
+            <!-- Datenzeilen (nach Ladestelle gruppiert) -->
             ${zeilenHTML}
 
             <!-- Legende -->
@@ -2955,7 +3056,10 @@
              aria-label="TE ${esc(te.te)}, ${esc(te.lieferantName ?? '')}">
           <div class="gantt-row-label">
             <div class="gantt-row-te">${esc(te.te)}</div>
-            <div class="gantt-row-supplier">${esc(te.lieferantName ?? '–')}</div>
+            <div class="gantt-row-supplier">
+              ${te.tor ? `<span style="font-family:var(--font-mono);font-size:9px;font-weight:700;color:var(--c-text3);background:var(--c-bg4);border:1px solid var(--c-border2);border-radius:3px;padding:1px 4px">${esc(te.tor)}</span>` : ''}
+              ${esc(te.lieferantName ?? '–')}
+            </div>
           </div>
           <div class="gantt-bars">
             ${gridLines}
