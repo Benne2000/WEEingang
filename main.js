@@ -25,6 +25,44 @@
   // Null-Werte die BW zurückgeben kann:
   const NULL_TOKENS = new Set(['', '00000000', '000000000000', '@NullMember', '@TotalMembers', 'null', 'undefined']);
 
+  // Echte Tor→Hallen-Zuordnung (T001–T999, nicht fortlaufend)
+  // T001 = Sondertor (Pförtner/Büro), kein HA-Präfix
+  const TOR_HALLE_MAP = {
+      "T001":"0001","T002":"HA01","T003":"HA01","T004":"HA01","T005":"HA01",
+      "T006":"HA01","T007":"HA01","T010":"HA01","T011":"HA01","T012":"HA01",
+      "T013":"HA01","T014":"HA01","T015":"HA01","T016":"HA01","T017":"HA01",
+      "T018":"HA01","T019":"HA01","T020":"HA02","T021":"HA02","T022":"HA02",
+      "T023":"HA02","T024":"HA02","T025":"HA02","T026":"HA02","T027":"HA02",
+      "T028":"HA02","T029":"HA02","T030":"HA02","T040":"HA04","T041":"HA04",
+      "T042":"HA04","T043":"HA04","T044":"HA04","T045":"HA04","T046":"HA04",
+      "T047":"HA04","T048":"HA04","T049":"HA04","T050":"HA05","T051":"HA05",
+      "T052":"HA05","T053":"HA05","T054":"HA05","T055":"HA05","T056":"HA05",
+      "T057":"HA05","T058":"HA05","T059":"HA05","T060":"HA06","T061":"HA06",
+      "T062":"HA06","T063":"HA06","T064":"HA06","T065":"HA06","T066":"HA06",
+      "T067":"HA06","T068":"HA06","T069":"HA06","T070":"HA06","T071":"HA07",
+      "T072":"HA07","T073":"HA07","T074":"HA07","T080":"HA08","T081":"HA08",
+      "T082":"HA08","T083":"HA08","T084":"HA08","T085":"HA08","T086":"HA08",
+      "T087":"HA08","T088":"HA08","T089":"HA08","T090":"HA08","T091":"HA09",
+      "T092":"HA09","T093":"HA09","T094":"HA09","T095":"HA09","T096":"HA09",
+      "T097":"HA09","T098":"HA09","T099":"HA09","T110":"HA09","T111":"HA09",
+      "T112":"HA09","T113":"HA09","T114":"HA09","T115":"HA09","T116":"HA09",
+      "T117":"HA09","T118":"HA09","T175":"HA07","T176":"HA07","T177":"HA07",
+      "T178":"HA07","T721":"HA07","T722":"HA07","T723":"HA07","T724":"HA07",
+      "T725":"HA07","T726":"HA07","T727":"HA07","T728":"HA07","T960":"HA10",
+      "T961":"HA10","T962":"HA10","T963":"HA10","T964":"HA10","T965":"HA10",
+      "T999":"HA01"
+    };
+
+  // Hallen-Reihenfolge für Accordion (ohne 0001-Sondertor)
+  const HALLEN_REIHENFOLGE = ['HA01','HA02','HA04','HA05','HA06','HA07','HA08','HA09','HA10'];
+
+  // Halle → alle zugehörigen Tore (aus TOR_HALLE_MAP abgeleitet)
+  const HALLE_TORE_MAP = {};
+  for (const [tor, halle] of Object.entries(TOR_HALLE_MAP)) {
+    if (!HALLE_TORE_MAP[halle]) HALLE_TORE_MAP[halle] = [];
+    HALLE_TORE_MAP[halle].push(tor);
+  }
+
   // Prozessschritte in chronologischer Reihenfolge – Reihenfolge ist wichtig
   // für Fortschrittsbalken-Berechnung
   const PROZESS_SCHRITTE = [
@@ -433,6 +471,36 @@
 
       .header-sep { flex: 1; }
 
+      /* Live-Uhr */
+      .header-clock {
+        display:       flex;
+        align-items:   center;
+        gap:           6px;
+        padding:       3px 10px;
+        border-radius: var(--r-sm);
+        background:    var(--c-bg3);
+        border:        1px solid var(--c-border);
+        font-family:   var(--font-mono);
+        font-size:     12px;
+        font-weight:   600;
+        color:         var(--c-text2);
+        flex-shrink:   0;
+        letter-spacing: 0.04em;
+      }
+
+      .clock-dot {
+        width: 6px; height: 6px;
+        border-radius: 50%;
+        background: var(--c-green);
+        flex-shrink: 0;
+        animation: clock-blink 1s steps(2, start) infinite;
+      }
+
+      @keyframes clock-blink {
+        0%, 100% { opacity: 1; }
+        50%       { opacity: 0.25; }
+      }
+
       /* KPI-Chips im Header */
       .kpi-strip {
         display:    flex;
@@ -463,27 +531,210 @@
       .kpi-chip.k-done    { background: var(--c-green-dim); color: #58d68d; }
 
       /* View-Tabs */
-      .view-tabs {
-        display:    flex;
-        border:     1px solid var(--c-border2);
-        border-radius: var(--r-sm);
-        overflow:   hidden;
-        flex-shrink: 0;
+      /* ── Navigationszeile ── */
+      .navbar {
+        display:       flex;
+        align-items:   center;
+        gap:           12px;
+        padding:       0 20px;
+        height:        44px;
+        flex-shrink:   0;
+        background:    var(--c-bg2);
+        border-bottom: 1px solid var(--c-border);
       }
 
-      .view-tab {
-        padding:        5px 13px;
+      .nav-tabs {
+        display:    flex;
+        gap:        2px;
+        height:     100%;
+      }
+
+      .nav-tab {
+        display:        flex;
+        align-items:    center;
+        gap:            7px;
+        padding:        0 16px;
+        height:         100%;
+        font-family:    var(--font);
+        font-size:      13px;
+        font-weight:    500;
+        color:          var(--c-text3);
+        position:       relative;
+        transition:     color 0.15s, background 0.15s;
+        border-bottom:  2px solid transparent;
+      }
+
+      .nav-tab:hover { color: var(--c-text2); background: var(--c-bg3); }
+
+      .nav-tab.active {
+        color:         var(--c-text);
+        border-bottom-color: var(--c-red);
+      }
+
+      .nav-tab.active .nav-tab-icon { color: var(--c-red-light); }
+
+      .nav-tab-icon {
+        font-size:   15px;
+        color:       var(--c-text3);
+        transition:  color 0.15s;
+        line-height: 1;
+      }
+
+      .nav-tab-label { letter-spacing: 0.01em; }
+
+      .nav-sep { flex: 1; }
+
+      /* ── Live-Refresh-Steuerung ── */
+      .refresh-ctrl {
+        display:     flex;
+        align-items: center;
+        gap:         10px;
+      }
+
+      .refresh-btn {
+        display:        flex;
+        align-items:    center;
+        gap:            7px;
+        padding:        6px 13px;
+        border-radius:  var(--r-sm);
+        border:         1px solid var(--c-border2);
+        background:     var(--c-bg3);
+        color:          var(--c-text3);
+        font-family:    var(--font);
+        font-size:      12px;
+        font-weight:    500;
+        cursor:         not-allowed;
+        transition:     all 0.18s var(--ease);
+        opacity:        0.5;
+      }
+
+      .refresh-btn:not([disabled]) {
+        cursor:       pointer;
+        opacity:      1;
+        background:   var(--c-red);
+        border-color: var(--c-red);
+        color:        #fff;
+        box-shadow:   0 0 0 0 rgba(192,57,43,0.4);
+        animation:    refresh-ready-pulse 2s ease-in-out infinite;
+      }
+
+      .refresh-btn:not([disabled]):hover {
+        background:   var(--c-red-light);
+        border-color: var(--c-red-light);
+        animation:    none;
+      }
+
+      @keyframes refresh-ready-pulse {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(192,57,43,0.4); }
+        50%       { box-shadow: 0 0 0 4px rgba(192,57,43,0); }
+      }
+
+      .refresh-icon {
+        font-size:   14px;
+        line-height: 1;
+        display:     inline-block;
+      }
+
+      .refresh-icon.spinning {
+        animation: spin 0.7s linear infinite;
+      }
+
+      /* ── Countdown ── */
+      .countdown {
+        display:       flex;
+        align-items:   center;
+        gap:           7px;
+        padding:       5px 11px;
+        border-radius: var(--r-sm);
+        background:    var(--c-bg3);
+        border:        1px solid var(--c-border);
+        min-width:     74px;
+        justify-content: center;
+      }
+
+      .countdown-ring {
+        width:         12px;
+        height:        12px;
+        border-radius: 50%;
+        border:        2px solid var(--c-border2);
+        border-top-color: var(--c-blue);
+        flex-shrink:   0;
+        transition:    border-color 0.3s;
+      }
+
+      .countdown.ready .countdown-ring {
+        border-color:     var(--c-green);
+        border-top-color: var(--c-green);
+        animation:        none;
+      }
+
+      .countdown.counting .countdown-ring {
+        animation: spin 2s linear infinite;
+      }
+
+      .countdown-text {
+        font-family:  var(--font-mono);
+        font-size:    12px;
+        font-weight:  600;
+        color:        var(--c-text2);
+        white-space:  nowrap;
+        min-width:    38px;
+        text-align:   center;
+      }
+
+      .countdown.ready .countdown-text {
+        color: #58d68d;
+      }
+
+      /* ── Auto-Toggle ── */
+      .auto-toggle {
+        display:     flex;
+        align-items: center;
+        gap:         6px;
+        cursor:      pointer;
+        user-select: none;
+      }
+
+      .auto-toggle input { display: none; }
+
+      .auto-box {
+        width:         16px;
+        height:        16px;
+        border-radius: 4px;
+        border:        1px solid var(--c-border2);
+        background:    var(--c-bg3);
+        position:      relative;
+        transition:    all 0.15s;
+        flex-shrink:   0;
+      }
+
+      .auto-toggle input:checked + .auto-box {
+        background:   var(--c-blue);
+        border-color: var(--c-blue);
+      }
+
+      .auto-toggle input:checked + .auto-box::after {
+        content:   '✓';
+        position:  absolute;
+        inset:     0;
+        display:   flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 11px;
+        color:     #fff;
+        font-weight: 700;
+      }
+
+      .auto-label {
         font-family:    var(--font-mono);
         font-size:      10px;
         font-weight:    600;
         letter-spacing: 0.08em;
         text-transform: uppercase;
         color:          var(--c-text3);
-        transition:     background 0.15s, color 0.15s;
       }
 
-      .view-tab:hover  { background: var(--c-bg3); color: var(--c-text2); }
-      .view-tab.active { background: var(--c-red); color: #fff; }
+      .auto-toggle input:checked ~ .auto-label { color: #5dade2; }
 
       /* Theme-Toggle */
       .theme-btn {
@@ -1493,6 +1744,100 @@
 
       .gantt-fenster-tab:hover  { background: var(--c-bg4); color: var(--c-text2); }
       .gantt-fenster-tab.active { background: var(--c-red-dim); color: #e74c3c; }
+
+      /* ════════════════════════════════════════════════════════════
+         VIEW – TORE (Hallen-Accordion)
+      ════════════════════════════════════════════════════════════ */
+      .engpass-banner {
+        display:       flex;
+        align-items:   center;
+        gap:           10px;
+        padding:       10px 14px;
+        background:    var(--c-red-dim);
+        border:        1px solid var(--c-red-border);
+        border-radius: var(--r-sm);
+        margin-bottom: 14px;
+      }
+      .engpass-icon { font-size: 16px; }
+      .engpass-text { font-size: 12px; color: #e74c3c; }
+      .engpass-text strong { font-weight: 600; }
+
+      .halle-section { margin-bottom: 10px; }
+
+      .halle-header {
+        display:       flex;
+        align-items:   center;
+        gap:           10px;
+        padding:       9px 14px;
+        background:    var(--c-bg2);
+        border:        1px solid var(--c-border);
+        border-radius: var(--r-sm);
+        cursor:        pointer;
+        user-select:   none;
+        transition:    background 0.12s;
+      }
+      .halle-header:hover { background: var(--c-bg3); }
+      .halle-header.engpass { border-left: 3px solid var(--c-red); }
+      .halle-header.voll    { border-left: 3px solid var(--c-yellow); }
+
+      .h-toggle { font-size: 10px; color: var(--c-text3); transition: transform 0.2s; flex-shrink: 0; }
+      .h-toggle.open { transform: rotate(90deg); }
+      .h-num { font-family: var(--font-mono); font-size: 11px; font-weight: 700; color: var(--c-text); }
+      .h-stats { display: flex; gap: 8px; font-family: var(--font-mono); font-size: 9px; }
+      .hs-b { color: #5dade2; }
+      .hs-f { color: var(--c-text3); }
+      .hs-v { color: #e74c3c; }
+      .h-sep { flex: 1; }
+      .h-util-pct { font-family: var(--font-mono); font-size: 9px; color: var(--c-text3); }
+
+      .halle-body { display: none; padding: 8px 0 0 0; }
+      .halle-body.open {
+        display:               grid;
+        grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+        gap:                   6px;
+      }
+
+      .tor-karte {
+        background:    var(--c-bg2);
+        border:        1px solid var(--c-border);
+        border-radius: var(--r-sm);
+        padding:       10px 12px;
+        cursor:        pointer;
+        position:      relative;
+        overflow:      hidden;
+        transition:    all 0.15s;
+      }
+      .tor-karte:hover { border-color: var(--c-border2); background: var(--c-bg3); }
+      .tor-karte::before {
+        content: ''; position: absolute; top: 0; left: 0; bottom: 0; width: 3px;
+      }
+      .tor-karte.t-entladen::before    { background: var(--c-blue); }
+      .tor-karte.t-ankunft::before     { background: var(--c-yellow); }
+      .tor-karte.t-eingelagert::before { background: var(--c-green); }
+      .tor-karte.t-verzögert::before   { background: var(--c-red); }
+
+      .tc2-top { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; padding-left: 5px; }
+      .tc2-num { font-family: var(--font-mono); font-size: 13px; font-weight: 700; color: var(--c-text); }
+      .tc2-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+      .dot-entladen    { background: var(--c-blue);   box-shadow: 0 0 5px var(--c-blue); }
+      .dot-ankunft     { background: var(--c-yellow); box-shadow: 0 0 5px var(--c-yellow); }
+      .dot-eingelagert { background: var(--c-green); }
+      .dot-verzögert   { background: var(--c-red); box-shadow: 0 0 6px var(--c-red); animation: step-pulse 1.4s ease-in-out infinite; }
+      .tc2-te { font-family: var(--font-mono); font-size: 10px; color: var(--c-text2); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .tc2-restzeit { font-family: var(--font-mono); font-size: 9px; font-weight: 600; padding: 2px 6px; border-radius: var(--r-sm); flex-shrink: 0; }
+      .rz-ok   { background: var(--c-green-dim);  color: #58d68d; }
+      .rz-warn { background: var(--c-yellow-dim); color: #f0b429; }
+      .rz-bad  { background: var(--c-red-dim);    color: #e74c3c; }
+
+      .tc2-steps { display: flex; gap: 2px; padding-left: 5px; margin-bottom: 7px; }
+      .tc2-step { flex: 1; height: 3px; background: var(--c-bg4); border-radius: 2px; }
+      .tc2-step.done { background: var(--c-green); }
+      .tc2-step.act  { background: var(--c-blue); animation: step-pulse 1.6s ease-in-out infinite; }
+      .tc2-step.late { background: var(--c-red); }
+
+      .tc2-bottom { display: flex; align-items: center; gap: 8px; padding-left: 5px; }
+      .tc2-sup { font-size: 10px; color: var(--c-text3); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .tc2-info { font-size: 10px; color: var(--c-text3); display: flex; align-items: center; gap: 3px; flex-shrink: 0; }
     </style>
 
     <!-- ── DOM ────────────────────────────────────────────────────────── -->
@@ -1505,6 +1850,10 @@
           WE-Tracker
         </div>
         <div class="header-title" id="header-date">Wareneingang</div>
+        <div class="header-clock" id="header-clock" title="Aktuelle Uhrzeit">
+          <span class="clock-dot"></span>
+          <span id="clock-text">--:--:--</span>
+        </div>
         <div class="header-sep"></div>
 
         <!-- KPI-Chips -->
@@ -1523,15 +1872,45 @@
           </div>
         </div>
 
-        <!-- View-Tabs -->
-        <div class="view-tabs">
-          <button class="view-tab active" data-view="kacheln">Übersicht</button>
-          <button class="view-tab"        data-view="detail">Detail</button>
-          <button class="view-tab"        data-view="gantt">Zeitstrahl</button>
+        <!-- Theme-Toggle bleibt im Header -->
+        <button class="theme-btn" id="theme-btn" title="Theme wechseln">◑</button>
+      </div>
+
+      <!-- ── NAVIGATIONSZEILE ── -->
+      <div class="navbar">
+        <div class="nav-tabs">
+          <button class="nav-tab active" data-view="kacheln">
+            <span class="nav-tab-icon">▦</span><span class="nav-tab-label">Übersicht</span>
+          </button>
+          <button class="nav-tab" data-view="tore">
+            <span class="nav-tab-icon">⊞</span><span class="nav-tab-label">Tore</span>
+          </button>
+          <button class="nav-tab" data-view="detail">
+            <span class="nav-tab-icon">▣</span><span class="nav-tab-label">Detail</span>
+          </button>
+          <button class="nav-tab" data-view="gantt">
+            <span class="nav-tab-icon">▤</span><span class="nav-tab-label">Zeitstrahl</span>
+          </button>
         </div>
 
-        <!-- Theme-Toggle -->
-        <button class="theme-btn" id="theme-btn" title="Theme wechseln">◑</button>
+        <div class="nav-sep"></div>
+
+        <!-- ── LIVE-REFRESH-STEUERUNG ── -->
+        <div class="refresh-ctrl">
+          <button class="refresh-btn" id="refresh-btn" disabled>
+            <span class="refresh-icon" id="refresh-icon">⟳</span>
+            <span>Aktualisieren</span>
+          </button>
+          <div class="countdown" id="countdown" title="Zeit bis zur nächsten Aktualisierung">
+            <span class="countdown-ring" id="countdown-ring"></span>
+            <span class="countdown-text" id="countdown-text">00:30</span>
+          </div>
+          <label class="auto-toggle" title="Automatisch aktualisieren">
+            <input type="checkbox" id="auto-check">
+            <span class="auto-box"></span>
+            <span class="auto-label">Auto</span>
+          </label>
+        </div>
       </div>
 
       <!-- Body -->
@@ -1569,8 +1948,12 @@
             </div>
           </div>
           <div class="te-grid" id="te-grid">
-            <!-- Wird in Schritt 2 durch renderKacheln() befüllt -->
           </div>
+        </div>
+
+        <!-- ── VIEW: TORE ── -->
+        <div class="view" id="view-tore">
+          <div id="tore-content"></div>
         </div>
 
         <!-- ── VIEW 2: DETAIL ── -->
@@ -1624,16 +2007,26 @@
       this._activeZeitraum = 'heute';   // 'heute'|'woche'|'7tage'|'monat'
       this._ganttDatum    = new Date(); // Anker-Datum Gantt
       this._ganttFenster  = 'tag';      // 'tag'|'3tage'|'woche'
+      // Live-Refresh
+      this._countdownDauer = 30;        // Sekunden bis Aktualisierung möglich
+      this._countdownVal   = 30;        // aktueller Countdown-Wert
+      this._countdownTimer = null;      // setInterval-Handle
+      this._clockTimer     = null;      // Uhr-Timer-Handle
+      this._autoRefresh    = false;     // Auto-Aktualisierung aktiv?
     }
 
     connectedCallback() {
       this._bindEvents();
       this._hideLoading();
+      this._startCountdown();
+      this._startClock();
     }
 
     disconnectedCallback() {
       // Alle Event-Listener in einem Zug entfernen
       this._ac.abort();
+      this._stopCountdown();
+      this._stopClock();
     }
 
     // ── Hilfsmethode: Element im Shadow DOM finden ───────────────────────
@@ -1645,13 +2038,25 @@
     _bindEvents() {
       const opts = { signal: this._ac.signal };
 
-      // View-Tabs
-      this._shadow.querySelectorAll('.view-tab').forEach(btn => {
+      // Navigations-Tabs
+      this._shadow.querySelectorAll('.nav-tab').forEach(btn => {
         btn.addEventListener('click', () => this._switchView(btn.dataset.view), opts);
       });
 
       // Theme-Toggle
       this._$('theme-btn').addEventListener('click', () => this._toggleTheme(), opts);
+
+      // Refresh-Button
+      this._$('refresh-btn').addEventListener('click', () => {
+        if (!this._$('refresh-btn').disabled) this._doRefresh();
+      }, opts);
+
+      // Auto-Aktualisierung Checkbox
+      this._$('auto-check').addEventListener('change', (e) => {
+        this._autoRefresh = e.target.checked;
+        // Wenn aktiviert und Countdown bereits abgelaufen: sofort refreshen
+        if (this._autoRefresh && this._countdownVal <= 0) this._doRefresh();
+      }, opts);
 
       // Back-Button im Detail-View
       this._$('back-btn').addEventListener('click', () => {
@@ -1705,9 +2110,111 @@
       this._shadow.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
       this._$(`view-${name}`)?.classList.add('active');
       // Tabs
-      this._shadow.querySelectorAll('.view-tab').forEach(t => {
+      this._shadow.querySelectorAll('.nav-tab').forEach(t => {
         t.classList.toggle('active', t.dataset.view === name);
       });
+      // Tore-View bei Bedarf rendern
+      if (name === 'tore') this._renderTore();
+    }
+
+    // ── Live-Uhr ──────────────────────────────────────────────────────────
+
+    _startClock() {
+      this._stopClock();
+      this._tickClock();
+      this._clockTimer = setInterval(() => this._tickClock(), 1000);
+    }
+
+    _stopClock() {
+      if (this._clockTimer) {
+        clearInterval(this._clockTimer);
+        this._clockTimer = null;
+      }
+    }
+
+    _tickClock() {
+      const el = this._$('clock-text');
+      if (!el) return;
+      el.textContent = new Date().toLocaleTimeString('de-DE', {
+        hour: '2-digit', minute: '2-digit', second: '2-digit'
+      });
+    }
+
+    // ── Live-Refresh / Countdown ──────────────────────────────────────────
+
+    // Startet/Neustartet den 30s-Countdown. Button wird disabled, am Ende aktiv.
+    _startCountdown() {
+      this._stopCountdown();
+      this._countdownVal = this._countdownDauer;
+
+      const btn  = this._$('refresh-btn');
+      const cd   = this._$('countdown');
+      const icon = this._$('refresh-icon');
+      if (btn)  btn.disabled = true;
+      if (icon) icon.classList.remove('spinning');
+      if (cd)   { cd.classList.add('counting'); cd.classList.remove('ready'); }
+
+      this._updateCountdownText();
+
+      this._countdownTimer = setInterval(() => {
+        this._countdownVal--;
+        this._updateCountdownText();
+
+        if (this._countdownVal <= 0) {
+          this._countdownAbgelaufen();
+        }
+      }, 1000);
+    }
+
+    _stopCountdown() {
+      if (this._countdownTimer) {
+        clearInterval(this._countdownTimer);
+        this._countdownTimer = null;
+      }
+    }
+
+    // Wird aufgerufen wenn der Countdown 0 erreicht
+    _countdownAbgelaufen() {
+      this._stopCountdown();
+      const btn = this._$('refresh-btn');
+      const cd  = this._$('countdown');
+      if (cd) { cd.classList.remove('counting'); cd.classList.add('ready'); }
+
+      if (this._autoRefresh) {
+        // Auto: sofort neu laden
+        this._doRefresh();
+      } else {
+        // Manuell: Button aktivieren
+        if (btn) btn.disabled = false;
+        const txt = this._$('countdown-text');
+        if (txt) txt.textContent = 'bereit';
+      }
+    }
+
+    _updateCountdownText() {
+      const txt = this._$('countdown-text');
+      if (!txt) return;
+      const v = Math.max(0, this._countdownVal);
+      const m = String(Math.floor(v / 60)).padStart(2, '0');
+      const s = String(v % 60).padStart(2, '0');
+      txt.textContent = `${m}:${s}`;
+    }
+
+    // Löst die Aktualisierung aus: lädt Daten neu, startet Countdown neu
+    _doRefresh() {
+      const icon = this._$('refresh-icon');
+      if (icon) icon.classList.add('spinning');
+
+      // Datenquelle neu verarbeiten (falls vorhanden)
+      if (this._dataBinding) {
+        this.myDataSource = this._dataBinding;
+      }
+
+      // kurze Spin-Animation, dann Countdown neu starten
+      setTimeout(() => {
+        if (icon) icon.classList.remove('spinning');
+        this._startCountdown();
+      }, 600);
     }
 
     // ── Theme ─────────────────────────────────────────────────────────────
@@ -2458,6 +2965,146 @@
             ${labelHTML}
           </div>
         </div>`;
+    }
+
+    // ── Render: Tore (Hallen-Accordion, Engpass-priorisiert) ──────────────
+
+    _renderTore() {
+      const content = this._$('tore-content');
+      if (!content) return;
+
+      const tes = [...this._teMap.values()];
+
+      // Tor-Belegung aus TEs ableiten (nur aktive TEs belegen ein Tor)
+      const torBelegung = new Map(); // torNr → TE
+      for (const te of tes) {
+        if (te.tor && !['abgefahren', 'erwartet'].includes(te.status)) {
+          torBelegung.set(String(te.tor), te);
+        }
+      }
+
+      // Hallen aus TOR_HALLE_MAP — alle bekannten Hallen, nicht nur aus den Daten
+      // Pro Halle: TEs die an einem ihrer Tore hängen
+      const hallenData = HALLEN_REIHENFOLGE.map(h => {
+        const toreDieserHalle = new Set(HALLE_TORE_MAP[h] || []);
+        const teInHalle = tes.filter(te => {
+          // TE ist dieser Halle zugeordnet wenn: eigenes Tor, eigene Halle, oder Produkt-Halle
+          if (te.tor && toreDieserHalle.has(te.tor)) return true;
+          if (te.halle === h) return true;
+          return te.produkte.some(p => p.halle === h);
+        });
+        const belegt = teInHalle.filter(te => !['abgefahren', 'erwartet'].includes(te.status));
+        const verz   = teInHalle.filter(te => te.status === 'verzögert');
+        // Tore dieser Halle mit Belegungsstatus
+        const torStatus = [...toreDieserHalle].map(tor => {
+          const belegteTE = belegt.find(te => te.tor === tor);
+          return { tor, te: belegteTE || null };
+        });
+        return { halle: h, teInHalle, belegt, verz, anzahl: teInHalle.length, torStatus };
+      }).filter(h => h.teInHalle.length > 0 || h.torStatus.length > 0);
+
+      // ENGPASS-PRIORISIERUNG: Hallen mit Verzögerungen zuerst
+      hallenData.sort((a, b) => {
+        if (b.verz.length !== a.verz.length) return b.verz.length - a.verz.length;
+        return b.belegt.length - a.belegt.length;
+      });
+
+      // Engpass-Banner
+      const totalVerz = hallenData.reduce((s, h) => s + h.verz.length, 0);
+      let bannerHTML = '';
+      if (totalVerz > 0) {
+        const engpassHallen = hallenData.filter(h => h.verz.length > 0)
+          .map(h => 'Halle ' + h.halle).join(', ');
+        bannerHTML = `<div class="engpass-banner">
+          <span class="engpass-icon">⚠</span>
+          <span class="engpass-text"><strong>${totalVerz} verzögerte TE${totalVerz !== 1 ? 's' : ''}</strong> in ${esc(engpassHallen)} — Engpass-Hallen zuerst</span>
+        </div>`;
+      }
+
+      // Hallen-Sektionen
+      const sektionen = hallenData.map(h => {
+        const auslastung = h.anzahl > 0 ? Math.round(h.belegt.length / h.anzahl * 100) : 0;
+
+        let headerCls = 'halle-header';
+        if (h.verz.length > 0) headerCls += ' engpass';
+        else if (auslastung >= 80) headerCls += ' voll';
+
+        // Tor-Karten für belegte TEs
+        const torKarten = h.belegt.map(te => this._torKarteHTML(te)).join('');
+
+        return `<div class="halle-section">
+          <div class="${headerCls}" data-halle="${esc(h.halle)}">
+            <span class="h-toggle">▶</span>
+            <span class="h-num">Halle ${esc(h.halle)}</span>
+            <div class="h-stats">
+              <span class="hs-b">${h.belegt.length} aktiv</span>
+              <span class="hs-f">${(HALLE_TORE_MAP[h.halle]||[]).length} Tore</span>
+              ${h.verz.length > 0 ? `<span class="hs-v">${h.verz.length} ⚠</span>` : ''}
+            </div>
+            <div class="h-sep"></div>
+            <span class="h-util-pct">${auslastung}%</span>
+          </div>
+          <div class="halle-body">
+            ${torKarten || '<div style="grid-column:1/-1;padding:12px;font-family:var(--font-mono);font-size:10px;color:var(--c-text3)">Keine aktiven TEs</div>'}
+          </div>
+        </div>`;
+      }).join('');
+
+      content.innerHTML = bannerHTML + sektionen;
+
+      // Accordion-Toggle + Klick auf Tor-Karte
+      content.onclick = (e) => {
+        const header = e.target.closest('.halle-header');
+        if (header) {
+          const body = header.nextElementSibling;
+          const toggle = header.querySelector('.h-toggle');
+          body.classList.toggle('open');
+          toggle.classList.toggle('open');
+          return;
+        }
+        const karte = e.target.closest('.tor-karte[data-te]');
+        if (karte) this._renderDetail(karte.dataset.te);
+      };
+    }
+
+    // Baut eine Tor-Karte für die Hallen-Ansicht
+    _torKarteHTML(te) {
+      const isV = te.status === 'verzögert';
+
+      // Restzeit-Schätzung (Platzhalter-Logik bis echte Sollwerte vorliegen)
+      let restzeit, rzCls;
+      if (te.status === 'eingelagert') {
+        restzeit = 'fertig'; rzCls = 'rz-ok';
+      } else if (isV) {
+        restzeit = '⚠ offen'; rzCls = 'rz-bad';
+      } else {
+        restzeit = 'läuft'; rzCls = 'rz-ok';
+      }
+
+      // Fortschritt (5 Stufen)
+      const fp = { ankunft: 1, entladen: 3, eingelagert: 5, 'verzögert': 2 }[te.status] || 0;
+      const steps = [0,1,2,3,4].map(i => {
+        let cls = 'tc2-step';
+        if (i < fp) cls += isV ? ' late' : ' done';
+        else if (i === fp) cls += ' act';
+        return `<div class="${cls}"></div>`;
+      }).join('');
+
+      const torLabel = te.tor ? 'T' + String(te.tor).padStart(3, '0') : '–';
+
+      return `<div class="tor-karte t-${esc(te.status)}" data-te="${esc(te.te)}">
+        <div class="tc2-top">
+          <span class="tc2-num">${esc(torLabel)}</span>
+          <span class="tc2-dot dot-${esc(te.status)}"></span>
+          <span class="tc2-te">${esc(te.te)}</span>
+          <span class="tc2-restzeit ${rzCls}">${restzeit}</span>
+        </div>
+        <div class="tc2-steps">${steps}</div>
+        <div class="tc2-bottom">
+          <span class="tc2-sup">${esc(te.lieferantName ?? '–')}</span>
+          <span class="tc2-info">📦 ${te.produkte.length}</span>
+        </div>
+      </div>`;
     }
 
     // ── Haupt-Render ─────────────────────────────────────────────────────
