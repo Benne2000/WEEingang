@@ -1951,9 +1951,6 @@
           <button class="nav-tab" data-view="tore">
             <span class="nav-tab-icon">⊞</span><span class="nav-tab-label">Tore</span>
           </button>
-          <button class="nav-tab" data-view="detail">
-            <span class="nav-tab-icon">▣</span><span class="nav-tab-label">Detail</span>
-          </button>
           <button class="nav-tab" data-view="gantt">
             <span class="nav-tab-icon">▤</span><span class="nav-tab-label">Zeitstrahl</span>
           </button>
@@ -2175,10 +2172,12 @@
       // Views
       this._shadow.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
       this._$(`view-${name}`)?.classList.add('active');
-      // Tabs
-      this._shadow.querySelectorAll('.nav-tab').forEach(t => {
-        t.classList.toggle('active', t.dataset.view === name);
-      });
+      // Tabs — Detail hat keinen Tab, daher nichts markieren wenn Detail aktiv
+      if (name !== 'detail') {
+        this._shadow.querySelectorAll('.nav-tab').forEach(t => {
+          t.classList.toggle('active', t.dataset.view === name);
+        });
+      }
       // Tore-View bei Bedarf rendern
       if (name === 'tore') this._renderTore();
     }
