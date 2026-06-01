@@ -3222,11 +3222,11 @@
             </div>
             <div class="h-sep"></div>
             <span class="h-util-pct">${auslastung}%</span>
+            ${freieToreAnzahl > 0 ? `
+            <button class="frei-toggle-btn" data-halle="${esc(h.halle)}" title="Freie Tore ein-/ausblenden">
+              <span>○</span> ${freieToreAnzahl} frei
+            </button>` : ''}
           </div>
-          ${freieToreAnzahl > 0 ? `
-          <button class="frei-toggle-btn" data-halle="${esc(h.halle)}" title="Freie Tore ein-/ausblenden">
-            <span>○</span> ${freieToreAnzahl} frei
-          </button>` : ''}
           <div class="halle-body">
             ${torKarten || '<div style="grid-column:1/-1;padding:12px;font-family:var(--font-mono);font-size:10px;color:var(--c-text3)">Keine aktiven TEs</div>'}
             ${freieToreHTML}
@@ -3256,10 +3256,11 @@
         // Accordion-Toggle
         const header = e.target.closest('.halle-header');
         if (header) {
-          const body   = header.nextElementSibling;
-          const toggle = header.querySelector('.h-toggle');
-          body.classList.toggle('open');
-          toggle.classList.toggle('open');
+          const section = header.closest('.halle-section');
+          const body    = section?.querySelector('.halle-body');
+          const toggle  = header.querySelector('.h-toggle');
+          if (body)   body.classList.toggle('open');
+          if (toggle) toggle.classList.toggle('open');
           return;
         }
 
