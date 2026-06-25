@@ -1,3541 +1,561 @@
-// ═══════════════════════════════════════════════════════════════════════════
-//  SAP Custom Widget – Wareneingang Tracker
-//  Version 1.0.0 – Vollständig (alle 4 Schritte)
-//
-//  Views:
-//    1. Kacheln  – TE-Übersicht mit Status, Fortschritt, Δ-Zeit  ✅
-//    2. Detail   – Zeitstrahl + Produkttabelle für eine TE        ✅
-//    3. Gantt    – Tagesübersicht aller TEs (Soll vs. Ist)        ✅
-//
-//  Neu in Schritt 4:
-//    • Gantt-Zeitstrahl: dynamische Achse, Soll- und Ist-Balken
-//    • Stunden-Ticks, vertikale Gitterlinien, Jetzt-Linie
-//    • Farbkodierung nach Verzögerungsgrad (grün/gelb/rot)
-//    • Klick auf Ist-Balken oder Zeile → Detail-View
-// ═══════════════════════════════════════════════════════════════════════════
-
+/* =====================================================================
+ * Werttreiberbaum Filialumsatz  —  SAC Custom Widget
+ * Tag: <werttreiberbaum-widget>  |  DataBinding key: myDataSource
+ * Vendor: Benne  |  v1.0.0
+ *
+ * Zerlegt den Netto-Filialumsatz top-down in seine Werttreiber
+ *   Umsatz = Bons x Bonwert ;  Bonwert = Artikel/Bon x Stueckpreis
+ * vergleicht jede Filiale gegen das Filialnetz (Benchmark),
+ * markiert den Engpass-Treiber und schlaegt konkrete Massnahmen vor.
+ *
+ * Live-Daten kommen aus SAC (this.myDataSource). Ohne Anbindung
+ * rendert das Widget mit eingebetteten Demo-Daten, damit es sofort
+ * im Designer / standalone funktioniert.
+ * ===================================================================== */
 (function () {
-  'use strict';
+  "use strict";
 
-  // ── Konstanten ───────────────────────────────────────────────────────────
+  /* ---------- Eingebettete Demo-/Fallback-Daten (aus modell_gesamt) ---------- */
+  var EMBEDDED = {"flaeche":{"F01":8200,"F02":5600,"F03":3400},"rows":[{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Grosskunde","wk":"Baustoffe","pos":"Fachberatung","u":8772.38,"br":10384.02,"rb":1611.61,"art":1078,"bons":18,"ret":0,"tx":18},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Grosskunde","wk":"Baustoffe","pos":"Kasse","u":2393.1,"br":2844.34,"rb":451.24,"art":297,"bons":5,"ret":0,"tx":5},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Grosskunde","wk":"Baustoffe","pos":"Teamleitung","u":1376.36,"br":1655.57,"rb":279.22,"art":181,"bons":3,"ret":1,"tx":4},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Grosskunde","wk":"Baustoffe","pos":"Verkauf","u":2430.3,"br":2862.0,"rb":431.7,"art":297,"bons":5,"ret":1,"tx":6},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Grosskunde","wk":"Bodenbelaege & Fliesen","pos":"Fachberatung","u":5523.24,"br":6501.02,"rb":977.78,"art":251,"bons":6,"ret":0,"tx":6},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Grosskunde","wk":"Bodenbelaege & Fliesen","pos":"Kasse","u":497.51,"br":575.49,"rb":77.99,"art":21,"bons":1,"ret":0,"tx":1},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Grosskunde","wk":"Bodenbelaege & Fliesen","pos":"Teamleitung","u":4050.05,"br":4570.29,"rb":520.24,"art":169,"bons":4,"ret":0,"tx":4},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Grosskunde","wk":"Bodenbelaege & Fliesen","pos":"Verkauf","u":3265.25,"br":3849.73,"rb":584.48,"art":153,"bons":3,"ret":0,"tx":3},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Grosskunde","wk":"Eisenwaren & Befestigung","pos":"Fachberatung","u":1050.87,"br":1206.22,"rb":155.33,"art":195,"bons":11,"ret":0,"tx":11},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Grosskunde","wk":"Eisenwaren & Befestigung","pos":"Kasse","u":1254.34,"br":1439.84,"rb":185.49,"art":223,"bons":6,"ret":0,"tx":6},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Grosskunde","wk":"Eisenwaren & Befestigung","pos":"Teamleitung","u":641.95,"br":758.29,"rb":116.34,"art":120,"bons":3,"ret":0,"tx":3},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Grosskunde","wk":"Eisenwaren & Befestigung","pos":"Verkauf","u":907.04,"br":1035.7,"rb":128.66,"art":175,"bons":6,"ret":0,"tx":6},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Grosskunde","wk":"Elektro & Leuchten","pos":"Fachberatung","u":2979.62,"br":3446.19,"rb":466.59,"art":110,"bons":11,"ret":0,"tx":11},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Grosskunde","wk":"Elektro & Leuchten","pos":"Kasse","u":1280.66,"br":1537.24,"rb":256.56,"art":54,"bons":6,"ret":0,"tx":6},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Grosskunde","wk":"Elektro & Leuchten","pos":"Teamleitung","u":971.82,"br":1093.1,"rb":121.27,"art":37,"bons":4,"ret":0,"tx":4},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Grosskunde","wk":"Elektro & Leuchten","pos":"Verkauf","u":663.93,"br":809.59,"rb":145.67,"art":27,"bons":3,"ret":0,"tx":3},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Grosskunde","wk":"Farben & Tapeten","pos":"Fachberatung","u":1254.36,"br":1454.62,"rb":200.26,"art":58,"bons":6,"ret":0,"tx":6},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Grosskunde","wk":"Farben & Tapeten","pos":"Kasse","u":286.22,"br":333.67,"rb":47.44,"art":17,"bons":2,"ret":0,"tx":2},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Grosskunde","wk":"Farben & Tapeten","pos":"Teamleitung","u":418.03,"br":478.99,"rb":60.97,"art":21,"bons":3,"ret":0,"tx":3},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Grosskunde","wk":"Farben & Tapeten","pos":"Verkauf","u":156.74,"br":195.41,"rb":38.67,"art":7,"bons":1,"ret":0,"tx":1},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Grosskunde","wk":"Garten & Pflanzen","pos":"Fachberatung","u":2695.72,"br":3086.72,"rb":391.0,"art":234,"bons":9,"ret":0,"tx":9},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Grosskunde","wk":"Garten & Pflanzen","pos":"Kasse","u":34.98,"br":43.14,"rb":8.15,"art":4,"bons":1,"ret":0,"tx":1},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Grosskunde","wk":"Garten & Pflanzen","pos":"Teamleitung","u":180.41,"br":215.95,"rb":35.54,"art":15,"bons":1,"ret":1,"tx":2},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Grosskunde","wk":"Garten & Pflanzen","pos":"Verkauf","u":631.67,"br":725.8,"rb":94.12,"art":62,"bons":3,"ret":0,"tx":3},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Grosskunde","wk":"Holz & Bauelemente","pos":"Fachberatung","u":2699.65,"br":3166.7,"rb":467.07,"art":168,"bons":11,"ret":0,"tx":11},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Grosskunde","wk":"Holz & Bauelemente","pos":"Kasse","u":536.29,"br":657.44,"rb":121.15,"art":35,"bons":2,"ret":0,"tx":2},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Grosskunde","wk":"Holz & Bauelemente","pos":"Teamleitung","u":770.5,"br":878.2,"rb":107.7,"art":48,"bons":3,"ret":1,"tx":4},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Grosskunde","wk":"Holz & Bauelemente","pos":"Verkauf","u":1282.69,"br":1468.67,"rb":185.99,"art":79,"bons":5,"ret":0,"tx":5},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Grosskunde","wk":"Sanitaer & Installation","pos":"Fachberatung","u":3481.42,"br":4029.12,"rb":547.71,"art":105,"bons":14,"ret":0,"tx":14},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Grosskunde","wk":"Sanitaer & Installation","pos":"Kasse","u":569.32,"br":663.38,"rb":94.07,"art":19,"bons":3,"ret":0,"tx":3},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Grosskunde","wk":"Sanitaer & Installation","pos":"Teamleitung","u":652.8,"br":759.97,"rb":107.16,"art":21,"bons":2,"ret":0,"tx":2},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Grosskunde","wk":"Sanitaer & Installation","pos":"Verkauf","u":2284.79,"br":2637.36,"rb":352.58,"art":73,"bons":7,"ret":0,"tx":7},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Grosskunde","wk":"Werkzeuge & Maschinen","pos":"Fachberatung","u":2294.28,"br":2610.54,"rb":316.25,"art":51,"bons":8,"ret":0,"tx":8},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Grosskunde","wk":"Werkzeuge & Maschinen","pos":"Filialleitung","u":161.29,"br":176.35,"rb":15.06,"art":3,"bons":1,"ret":0,"tx":1},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Grosskunde","wk":"Werkzeuge & Maschinen","pos":"Kasse","u":525.63,"br":621.65,"rb":96.02,"art":12,"bons":2,"ret":0,"tx":2},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Grosskunde","wk":"Werkzeuge & Maschinen","pos":"Teamleitung","u":241.48,"br":294.66,"rb":53.17,"art":7,"bons":2,"ret":0,"tx":2},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Grosskunde","wk":"Werkzeuge & Maschinen","pos":"Verkauf","u":2131.32,"br":2500.73,"rb":369.41,"art":56,"bons":8,"ret":0,"tx":8},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Privatkunde","wk":"Baustoffe","pos":"Fachberatung","u":2392.93,"br":2408.81,"rb":15.89,"art":255,"bons":12,"ret":0,"tx":12},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Privatkunde","wk":"Baustoffe","pos":"Kasse","u":1012.17,"br":1034.82,"rb":22.66,"art":103,"bons":5,"ret":0,"tx":5},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Privatkunde","wk":"Baustoffe","pos":"Teamleitung","u":437.62,"br":442.52,"rb":4.9,"art":45,"bons":3,"ret":0,"tx":3},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Privatkunde","wk":"Baustoffe","pos":"Verkauf","u":1076.28,"br":1078.12,"rb":1.84,"art":124,"bons":5,"ret":0,"tx":5},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Privatkunde","wk":"Bodenbelaege & Fliesen","pos":"Fachberatung","u":7348.51,"br":7455.75,"rb":107.23,"art":283,"bons":17,"ret":0,"tx":17},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Privatkunde","wk":"Bodenbelaege & Fliesen","pos":"Kasse","u":1370.47,"br":1389.82,"rb":19.35,"art":52,"bons":4,"ret":0,"tx":4},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Privatkunde","wk":"Bodenbelaege & Fliesen","pos":"Teamleitung","u":1462.18,"br":1482.45,"rb":20.27,"art":52,"bons":3,"ret":0,"tx":3},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Privatkunde","wk":"Bodenbelaege & Fliesen","pos":"Verkauf","u":693.0,"br":693.0,"rb":0.0,"art":28,"bons":2,"ret":0,"tx":2},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Privatkunde","wk":"Eisenwaren & Befestigung","pos":"Fachberatung","u":734.55,"br":737.33,"rb":2.78,"art":118,"bons":11,"ret":0,"tx":11},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Privatkunde","wk":"Eisenwaren & Befestigung","pos":"Kasse","u":205.24,"br":208.04,"rb":2.8,"art":32,"bons":3,"ret":0,"tx":3},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Privatkunde","wk":"Eisenwaren & Befestigung","pos":"Teamleitung","u":336.06,"br":337.19,"rb":1.13,"art":51,"bons":4,"ret":0,"tx":4},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Privatkunde","wk":"Eisenwaren & Befestigung","pos":"Verkauf","u":563.03,"br":565.07,"rb":2.05,"art":89,"bons":9,"ret":0,"tx":9},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Privatkunde","wk":"Elektro & Leuchten","pos":"Fachberatung","u":426.16,"br":426.16,"rb":0.0,"art":15,"bons":4,"ret":0,"tx":4},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Privatkunde","wk":"Elektro & Leuchten","pos":"Kasse","u":666.2,"br":675.74,"rb":9.54,"art":22,"bons":5,"ret":0,"tx":5},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Privatkunde","wk":"Elektro & Leuchten","pos":"Teamleitung","u":145.61,"br":152.61,"rb":7.0,"art":6,"bons":1,"ret":0,"tx":1},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Privatkunde","wk":"Elektro & Leuchten","pos":"Verkauf","u":1037.9,"br":1038.34,"rb":0.43,"art":34,"bons":7,"ret":0,"tx":7},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Privatkunde","wk":"Farben & Tapeten","pos":"Fachberatung","u":1835.78,"br":1849.68,"rb":13.9,"art":79,"bons":15,"ret":0,"tx":15},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Privatkunde","wk":"Farben & Tapeten","pos":"Kasse","u":46.3,"br":47.5,"rb":1.2,"art":2,"bons":2,"ret":0,"tx":2},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Privatkunde","wk":"Farben & Tapeten","pos":"Teamleitung","u":403.7,"br":404.93,"rb":1.23,"art":16,"bons":4,"ret":0,"tx":4},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Privatkunde","wk":"Farben & Tapeten","pos":"Verkauf","u":731.41,"br":743.06,"rb":11.66,"art":33,"bons":9,"ret":0,"tx":9},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Privatkunde","wk":"Garten & Pflanzen","pos":"Fachberatung","u":1836.93,"br":1857.1,"rb":20.16,"art":142,"bons":16,"ret":0,"tx":16},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Privatkunde","wk":"Garten & Pflanzen","pos":"Filialleitung","u":75.91,"br":76.78,"rb":0.87,"art":5,"bons":1,"ret":0,"tx":1},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Privatkunde","wk":"Garten & Pflanzen","pos":"Kasse","u":316.81,"br":321.54,"rb":4.73,"art":29,"bons":3,"ret":0,"tx":3},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Privatkunde","wk":"Garten & Pflanzen","pos":"Teamleitung","u":312.92,"br":315.73,"rb":2.8,"art":26,"bons":3,"ret":0,"tx":3},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Privatkunde","wk":"Garten & Pflanzen","pos":"Verkauf","u":840.91,"br":847.82,"rb":6.91,"art":63,"bons":7,"ret":0,"tx":7},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Privatkunde","wk":"Holz & Bauelemente","pos":"Fachberatung","u":906.77,"br":912.26,"rb":5.5,"art":45,"bons":7,"ret":0,"tx":7},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Privatkunde","wk":"Holz & Bauelemente","pos":"Filialleitung","u":99.33,"br":99.33,"rb":0.0,"art":6,"bons":1,"ret":0,"tx":1},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Privatkunde","wk":"Holz & Bauelemente","pos":"Kasse","u":329.39,"br":335.63,"rb":6.23,"art":19,"bons":3,"ret":0,"tx":3},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Privatkunde","wk":"Holz & Bauelemente","pos":"Teamleitung","u":384.51,"br":388.18,"rb":3.67,"art":21,"bons":3,"ret":0,"tx":3},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Privatkunde","wk":"Holz & Bauelemente","pos":"Verkauf","u":287.15,"br":290.36,"rb":3.21,"art":14,"bons":3,"ret":0,"tx":3},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Privatkunde","wk":"Sanitaer & Installation","pos":"Fachberatung","u":1637.15,"br":1650.93,"rb":13.76,"art":43,"bons":11,"ret":1,"tx":12},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Privatkunde","wk":"Sanitaer & Installation","pos":"Kasse","u":390.12,"br":399.82,"rb":9.7,"art":13,"bons":3,"ret":0,"tx":3},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Privatkunde","wk":"Sanitaer & Installation","pos":"Teamleitung","u":364.79,"br":369.22,"rb":4.44,"art":11,"bons":3,"ret":0,"tx":3},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Privatkunde","wk":"Sanitaer & Installation","pos":"Verkauf","u":640.67,"br":652.95,"rb":12.3,"art":17,"bons":6,"ret":1,"tx":7},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Privatkunde","wk":"Werkzeuge & Maschinen","pos":"Fachberatung","u":1192.94,"br":1214.45,"rb":21.51,"art":26,"bons":10,"ret":0,"tx":10},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Privatkunde","wk":"Werkzeuge & Maschinen","pos":"Kasse","u":1042.91,"br":1048.87,"rb":5.96,"art":23,"bons":8,"ret":0,"tx":8},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Privatkunde","wk":"Werkzeuge & Maschinen","pos":"Teamleitung","u":350.76,"br":357.09,"rb":6.34,"art":7,"bons":3,"ret":0,"tx":3},{"fil":"F01","reg":"Nord","st":"Gewerbegebiet","kt":"Privatkunde","wk":"Werkzeuge & Maschinen","pos":"Verkauf","u":1673.98,"br":1704.09,"rb":30.11,"art":35,"bons":10,"ret":0,"tx":10},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Grosskunde","wk":"Baustoffe","pos":"Fachberatung","u":2901.25,"br":3387.63,"rb":486.39,"art":360,"bons":8,"ret":1,"tx":9},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Grosskunde","wk":"Baustoffe","pos":"Filialleitung","u":433.24,"br":509.91,"rb":76.67,"art":57,"bons":1,"ret":0,"tx":1},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Grosskunde","wk":"Baustoffe","pos":"Kasse","u":1891.15,"br":2240.16,"rb":349.01,"art":211,"bons":3,"ret":0,"tx":3},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Grosskunde","wk":"Baustoffe","pos":"Teamleitung","u":834.43,"br":943.6,"rb":109.16,"art":90,"bons":3,"ret":0,"tx":3},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Grosskunde","wk":"Baustoffe","pos":"Verkauf","u":0.0,"br":0.0,"rb":0.0,"art":0,"bons":0,"ret":1,"tx":1},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Grosskunde","wk":"Bodenbelaege & Fliesen","pos":"Fachberatung","u":2249.6,"br":2625.27,"rb":375.67,"art":113,"bons":4,"ret":0,"tx":4},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Grosskunde","wk":"Bodenbelaege & Fliesen","pos":"Kasse","u":3417.65,"br":3922.41,"rb":504.76,"art":160,"bons":5,"ret":0,"tx":5},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Grosskunde","wk":"Bodenbelaege & Fliesen","pos":"Teamleitung","u":949.42,"br":1092.2,"rb":142.79,"art":43,"bons":3,"ret":0,"tx":3},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Grosskunde","wk":"Bodenbelaege & Fliesen","pos":"Verkauf","u":5833.72,"br":6726.25,"rb":892.53,"art":276,"bons":6,"ret":0,"tx":6},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Grosskunde","wk":"Eisenwaren & Befestigung","pos":"Fachberatung","u":947.65,"br":1114.64,"rb":166.95,"art":159,"bons":7,"ret":0,"tx":7},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Grosskunde","wk":"Eisenwaren & Befestigung","pos":"Kasse","u":148.86,"br":180.59,"rb":31.72,"art":31,"bons":2,"ret":0,"tx":2},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Grosskunde","wk":"Eisenwaren & Befestigung","pos":"Teamleitung","u":269.51,"br":302.04,"rb":32.52,"art":44,"bons":1,"ret":0,"tx":1},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Grosskunde","wk":"Eisenwaren & Befestigung","pos":"Verkauf","u":303.98,"br":362.39,"rb":58.42,"art":58,"bons":2,"ret":0,"tx":2},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Grosskunde","wk":"Elektro & Leuchten","pos":"Fachberatung","u":1692.84,"br":1990.39,"rb":297.55,"art":69,"bons":6,"ret":0,"tx":6},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Grosskunde","wk":"Elektro & Leuchten","pos":"Kasse","u":204.69,"br":241.03,"rb":36.33,"art":9,"bons":2,"ret":0,"tx":2},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Grosskunde","wk":"Elektro & Leuchten","pos":"Teamleitung","u":765.34,"br":884.88,"rb":119.53,"art":29,"bons":3,"ret":0,"tx":3},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Grosskunde","wk":"Elektro & Leuchten","pos":"Verkauf","u":410.97,"br":477.63,"rb":66.66,"art":14,"bons":2,"ret":0,"tx":2},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Grosskunde","wk":"Farben & Tapeten","pos":"Fachberatung","u":846.48,"br":1002.05,"rb":155.57,"art":39,"bons":3,"ret":0,"tx":3},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Grosskunde","wk":"Farben & Tapeten","pos":"Kasse","u":435.06,"br":499.51,"rb":64.45,"art":22,"bons":3,"ret":0,"tx":3},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Grosskunde","wk":"Farben & Tapeten","pos":"Verkauf","u":321.7,"br":353.44,"rb":31.73,"art":16,"bons":1,"ret":0,"tx":1},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Grosskunde","wk":"Garten & Pflanzen","pos":"Fachberatung","u":478.17,"br":566.52,"rb":88.35,"art":44,"bons":3,"ret":0,"tx":3},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Grosskunde","wk":"Garten & Pflanzen","pos":"Kasse","u":373.71,"br":441.58,"rb":67.87,"art":32,"bons":2,"ret":0,"tx":2},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Grosskunde","wk":"Garten & Pflanzen","pos":"Verkauf","u":719.78,"br":862.51,"rb":142.73,"art":67,"bons":5,"ret":0,"tx":5},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Grosskunde","wk":"Holz & Bauelemente","pos":"Fachberatung","u":2454.57,"br":2882.59,"rb":428.02,"art":136,"bons":8,"ret":0,"tx":8},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Grosskunde","wk":"Holz & Bauelemente","pos":"Kasse","u":483.1,"br":550.27,"rb":67.16,"art":29,"bons":2,"ret":0,"tx":2},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Grosskunde","wk":"Holz & Bauelemente","pos":"Teamleitung","u":354.54,"br":408.13,"rb":53.59,"art":20,"bons":1,"ret":0,"tx":1},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Grosskunde","wk":"Holz & Bauelemente","pos":"Verkauf","u":1094.43,"br":1281.22,"rb":186.79,"art":66,"bons":5,"ret":0,"tx":5},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Grosskunde","wk":"Sanitaer & Installation","pos":"Fachberatung","u":223.01,"br":277.48,"rb":54.47,"art":9,"bons":1,"ret":0,"tx":1},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Grosskunde","wk":"Sanitaer & Installation","pos":"Kasse","u":851.19,"br":1002.96,"rb":151.77,"art":29,"bons":5,"ret":0,"tx":5},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Grosskunde","wk":"Sanitaer & Installation","pos":"Teamleitung","u":636.28,"br":731.81,"rb":95.53,"art":18,"bons":3,"ret":0,"tx":3},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Grosskunde","wk":"Sanitaer & Installation","pos":"Verkauf","u":2147.27,"br":2511.61,"rb":364.37,"art":68,"bons":6,"ret":0,"tx":6},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Grosskunde","wk":"Werkzeuge & Maschinen","pos":"Fachberatung","u":2304.87,"br":2593.56,"rb":288.72,"art":56,"bons":7,"ret":0,"tx":7},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Grosskunde","wk":"Werkzeuge & Maschinen","pos":"Filialleitung","u":270.97,"br":315.27,"rb":44.3,"art":7,"bons":1,"ret":0,"tx":1},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Grosskunde","wk":"Werkzeuge & Maschinen","pos":"Kasse","u":294.62,"br":352.55,"rb":57.92,"art":8,"bons":2,"ret":0,"tx":2},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Grosskunde","wk":"Werkzeuge & Maschinen","pos":"Teamleitung","u":288.72,"br":348.48,"rb":59.75,"art":6,"bons":1,"ret":0,"tx":1},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Grosskunde","wk":"Werkzeuge & Maschinen","pos":"Verkauf","u":1201.09,"br":1411.48,"rb":210.39,"art":29,"bons":4,"ret":0,"tx":4},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Privatkunde","wk":"Baustoffe","pos":"Fachberatung","u":1811.6,"br":1811.6,"rb":0.0,"art":183,"bons":11,"ret":0,"tx":11},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Privatkunde","wk":"Baustoffe","pos":"Filialleitung","u":177.31,"br":186.79,"rb":9.48,"art":22,"bons":1,"ret":0,"tx":1},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Privatkunde","wk":"Baustoffe","pos":"Kasse","u":397.88,"br":399.03,"rb":1.14,"art":48,"bons":3,"ret":0,"tx":3},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Privatkunde","wk":"Baustoffe","pos":"Teamleitung","u":808.69,"br":811.88,"rb":3.18,"art":92,"bons":5,"ret":0,"tx":5},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Privatkunde","wk":"Baustoffe","pos":"Verkauf","u":1554.02,"br":1565.66,"rb":11.65,"art":179,"bons":10,"ret":1,"tx":11},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Privatkunde","wk":"Bodenbelaege & Fliesen","pos":"Fachberatung","u":5381.56,"br":5479.61,"rb":98.03,"art":203,"bons":16,"ret":1,"tx":17},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Privatkunde","wk":"Bodenbelaege & Fliesen","pos":"Filialleitung","u":161.01,"br":162.21,"rb":1.21,"art":7,"bons":1,"ret":0,"tx":1},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Privatkunde","wk":"Bodenbelaege & Fliesen","pos":"Kasse","u":377.74,"br":386.15,"rb":8.42,"art":16,"bons":1,"ret":0,"tx":1},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Privatkunde","wk":"Bodenbelaege & Fliesen","pos":"Teamleitung","u":393.51,"br":393.51,"rb":0.0,"art":16,"bons":1,"ret":0,"tx":1},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Privatkunde","wk":"Bodenbelaege & Fliesen","pos":"Verkauf","u":3006.28,"br":3046.93,"rb":40.67,"art":109,"bons":12,"ret":2,"tx":14},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Privatkunde","wk":"Eisenwaren & Befestigung","pos":"Fachberatung","u":1036.04,"br":1040.93,"rb":4.88,"art":160,"bons":13,"ret":1,"tx":14},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Privatkunde","wk":"Eisenwaren & Befestigung","pos":"Kasse","u":265.03,"br":267.89,"rb":2.85,"art":47,"bons":5,"ret":1,"tx":6},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Privatkunde","wk":"Eisenwaren & Befestigung","pos":"Teamleitung","u":335.89,"br":349.05,"rb":13.15,"art":60,"bons":5,"ret":1,"tx":6},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Privatkunde","wk":"Eisenwaren & Befestigung","pos":"Verkauf","u":550.89,"br":552.24,"rb":1.34,"art":91,"bons":12,"ret":0,"tx":12},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Privatkunde","wk":"Elektro & Leuchten","pos":"Fachberatung","u":1806.16,"br":1813.12,"rb":6.98,"art":59,"bons":15,"ret":0,"tx":15},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Privatkunde","wk":"Elektro & Leuchten","pos":"Kasse","u":335.45,"br":342.52,"rb":7.09,"art":13,"bons":5,"ret":0,"tx":5},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Privatkunde","wk":"Elektro & Leuchten","pos":"Teamleitung","u":462.56,"br":462.56,"rb":0.0,"art":15,"bons":4,"ret":0,"tx":4},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Privatkunde","wk":"Elektro & Leuchten","pos":"Verkauf","u":576.53,"br":581.56,"rb":5.03,"art":19,"bons":7,"ret":0,"tx":7},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Privatkunde","wk":"Farben & Tapeten","pos":"Fachberatung","u":886.33,"br":905.89,"rb":19.57,"art":39,"bons":10,"ret":1,"tx":11},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Privatkunde","wk":"Farben & Tapeten","pos":"Filialleitung","u":23.1,"br":23.5,"rb":0.41,"art":1,"bons":1,"ret":0,"tx":1},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Privatkunde","wk":"Farben & Tapeten","pos":"Kasse","u":535.6,"br":545.75,"rb":10.15,"art":25,"bons":7,"ret":0,"tx":7},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Privatkunde","wk":"Farben & Tapeten","pos":"Teamleitung","u":368.72,"br":369.39,"rb":0.68,"art":14,"bons":4,"ret":0,"tx":4},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Privatkunde","wk":"Farben & Tapeten","pos":"Verkauf","u":490.42,"br":491.5,"rb":1.08,"art":23,"bons":5,"ret":1,"tx":6},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Privatkunde","wk":"Garten & Pflanzen","pos":"Fachberatung","u":1568.88,"br":1577.62,"rb":8.74,"art":119,"bons":17,"ret":0,"tx":17},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Privatkunde","wk":"Garten & Pflanzen","pos":"Filialleitung","u":55.16,"br":58.67,"rb":3.51,"art":4,"bons":1,"ret":0,"tx":1},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Privatkunde","wk":"Garten & Pflanzen","pos":"Kasse","u":214.3,"br":221.78,"rb":7.48,"art":17,"bons":4,"ret":0,"tx":4},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Privatkunde","wk":"Garten & Pflanzen","pos":"Teamleitung","u":377.25,"br":382.76,"rb":5.5,"art":31,"bons":6,"ret":0,"tx":6},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Privatkunde","wk":"Garten & Pflanzen","pos":"Verkauf","u":1237.77,"br":1245.64,"rb":7.86,"art":103,"bons":15,"ret":0,"tx":15},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Privatkunde","wk":"Holz & Bauelemente","pos":"Fachberatung","u":1215.81,"br":1238.04,"rb":22.23,"art":64,"bons":12,"ret":1,"tx":13},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Privatkunde","wk":"Holz & Bauelemente","pos":"Kasse","u":491.7,"br":494.2,"rb":2.5,"art":27,"bons":5,"ret":0,"tx":5},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Privatkunde","wk":"Holz & Bauelemente","pos":"Teamleitung","u":413.16,"br":413.16,"rb":0.0,"art":21,"bons":5,"ret":0,"tx":5},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Privatkunde","wk":"Holz & Bauelemente","pos":"Verkauf","u":769.15,"br":786.04,"rb":16.86,"art":41,"bons":7,"ret":0,"tx":7},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Privatkunde","wk":"Sanitaer & Installation","pos":"Fachberatung","u":2046.78,"br":2066.42,"rb":19.66,"art":52,"bons":18,"ret":0,"tx":18},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Privatkunde","wk":"Sanitaer & Installation","pos":"Kasse","u":271.19,"br":271.37,"rb":0.19,"art":7,"bons":3,"ret":0,"tx":3},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Privatkunde","wk":"Sanitaer & Installation","pos":"Teamleitung","u":583.39,"br":598.92,"rb":15.53,"art":16,"bons":4,"ret":0,"tx":4},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Privatkunde","wk":"Sanitaer & Installation","pos":"Verkauf","u":706.64,"br":713.37,"rb":6.73,"art":18,"bons":7,"ret":0,"tx":7},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Privatkunde","wk":"Werkzeuge & Maschinen","pos":"Fachberatung","u":2048.39,"br":2084.16,"rb":35.78,"art":41,"bons":17,"ret":0,"tx":17},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Privatkunde","wk":"Werkzeuge & Maschinen","pos":"Filialleitung","u":137.97,"br":141.0,"rb":3.03,"art":3,"bons":1,"ret":0,"tx":1},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Privatkunde","wk":"Werkzeuge & Maschinen","pos":"Kasse","u":519.98,"br":527.68,"rb":7.71,"art":11,"bons":5,"ret":0,"tx":5},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Privatkunde","wk":"Werkzeuge & Maschinen","pos":"Teamleitung","u":596.58,"br":609.52,"rb":12.93,"art":13,"bons":4,"ret":0,"tx":4},{"fil":"F02","reg":"Mitte","st":"Stadtrand","kt":"Privatkunde","wk":"Werkzeuge & Maschinen","pos":"Verkauf","u":968.46,"br":987.2,"rb":18.76,"art":21,"bons":9,"ret":2,"tx":11},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Grosskunde","wk":"Baustoffe","pos":"Fachberatung","u":2985.88,"br":3414.81,"rb":428.93,"art":372,"bons":7,"ret":0,"tx":7},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Grosskunde","wk":"Baustoffe","pos":"Verkauf","u":1676.01,"br":2002.18,"rb":326.19,"art":198,"bons":3,"ret":0,"tx":3},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Grosskunde","wk":"Bodenbelaege & Fliesen","pos":"Kasse","u":469.16,"br":566.51,"rb":97.35,"art":18,"bons":1,"ret":0,"tx":1},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Grosskunde","wk":"Bodenbelaege & Fliesen","pos":"Teamleitung","u":1592.47,"br":1874.35,"rb":281.89,"art":69,"bons":3,"ret":1,"tx":4},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Grosskunde","wk":"Bodenbelaege & Fliesen","pos":"Verkauf","u":3175.84,"br":3753.24,"rb":577.41,"art":139,"bons":4,"ret":0,"tx":4},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Grosskunde","wk":"Eisenwaren & Befestigung","pos":"Fachberatung","u":252.16,"br":289.45,"rb":37.28,"art":44,"bons":2,"ret":0,"tx":2},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Grosskunde","wk":"Eisenwaren & Befestigung","pos":"Kasse","u":198.81,"br":240.36,"rb":41.56,"art":43,"bons":3,"ret":0,"tx":3},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Grosskunde","wk":"Eisenwaren & Befestigung","pos":"Teamleitung","u":246.01,"br":285.55,"rb":39.54,"art":42,"bons":2,"ret":0,"tx":2},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Grosskunde","wk":"Eisenwaren & Befestigung","pos":"Verkauf","u":461.25,"br":532.65,"rb":71.39,"art":85,"bons":5,"ret":0,"tx":5},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Grosskunde","wk":"Elektro & Leuchten","pos":"Fachberatung","u":836.14,"br":958.08,"rb":121.94,"art":33,"bons":4,"ret":0,"tx":4},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Grosskunde","wk":"Elektro & Leuchten","pos":"Verkauf","u":134.18,"br":153.8,"rb":19.62,"art":5,"bons":1,"ret":0,"tx":1},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Grosskunde","wk":"Farben & Tapeten","pos":"Fachberatung","u":552.03,"br":645.26,"rb":93.23,"art":30,"bons":3,"ret":0,"tx":3},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Grosskunde","wk":"Farben & Tapeten","pos":"Kasse","u":350.61,"br":411.46,"rb":60.85,"art":19,"bons":2,"ret":0,"tx":2},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Grosskunde","wk":"Farben & Tapeten","pos":"Teamleitung","u":203.19,"br":244.26,"rb":41.06,"art":11,"bons":1,"ret":0,"tx":1},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Grosskunde","wk":"Garten & Pflanzen","pos":"Fachberatung","u":334.93,"br":397.27,"rb":62.34,"art":34,"bons":2,"ret":0,"tx":2},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Grosskunde","wk":"Garten & Pflanzen","pos":"Filialleitung","u":53.46,"br":63.89,"rb":10.43,"art":5,"bons":1,"ret":0,"tx":1},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Grosskunde","wk":"Garten & Pflanzen","pos":"Teamleitung","u":210.9,"br":240.06,"rb":29.16,"art":17,"bons":1,"ret":0,"tx":1},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Grosskunde","wk":"Garten & Pflanzen","pos":"Verkauf","u":119.11,"br":133.92,"rb":14.82,"art":11,"bons":2,"ret":0,"tx":2},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Grosskunde","wk":"Holz & Bauelemente","pos":"Fachberatung","u":111.83,"br":135.39,"rb":23.55,"art":6,"bons":1,"ret":0,"tx":1},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Grosskunde","wk":"Holz & Bauelemente","pos":"Teamleitung","u":178.99,"br":200.29,"rb":21.29,"art":12,"bons":1,"ret":0,"tx":1},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Grosskunde","wk":"Holz & Bauelemente","pos":"Verkauf","u":583.04,"br":672.75,"rb":89.71,"art":36,"bons":3,"ret":0,"tx":3},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Grosskunde","wk":"Sanitaer & Installation","pos":"Fachberatung","u":1040.24,"br":1239.83,"rb":199.58,"art":31,"bons":4,"ret":0,"tx":4},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Grosskunde","wk":"Sanitaer & Installation","pos":"Kasse","u":186.63,"br":232.58,"rb":45.95,"art":6,"bons":1,"ret":0,"tx":1},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Grosskunde","wk":"Sanitaer & Installation","pos":"Verkauf","u":364.15,"br":408.44,"rb":44.29,"art":12,"bons":2,"ret":0,"tx":2},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Grosskunde","wk":"Werkzeuge & Maschinen","pos":"Fachberatung","u":139.69,"br":164.83,"rb":25.14,"art":4,"bons":1,"ret":0,"tx":1},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Grosskunde","wk":"Werkzeuge & Maschinen","pos":"Teamleitung","u":523.07,"br":612.73,"rb":89.66,"art":11,"bons":2,"ret":0,"tx":2},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Privatkunde","wk":"Baustoffe","pos":"Fachberatung","u":2714.11,"br":2754.66,"rb":40.55,"art":282,"bons":18,"ret":1,"tx":19},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Privatkunde","wk":"Baustoffe","pos":"Filialleitung","u":258.91,"br":258.91,"rb":0.0,"art":25,"bons":1,"ret":0,"tx":1},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Privatkunde","wk":"Baustoffe","pos":"Kasse","u":532.53,"br":536.33,"rb":3.81,"art":64,"bons":5,"ret":1,"tx":6},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Privatkunde","wk":"Baustoffe","pos":"Teamleitung","u":972.82,"br":987.53,"rb":14.7,"art":97,"bons":7,"ret":0,"tx":7},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Privatkunde","wk":"Baustoffe","pos":"Verkauf","u":1919.56,"br":1954.13,"rb":34.56,"art":203,"bons":12,"ret":0,"tx":12},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Privatkunde","wk":"Bodenbelaege & Fliesen","pos":"Fachberatung","u":4471.48,"br":4546.89,"rb":75.42,"art":173,"bons":20,"ret":0,"tx":20},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Privatkunde","wk":"Bodenbelaege & Fliesen","pos":"Filialleitung","u":373.99,"br":373.99,"rb":0.0,"art":15,"bons":1,"ret":0,"tx":1},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Privatkunde","wk":"Bodenbelaege & Fliesen","pos":"Kasse","u":2132.91,"br":2195.47,"rb":62.56,"art":84,"bons":8,"ret":0,"tx":8},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Privatkunde","wk":"Bodenbelaege & Fliesen","pos":"Teamleitung","u":1167.62,"br":1207.67,"rb":40.04,"art":44,"bons":3,"ret":0,"tx":3},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Privatkunde","wk":"Bodenbelaege & Fliesen","pos":"Verkauf","u":2744.45,"br":2796.8,"rb":52.34,"art":115,"bons":13,"ret":0,"tx":13},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Privatkunde","wk":"Eisenwaren & Befestigung","pos":"Fachberatung","u":1019.77,"br":1027.97,"rb":8.23,"art":166,"bons":17,"ret":0,"tx":17},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Privatkunde","wk":"Eisenwaren & Befestigung","pos":"Filialleitung","u":88.29,"br":88.83,"rb":0.54,"art":14,"bons":2,"ret":0,"tx":2},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Privatkunde","wk":"Eisenwaren & Befestigung","pos":"Kasse","u":238.78,"br":243.23,"rb":4.43,"art":41,"bons":6,"ret":0,"tx":6},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Privatkunde","wk":"Eisenwaren & Befestigung","pos":"Teamleitung","u":476.47,"br":484.46,"rb":7.99,"art":77,"bons":9,"ret":0,"tx":9},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Privatkunde","wk":"Eisenwaren & Befestigung","pos":"Verkauf","u":622.23,"br":632.35,"rb":10.11,"art":96,"bons":12,"ret":0,"tx":12},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Privatkunde","wk":"Elektro & Leuchten","pos":"Fachberatung","u":1114.1,"br":1127.42,"rb":13.33,"art":35,"bons":15,"ret":0,"tx":15},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Privatkunde","wk":"Elektro & Leuchten","pos":"Filialleitung","u":105.02,"br":105.02,"rb":0.0,"art":4,"bons":1,"ret":0,"tx":1},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Privatkunde","wk":"Elektro & Leuchten","pos":"Kasse","u":360.05,"br":360.05,"rb":0.0,"art":12,"bons":6,"ret":0,"tx":6},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Privatkunde","wk":"Elektro & Leuchten","pos":"Teamleitung","u":805.26,"br":817.58,"rb":12.33,"art":28,"bons":8,"ret":0,"tx":8},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Privatkunde","wk":"Elektro & Leuchten","pos":"Verkauf","u":412.62,"br":415.72,"rb":3.1,"art":15,"bons":8,"ret":0,"tx":8},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Privatkunde","wk":"Farben & Tapeten","pos":"Fachberatung","u":1079.55,"br":1093.44,"rb":13.92,"art":44,"bons":15,"ret":1,"tx":16},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Privatkunde","wk":"Farben & Tapeten","pos":"Kasse","u":253.58,"br":253.58,"rb":0.0,"art":11,"bons":5,"ret":0,"tx":5},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Privatkunde","wk":"Farben & Tapeten","pos":"Teamleitung","u":398.14,"br":411.59,"rb":13.46,"art":18,"bons":7,"ret":0,"tx":7},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Privatkunde","wk":"Farben & Tapeten","pos":"Verkauf","u":947.44,"br":958.9,"rb":11.47,"art":44,"bons":14,"ret":0,"tx":14},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Privatkunde","wk":"Garten & Pflanzen","pos":"Fachberatung","u":1268.1,"br":1286.8,"rb":18.69,"art":99,"bons":17,"ret":0,"tx":17},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Privatkunde","wk":"Garten & Pflanzen","pos":"Filialleitung","u":72.98,"br":72.98,"rb":0.0,"art":6,"bons":1,"ret":0,"tx":1},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Privatkunde","wk":"Garten & Pflanzen","pos":"Kasse","u":421.62,"br":423.14,"rb":1.51,"art":32,"bons":5,"ret":0,"tx":5},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Privatkunde","wk":"Garten & Pflanzen","pos":"Teamleitung","u":302.99,"br":307.64,"rb":4.64,"art":24,"bons":5,"ret":0,"tx":5},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Privatkunde","wk":"Garten & Pflanzen","pos":"Verkauf","u":1141.07,"br":1147.55,"rb":6.48,"art":90,"bons":16,"ret":1,"tx":17},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Privatkunde","wk":"Holz & Bauelemente","pos":"Fachberatung","u":1348.67,"br":1364.95,"rb":16.29,"art":70,"bons":16,"ret":0,"tx":16},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Privatkunde","wk":"Holz & Bauelemente","pos":"Kasse","u":502.15,"br":502.7,"rb":0.55,"art":26,"bons":6,"ret":0,"tx":6},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Privatkunde","wk":"Holz & Bauelemente","pos":"Teamleitung","u":411.11,"br":411.11,"rb":0.0,"art":22,"bons":5,"ret":1,"tx":6},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Privatkunde","wk":"Holz & Bauelemente","pos":"Verkauf","u":866.46,"br":879.86,"rb":13.4,"art":49,"bons":11,"ret":0,"tx":11},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Privatkunde","wk":"Sanitaer & Installation","pos":"Fachberatung","u":2640.04,"br":2667.52,"rb":27.48,"art":69,"bons":23,"ret":0,"tx":23},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Privatkunde","wk":"Sanitaer & Installation","pos":"Filialleitung","u":169.56,"br":169.56,"rb":0.0,"art":4,"bons":1,"ret":0,"tx":1},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Privatkunde","wk":"Sanitaer & Installation","pos":"Kasse","u":1202.66,"br":1207.5,"rb":4.83,"art":33,"bons":11,"ret":0,"tx":11},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Privatkunde","wk":"Sanitaer & Installation","pos":"Teamleitung","u":282.13,"br":286.45,"rb":4.32,"art":7,"bons":2,"ret":0,"tx":2},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Privatkunde","wk":"Sanitaer & Installation","pos":"Verkauf","u":789.45,"br":803.28,"rb":13.8,"art":24,"bons":9,"ret":0,"tx":9},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Privatkunde","wk":"Werkzeuge & Maschinen","pos":"Fachberatung","u":1935.03,"br":1948.81,"rb":13.77,"art":39,"bons":15,"ret":0,"tx":15},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Privatkunde","wk":"Werkzeuge & Maschinen","pos":"Kasse","u":376.96,"br":378.82,"rb":1.87,"art":8,"bons":4,"ret":0,"tx":4},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Privatkunde","wk":"Werkzeuge & Maschinen","pos":"Teamleitung","u":539.67,"br":539.67,"rb":0.0,"art":11,"bons":4,"ret":0,"tx":4},{"fil":"F03","reg":"Sued","st":"Innenstadt","kt":"Privatkunde","wk":"Werkzeuge & Maschinen","pos":"Verkauf","u":1075.73,"br":1084.45,"rb":8.73,"art":24,"bons":9,"ret":1,"tx":10}]};
 
-  const TAG = 'we-eingang-widget';
+  /* ---------- Beschriftungen der Drill-Dimensionen ---------- */
+  var DIM = {
+    wk:  { key: "wk",  label: "Warenkategorie" },
+    kt:  { key: "kt",  label: "Kundentyp" },
+    pos: { key: "pos", label: "Mitarbeiter-Position" }
+  };
 
-  // BW liefert Timestamps als ISO-String oder SAP-internes Format.
-  // Null-Werte die BW zurückgeben kann:
-  const NULL_TOKENS = new Set(['', '00000000', '000000000000', '@NullMember', '@TotalMembers', 'null', 'undefined']);
+  /* ---------- Formatierung ---------- */
+  function eur(v)   { return (Math.round(v)).toLocaleString("de-DE") + " \u20AC"; }
+  function eur2(v)  { return v.toLocaleString("de-DE",{minimumFractionDigits:2,maximumFractionDigits:2}) + " \u20AC"; }
+  function num(v,d) { return v.toLocaleString("de-DE",{minimumFractionDigits:d||0,maximumFractionDigits:d||0}); }
+  function pct(v,d) { return (v).toLocaleString("de-DE",{minimumFractionDigits:d||1,maximumFractionDigits:d||1}) + " %"; }
+  function signPct(v){ var s=v>=0?"+":"\u2212"; return s+Math.abs(v).toLocaleString("de-DE",{minimumFractionDigits:0,maximumFractionDigits:0})+" %"; }
 
-  // Echte Tor→Hallen-Zuordnung (T001–T999, nicht fortlaufend)
-  // T001 = Sondertor (Pförtner/Büro), kein HA-Präfix
-  const TOR_HALLE_MAP = {
-      "T001":"0001","T002":"HA01","T003":"HA01","T004":"HA01","T005":"HA01",
-      "T006":"HA01","T007":"HA01","T010":"HA01","T011":"HA01","T012":"HA01",
-      "T013":"HA01","T014":"HA01","T015":"HA01","T016":"HA01","T017":"HA01",
-      "T018":"HA01","T019":"HA01","T020":"HA02","T021":"HA02","T022":"HA02",
-      "T023":"HA02","T024":"HA02","T025":"HA02","T026":"HA02","T027":"HA02",
-      "T028":"HA02","T029":"HA02","T030":"HA02","T040":"HA04","T041":"HA04",
-      "T042":"HA04","T043":"HA04","T044":"HA04","T045":"HA04","T046":"HA04",
-      "T047":"HA04","T048":"HA04","T049":"HA04","T050":"HA05","T051":"HA05",
-      "T052":"HA05","T053":"HA05","T054":"HA05","T055":"HA05","T056":"HA05",
-      "T057":"HA05","T058":"HA05","T059":"HA05","T060":"HA06","T061":"HA06",
-      "T062":"HA06","T063":"HA06","T064":"HA06","T065":"HA06","T066":"HA06",
-      "T067":"HA06","T068":"HA06","T069":"HA06","T070":"HA06","T071":"HA07",
-      "T072":"HA07","T073":"HA07","T074":"HA07","T080":"HA08","T081":"HA08",
-      "T082":"HA08","T083":"HA08","T084":"HA08","T085":"HA08","T086":"HA08",
-      "T087":"HA08","T088":"HA08","T089":"HA08","T090":"HA08","T091":"HA09",
-      "T092":"HA09","T093":"HA09","T094":"HA09","T095":"HA09","T096":"HA09",
-      "T097":"HA09","T098":"HA09","T099":"HA09","T110":"HA09","T111":"HA09",
-      "T112":"HA09","T113":"HA09","T114":"HA09","T115":"HA09","T116":"HA09",
-      "T117":"HA09","T118":"HA09","T175":"HA07","T176":"HA07","T177":"HA07",
-      "T178":"HA07","T721":"HA07","T722":"HA07","T723":"HA07","T724":"HA07",
-      "T725":"HA07","T726":"HA07","T727":"HA07","T728":"HA07","T960":"HA10",
-      "T961":"HA10","T962":"HA10","T963":"HA10","T964":"HA10","T965":"HA10",
-      "T999":"HA01"
+  /* ---------- Aggregation eines Zeilensatzes zu Treibern ---------- */
+  function agg(rows) {
+    var a = { u:0, br:0, rb:0, art:0, bons:0, ret:0, tx:0 };
+    for (var i=0;i<rows.length;i++){ var r=rows[i];
+      a.u+=r.u; a.br+=r.br; a.rb+=r.rb; a.art+=r.art; a.bons+=r.bons; a.ret+=r.ret; a.tx+=r.tx; }
+    return a;
+  }
+  function drivers(rows, flaeche) {
+    var a = agg(rows);
+    return {
+      umsatz:   a.u,
+      bons:     a.bons,
+      artikel:  a.art,
+      bonwert:  a.bons ? a.u/a.bons : 0,
+      artbon:   a.bons ? a.art/a.bons : 0,
+      stueck:   a.art ? a.u/a.art : 0,
+      rabq:     a.br ? a.rb/a.br*100 : 0,
+      retq:     a.tx ? a.ret/a.tx*100 : 0,
+      upqm:     flaeche ? a.u/flaeche : 0,
+      _raw:     a
     };
-
-  // Hallen-Reihenfolge für Accordion (ohne 0001-Sondertor)
-  const HALLEN_REIHENFOLGE = ['HA01','HA02','HA04','HA05','HA06','HA07','HA08','HA09','HA10'];
-
-  // Halle → alle zugehörigen Tore (aus TOR_HALLE_MAP abgeleitet)
-  const HALLE_TORE_MAP = {};
-  for (const [tor, halle] of Object.entries(TOR_HALLE_MAP)) {
-    if (!HALLE_TORE_MAP[halle]) HALLE_TORE_MAP[halle] = [];
-    HALLE_TORE_MAP[halle].push(tor);
   }
 
-  // Prozessschritte in chronologischer Reihenfolge – Reihenfolge ist wichtig
-  // für Fortschrittsbalken-Berechnung
-  const PROZESS_SCHRITTE = [
-    { id: 'ts_ankunft',       label: 'Ankunft' },
-    { id: 'ts_angedockt',     label: 'Angedockt' },
-    { id: 'ts_entladen_start',label: 'Entladen ▶' },
-    { id: 'ts_entladen_ende', label: 'Entladen ■' },
-    { id: 'ts_we_buchung',    label: 'WE-Buchung' },
-    { id: 'ts_abfahrt',       label: 'Abfahrt' },
-  ];
-
-  // Verzögerungsschwellwert in Minuten – ab wann eine TE als "verzögert" gilt
-  const VERZOEGERUNG_SCHWELLE_MIN = 30;
-
-  // ── Helper ───────────────────────────────────────────────────────────────
-
-  // XSS-Schutz für alle BW-Dimension-Inhalte die in innerHTML landen
-  const esc = (s) => {
-    if (s == null) return '';
-    return String(s)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
+  /* ---------- Treiber-Metadaten: Richtung (hoeher=besser?) ---------- */
+  var DRV = {
+    bonwert: { label:"Bonwert",        unit:"\u20AC", better:1, fmt:function(v){return eur2(v);} },
+    artbon:  { label:"Artikel je Bon", unit:"",       better:1, fmt:function(v){return num(v,1);} },
+    stueck:  { label:"\u00D8 St\u00FCckpreis", unit:"\u20AC", better:1, fmt:function(v){return eur2(v);} },
+    bons:    { label:"Anzahl Bons",    unit:"",       better:1, fmt:function(v){return num(v,0);} },
+    rabq:    { label:"Rabattquote",    unit:"%",      better:-1, fmt:function(v){return pct(v,1);} },
+    retq:    { label:"Retourenquote",  unit:"%",      better:-1, fmt:function(v){return pct(v,1);} },
+    upqm:    { label:"Umsatz / qm",    unit:"\u20AC", better:1, fmt:function(v){return eur2(v);} }
   };
 
-  const isNull = (v) => v == null || NULL_TOKENS.has(String(v).trim());
-
-  // Parst einen Timestamp aus BW – gibt ein Date-Objekt zurück oder null
-  const parseTs = (raw) => {
-    if (isNull(raw)) return null;
-    const s = String(raw).trim();
-    // ISO 8601: "2025-05-20T07:37:00" oder "2025-05-20 07:37:00"
-    const iso = new Date(s.replace(' ', 'T'));
-    if (!isNaN(iso.getTime())) return iso;
-    // SAP-Format: "20250520073700" (YYYYMMDDHHmmss)
-    if (/^\d{14}$/.test(s)) {
-      return new Date(
-        +s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8),
-        +s.slice(8, 10), +s.slice(10, 12), +s.slice(12, 14)
-      );
-    }
-    // SAP-Datum ohne Zeit: "20250520" → Mitternacht
-    if (/^\d{8}$/.test(s)) {
-      return new Date(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8));
-    }
-    return null;
-  };
-
-  // Formatiert ein Date-Objekt als "HH:MM" Uhrzeit
-  const fmtTime = (d) => {
-    if (!d) return '–';
-    return d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
-  };
-
-  // Formatiert ein Date-Objekt als "DD.MM.YYYY"
-  const fmtDate = (d) => {
-    if (!d) return '–';
-    return d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
-  };
-
-  // Berechnet Differenz zweier Date-Objekte in Minuten (kann negativ sein)
-  const diffMin = (a, b) => {
-    if (!a || !b) return null;
-    return Math.round((b.getTime() - a.getTime()) / 60000);
-  };
-
-  // Formatiert Minuten als lesbare Zeitdauer: "1h 23min" oder "45min"
-  const fmtDauer = (min) => {
-    if (min == null) return '–';
-    const abs = Math.abs(min);
-    const sign = min < 0 ? '−' : '+';
-    if (abs < 60) return `${sign}${abs}min`;
-    const h = Math.floor(abs / 60);
-    const m = abs % 60;
-    return m === 0 ? `${sign}${h}h` : `${sign}${h}h ${m}min`;
-  };
-
-  // Formatiert eine Zahl mit deutschem Tausender-Trennzeichen
-  const fmtNum = (x) => Math.round(Number(x || 0)).toLocaleString('de-DE');
-
-  // SAC liefert Felder als { id: "...", label: "..." } mit _0-Suffix.
-  // Diese Funktion normalisiert einen Rohwert auf einen primitiven String.
-  const extractVal = (v) => {
-    if (v == null) return null;
-    // SAC-Objekt: { id, label } → id bevorzugen (technischer Wert)
-    if (typeof v === 'object' && 'id' in v) return String(v.id).trim();
-    return String(v).trim();
-  };
-
-  // Liest einen Dimension-Wert aus einer BW-Datenzeile.
-  // Versucht jeden Key sowohl mit _0-Suffix (SAC) als auch direkt (Fallback).
-  const readDim = (row, ...keys) => {
-    for (const key of keys) {
-      for (const k of [`${key}_0`, key]) {
-        const raw = extractVal(row[k]);
-        if (!isNull(raw)) return raw;
-      }
-    }
-    return null;
-  };
-
-  // Liest einen Measure-Wert aus einer BW-Datenzeile.
-  // SAC liefert Measures als { raw: 144, formatted: "144" }.
-  const readVal = (row, ...keys) => {
-    for (const key of keys) {
-      for (const k of [`${key}_0`, key]) {
-        const v = row[k];
-        if (v == null) continue;
-        const num = (typeof v === 'object' && 'raw' in v) ? v.raw : v;
-        if (num != null && !isNull(String(num))) return Number(num);
-      }
-    }
-    return null;
-  };
-
-  // ── Daten-Parser ─────────────────────────────────────────────────────────
-  //
-  // Wandelt flache BW-Rows (eine Zeile pro Produkt pro TE) in ein
-  // strukturiertes Map-Objekt um: { teNr → TEObjekt }
-  //
-  // TEObjekt:
-  //   te, teHinweis, liefernummer, bestellnummer,
-  //   lieferantNr, lieferantName, transportmittel, halle,
-  //   geplantStart: Date, geplantEnde: Date,
-  //   tsAnkunft: Date, tsAngedockt: Date,
-  //   tsEntladenStart: Date, tsEntladenEnde: Date, tsEntladenTat: Date,
-  //   tsWeBuchung: Date, tsAbfahrt: Date,
-  //   produkte: [ { nr, name, menge, einheit, halle, tsEinlagerung: Date } ],
-  //   // Berechnete Felder (nach parseTEs() befüllt):
-  //   status: 'erwartet'|'ankunft'|'entladen'|'eingelagert'|'abgefahren'|'verzögert'
-  //   verzoegerungMin: Number|null,
-  //   fortschritt: 0–6 (Anzahl abgeschlossener Schritte)
-
-  function parseRows(rows) {
-    if (!Array.isArray(rows) || rows.length === 0) return new Map();
-
-    const teMap = new Map();
-
-    for (const row of rows) {
-      // ── TE-Stammdaten ──
-      const teNr = readDim(row,
-        'dimension_te', 'TE', 'VBELN', 'te_nr'
-      );
-      if (!teNr) continue;
-
-      if (!teMap.has(teNr)) {
-        teMap.set(teNr, {
-          te:              teNr,
-          teHinweis:       readDim(row, 'dimension_te_hinweis', 'TE_HINWEIS'),
-          ladestelle:      readDim(row, 'dimension_ladestelle') ?? 'Landverkehr',
-          tor:             readDim(row, 'dimension_tor'),
-          liefernummer:    readDim(row, 'dimension_liefernummer', 'LIFNR'),
-          bestellnummer:   readDim(row, 'dimension_bestellnummer', 'EBELN'),
-          lieferantNr:     readDim(row, 'dimension_lieferant_nr', 'LIFNR_NR'),
-          lieferantName:   readDim(row, 'dimension_lieferant_name', 'LIFNR_NAME'),
-          transportmittel: readDim(row, 'dimension_transportmittel', 'TRMIT'),
-          halle:           readDim(row, 'dimension_halle', 'LGNUM'),
-
-          // Zeitfenster (Soll)
-          geplantStart:    parseTs(readDim(row, 'dimension_geplant_start')),
-          geplantEnde:     parseTs(readDim(row, 'dimension_geplant_ende')),
-
-          // Prozess-Timestamps (Ist)
-          tsAnkunft:        parseTs(readDim(row, 'dimension_ts_ankunft')),
-          tsAngedockt:      parseTs(readDim(row, 'dimension_ts_angedockt')),
-          tsEntladenStart:  parseTs(readDim(row, 'dimension_ts_entladen_start')),
-          tsEntladenEnde:   parseTs(readDim(row, 'dimension_ts_entladen_ende')),
-          tsEntladenTat:    parseTs(readDim(row, 'dimension_ts_entladen_tat')),
-          tsWeBuchung:      parseTs(readDim(row, 'dimension_ts_we_buchung')),
-          tsAbfahrt:        parseTs(readDim(row, 'dimension_ts_abfahrt')),
-
-          produkte:         [],
-
-          // Berechnete Felder – werden in berechneTE() gesetzt
-          status:           'erwartet',
-          verzoegerungMin:  null,
-          fortschritt:      0,
-        });
-      }
-
-      // ── Produktzeile anhängen ──
-      const te = teMap.get(teNr);
-      const prodNr = readDim(row, 'dimension_produkt_nr', 'MATNR');
-      if (prodNr) {
-        te.produkte.push({
-          nr:           prodNr,
-          name:         readDim(row, 'dimension_produkt_name', 'MAKTX') ?? '–',
-          menge:        readVal(row, 'value_menge', 'MENGE') ?? 0,
-          einheit:      readDim(row, 'dimension_einheit', 'MEINS') ?? '',
-          halle:        readDim(row, 'dimension_halle', 'LGNUM') ?? '',
-          tsEinlagerung: parseTs(readDim(row, 'dimension_ts_einlagerung')),
-        });
-      }
-    }
-
-    // Berechnete Felder für jede TE befüllen
-    for (const te of teMap.values()) {
-      berechneTE(te);
-    }
-
-    return teMap;
+  /* ---------- Status aus Abweichung ableiten ---------- */
+  function status(devPct, better) {
+    var d = devPct * (better||1);
+    if (d >  5) return "pos";
+    if (d < -5) return "neg";
+    return "neutral";
   }
 
-  // Berechnet Status, Fortschritt und Verzögerung für eine TE
-  function berechneTE(te) {
-    const jetzt = new Date();
-
-    // ── Fortschritt: Anzahl abgeschlossener Prozessschritte ──
-    const tsFelder = [
-      te.tsAnkunft, te.tsAngedockt, te.tsEntladenStart,
-      te.tsEntladenEnde, te.tsWeBuchung, te.tsAbfahrt,
-    ];
-    te.fortschritt = tsFelder.filter(ts => ts !== null).length;
-
-    // ── Verzögerung: Differenz Soll-Start zu Ist-Entladen-Start ──
-    // Kernfrage: Wie lange stand der LKW am Tor bevor entladen wurde?
-    if (te.geplantStart && te.tsEntladenStart) {
-      te.verzoegerungMin = diffMin(te.geplantStart, te.tsEntladenStart);
-      // Negative Werte = früher als geplant → keine Verzögerung
-      if (te.verzoegerungMin < 0) te.verzoegerungMin = 0;
-    } else if (te.geplantStart && !te.tsEntladenStart && te.tsAngedockt) {
-      // LKW ist angedockt aber Entladen hat noch nicht begonnen
-      te.verzoegerungMin = diffMin(te.geplantStart, jetzt);
-      if (te.verzoegerungMin < 0) te.verzoegerungMin = 0;
-    }
-
-    // ── Status ──
-    if (te.tsAbfahrt) {
-      te.status = 'abgefahren';
-    } else if (te.tsWeBuchung) {
-      te.status = 'eingelagert';
-    } else if (te.tsEntladenStart) {
-      te.status = te.verzoegerungMin >= VERZOEGERUNG_SCHWELLE_MIN
-        ? 'verzögert'
-        : 'entladen';
-    } else if (te.tsAnkunft) {
-      // Angedockt aber kein Entladen gestartet – prüfe ob Verzögerung
-      if (te.verzoegerungMin != null && te.verzoegerungMin >= VERZOEGERUNG_SCHWELLE_MIN) {
-        te.status = 'verzögert';
-      } else {
-        te.status = 'ankunft';
-      }
-    } else {
-      te.status = 'erwartet';
-    }
-  }
-
-  // ── Template ─────────────────────────────────────────────────────────────
-
-  const template = document.createElement('template');
-  template.innerHTML = /* html */`
-    <style>
-      /* ════════════════════════════════════════════════════════════
-         Design Tokens — Dark Theme (Standard)
-         Überschrieben durch :host([theme="light"])
-      ════════════════════════════════════════════════════════════ */
-      :host {
-        /* Markenfarbe */
-        --c-red:        #c0392b;
-        --c-red-light:  #e74c3c;
-        --c-red-dim:    rgba(192, 57, 43, 0.14);
-        --c-red-border: rgba(192, 57, 43, 0.35);
-
-        /* Status-Farben */
-        --c-green:      #27ae60;
-        --c-green-dim:  rgba(39, 174, 96, 0.14);
-        --c-yellow:     #f39c12;
-        --c-yellow-dim: rgba(243, 156, 18, 0.14);
-        --c-blue:       #2980b9;
-        --c-blue-dim:   rgba(41, 128, 185, 0.14);
-
-        /* Dark-Theme Hintergründe */
-        --c-bg:         #0f1117;
-        --c-bg2:        #161a24;
-        --c-bg3:        #1e2335;
-        --c-bg4:        #252b3d;
-
-        /* Dark-Theme Texte */
-        --c-text:       #e8eaf0;
-        --c-text2:      #8b90a0;
-        --c-text3:      #555b6e;
-
-        /* Dark-Theme Ränder */
-        --c-border:     rgba(255, 255, 255, 0.07);
-        --c-border2:    rgba(255, 255, 255, 0.13);
-
-        /* Schatten */
-        --shadow-sm:    0 2px 8px  rgba(0, 0, 0, 0.35);
-        --shadow-md:    0 4px 16px rgba(0, 0, 0, 0.45);
-        --shadow-lg:    0 8px 40px rgba(0, 0, 0, 0.55);
-
-        /* Typografie */
-        --font:         'Segoe UI', system-ui, -apple-system, sans-serif;
-        --font-mono:    'Consolas', 'Cascadia Code', 'Courier New', monospace;
-
-        /* Radien */
-        --r-sm:   4px;
-        --r-md:   8px;
-        --r-lg:   12px;
-
-        /* Transitions */
-        --ease:   cubic-bezier(0.16, 1, 0.3, 1);
-
-        display: block;
-        width:   100%;
-        height:  100%;
-        box-sizing: border-box;
-        font-family: var(--font);
-        font-size: 13px;
-        color: var(--c-text);
-        background: var(--c-bg);
-      }
-
-      /* ────────────────────────────────────────────────────────────
-         Light Theme Override
-      ──────────────────────────────────────────────────────────── */
-      :host([theme="light"]) {
-        --c-bg:         #f5f6f8;
-        --c-bg2:        #ffffff;
-        --c-bg3:        #f0f2f5;
-        --c-bg4:        #e8eaee;
-        --c-text:       #1a1d23;
-        --c-text2:      #4a5060;
-        --c-text3:      #8b90a0;
-        --c-border:     rgba(0, 0, 0, 0.08);
-        --c-border2:    rgba(0, 0, 0, 0.14);
-        --shadow-sm:    0 2px 8px  rgba(0, 0, 0, 0.07);
-        --shadow-md:    0 4px 16px rgba(0, 0, 0, 0.10);
-        --shadow-lg:    0 8px 40px rgba(0, 0, 0, 0.14);
-        background: var(--c-bg);
-        color: var(--c-text);
-      }
-
-      /* ────────────────────────────────────────────────────────────
-         Reset
-      ──────────────────────────────────────────────────────────── */
-      *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-      button { font-family: var(--font); cursor: pointer; border: none; background: none; }
-
-      /* ────────────────────────────────────────────────────────────
-         Haupt-Layout
-      ──────────────────────────────────────────────────────────── */
-      .widget-root {
-        display:        flex;
-        flex-direction: column;
-        height:         100%;
-        width:          100%;
-        overflow:       hidden;
-        background:     var(--c-bg);
-      }
-
-      /* ── Header ── */
-      .header {
-        display:          flex;
-        align-items:      center;
-        gap:              16px;
-        padding:          0 20px;
-        height:           50px;
-        flex-shrink:      0;
-        background:       var(--c-bg2);
-        border-bottom:    1px solid var(--c-border);
-        position:         relative;
-        z-index:          10;
-      }
-
-      /* roter Akzentstreifen oben */
-      .header::before {
-        content:    '';
-        position:   absolute;
-        top: 0; left: 0; right: 0;
-        height:     3px;
-        background: linear-gradient(90deg, var(--c-red), var(--c-red-light));
-      }
-
-      .header-brand {
-        display:      flex;
-        align-items:  center;
-        gap:          8px;
-        font-family:  var(--font-mono);
-        font-size:    11px;
-        font-weight:  600;
-        letter-spacing: 0.12em;
-        text-transform: uppercase;
-        color:        var(--c-red-light);
-        flex-shrink:  0;
-      }
-
-      .header-brand-dot {
-        width: 7px; height: 7px;
-        border-radius: 50%;
-        background: var(--c-red-light);
-        animation: dot-pulse 2.2s ease-in-out infinite;
-      }
-
-      @keyframes dot-pulse {
-        0%, 100% { opacity: 1; transform: scale(1); }
-        50%       { opacity: 0.35; transform: scale(0.65); }
-      }
-
-      .header-title {
-        font-size:   13px;
-        font-weight: 500;
-        color:       var(--c-text2);
-        flex-shrink: 0;
-      }
-
-      .header-sep { flex: 1; }
-
-      /* Live-Uhr */
-      .header-clock {
-        display:       flex;
-        align-items:   center;
-        gap:           6px;
-        padding:       3px 10px;
-        border-radius: var(--r-sm);
-        background:    var(--c-bg3);
-        border:        1px solid var(--c-border);
-        font-family:   var(--font-mono);
-        font-size:     12px;
-        font-weight:   600;
-        color:         var(--c-text2);
-        flex-shrink:   0;
-        letter-spacing: 0.04em;
-      }
-
-      .clock-dot {
-        width: 6px; height: 6px;
-        border-radius: 50%;
-        background: var(--c-green);
-        flex-shrink: 0;
-        animation: clock-blink 1s steps(2, start) infinite;
-      }
-
-      @keyframes clock-blink {
-        0%, 100% { opacity: 1; }
-        50%       { opacity: 0.25; }
-      }
-
-      /* KPI-Chips im Header */
-      .kpi-strip {
-        display:    flex;
-        gap:        3px;
-        flex-shrink: 0;
-      }
-
-      .kpi-chip {
-        display:      flex;
-        align-items:  center;
-        gap:          5px;
-        padding:      4px 10px;
-        border-radius: var(--r-sm);
-        font-family:  var(--font-mono);
-        font-size:    10px;
-        font-weight:  500;
-        white-space:  nowrap;
-      }
-
-      .kpi-chip .val {
-        font-size:   13px;
-        font-weight: 700;
-      }
-
-      .kpi-chip.k-total   { background: var(--c-bg3);       color: var(--c-text2); }
-      .kpi-chip.k-active  { background: var(--c-blue-dim);  color: #5dade2; }
-      .kpi-chip.k-delayed { background: var(--c-red-dim);   color: #e74c3c; }
-      .kpi-chip.k-done    { background: var(--c-green-dim); color: #58d68d; }
-
-      /* View-Tabs */
-      /* ── Navigationszeile ── */
-      .navbar {
-        display:       flex;
-        align-items:   center;
-        gap:           12px;
-        padding:       0 20px;
-        height:        44px;
-        flex-shrink:   0;
-        background:    var(--c-bg2);
-        border-bottom: 1px solid var(--c-border);
-      }
-
-      .nav-tabs {
-        display:    flex;
-        gap:        2px;
-        height:     100%;
-      }
-
-      .nav-tab {
-        display:        flex;
-        align-items:    center;
-        gap:            7px;
-        padding:        0 16px;
-        height:         100%;
-        font-family:    var(--font);
-        font-size:      13px;
-        font-weight:    500;
-        color:          var(--c-text3);
-        position:       relative;
-        transition:     color 0.15s, background 0.15s;
-        border-bottom:  2px solid transparent;
-      }
-
-      .nav-tab:hover { color: var(--c-text2); background: var(--c-bg3); }
-
-      .nav-tab.active {
-        color:         var(--c-text);
-        border-bottom-color: var(--c-red);
-      }
-
-      .nav-tab.active .nav-tab-icon { color: var(--c-red-light); }
-
-      .nav-tab-icon {
-        font-size:   15px;
-        color:       var(--c-text3);
-        transition:  color 0.15s;
-        line-height: 1;
-      }
-
-      .nav-tab-label { letter-spacing: 0.01em; }
-
-      .nav-sep { flex: 1; }
-
-      /* ── Live-Refresh-Steuerung ── */
-      .refresh-ctrl {
-        display:     flex;
-        align-items: center;
-        gap:         10px;
-      }
-
-      .refresh-btn {
-        display:        flex;
-        align-items:    center;
-        gap:            7px;
-        padding:        6px 13px;
-        border-radius:  var(--r-sm);
-        border:         1px solid var(--c-border2);
-        background:     var(--c-bg3);
-        color:          var(--c-text3);
-        font-family:    var(--font);
-        font-size:      12px;
-        font-weight:    500;
-        cursor:         not-allowed;
-        transition:     all 0.18s var(--ease);
-        opacity:        0.5;
-      }
-
-      .refresh-btn:not([disabled]) {
-        cursor:       pointer;
-        opacity:      1;
-        background:   var(--c-red);
-        border-color: var(--c-red);
-        color:        #fff;
-        box-shadow:   0 0 0 0 rgba(192,57,43,0.4);
-        animation:    refresh-ready-pulse 2s ease-in-out infinite;
-      }
-
-      .refresh-btn:not([disabled]):hover {
-        background:   var(--c-red-light);
-        border-color: var(--c-red-light);
-        animation:    none;
-      }
-
-      @keyframes refresh-ready-pulse {
-        0%, 100% { box-shadow: 0 0 0 0 rgba(192,57,43,0.4); }
-        50%       { box-shadow: 0 0 0 4px rgba(192,57,43,0); }
-      }
-
-      .refresh-icon {
-        font-size:   14px;
-        line-height: 1;
-        display:     inline-block;
-      }
-
-      .refresh-icon.spinning {
-        animation: spin 0.7s linear infinite;
-      }
-
-      /* ── Countdown ── */
-      .countdown {
-        display:       flex;
-        align-items:   center;
-        gap:           7px;
-        padding:       5px 11px;
-        border-radius: var(--r-sm);
-        background:    var(--c-bg3);
-        border:        1px solid var(--c-border);
-        min-width:     74px;
-        justify-content: center;
-      }
-
-      .countdown-ring {
-        width:         12px;
-        height:        12px;
-        border-radius: 50%;
-        border:        2px solid var(--c-border2);
-        border-top-color: var(--c-blue);
-        flex-shrink:   0;
-        transition:    border-color 0.3s;
-      }
-
-      .countdown.ready .countdown-ring {
-        border-color:     var(--c-green);
-        border-top-color: var(--c-green);
-        animation:        none;
-      }
-
-      .countdown.counting .countdown-ring {
-        animation: spin 2s linear infinite;
-      }
-
-      .countdown-text {
-        font-family:  var(--font-mono);
-        font-size:    12px;
-        font-weight:  600;
-        color:        var(--c-text2);
-        white-space:  nowrap;
-        min-width:    38px;
-        text-align:   center;
-      }
-
-      .countdown.ready .countdown-text {
-        color: #58d68d;
-      }
-
-      /* ── Auto-Toggle ── */
-      .auto-toggle {
-        display:     flex;
-        align-items: center;
-        gap:         6px;
-        cursor:      pointer;
-        user-select: none;
-      }
-
-      .auto-toggle input { display: none; }
-
-      .auto-box {
-        width:         16px;
-        height:        16px;
-        border-radius: 4px;
-        border:        1px solid var(--c-border2);
-        background:    var(--c-bg3);
-        position:      relative;
-        transition:    all 0.15s;
-        flex-shrink:   0;
-      }
-
-      .auto-toggle input:checked + .auto-box {
-        background:   var(--c-blue);
-        border-color: var(--c-blue);
-      }
-
-      .auto-toggle input:checked + .auto-box::after {
-        content:   '✓';
-        position:  absolute;
-        inset:     0;
-        display:   flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 11px;
-        color:     #fff;
-        font-weight: 700;
-      }
-
-      .auto-label {
-        font-family:    var(--font-mono);
-        font-size:      10px;
-        font-weight:    600;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        color:          var(--c-text3);
-      }
-
-      .auto-toggle input:checked ~ .auto-label { color: #5dade2; }
-
-      /* Theme-Toggle */
-      .theme-btn {
-        width:         32px;
-        height:        32px;
-        border-radius: var(--r-sm);
-        border:        1px solid var(--c-border2);
-        color:         var(--c-text3);
-        font-size:     14px;
-        display:       flex;
-        align-items:   center;
-        justify-content: center;
-        transition:    background 0.15s, color 0.15s;
-        flex-shrink:   0;
-      }
-
-      .theme-btn:hover { background: var(--c-bg3); color: var(--c-text); }
-
-      /* ── Body ── */
-      .body {
-        flex:       1;
-        overflow:   hidden;
-        position:   relative;
-      }
-
-      /* ── Views ── */
-      .view {
-        position:   absolute;
-        inset:      0;
-        overflow-y: auto;
-        padding:    18px 20px;
-        display:    none;
-      }
-
-      .view.active { display: block; }
-
-      /* ── Loading / Empty States ── */
-      .state-overlay {
-        position:       absolute;
-        inset:          0;
-        display:        flex;
-        flex-direction: column;
-        align-items:    center;
-        justify-content: center;
-        gap:            12px;
-        background:     var(--c-bg);
-        z-index:        20;
-      }
-
-      .state-overlay.hidden { display: none; }
-
-      .state-icon {
-        font-size:  32px;
-        opacity:    0.4;
-      }
-
-      .state-text {
-        font-family: var(--font-mono);
-        font-size:   11px;
-        letter-spacing: 0.1em;
-        text-transform: uppercase;
-        color:       var(--c-text3);
-      }
-
-      .loader-ring {
-        width: 32px; height: 32px;
-        border: 3px solid var(--c-border2);
-        border-top-color: var(--c-red);
-        border-radius: 50%;
-        animation: spin 0.8s linear infinite;
-      }
-
-      @keyframes spin { to { transform: rotate(360deg); } }
-
-      /* ── Sektion-Titel ── */
-      .section-title {
-        font-family:    var(--font-mono);
-        font-size:      9px;
-        font-weight:    600;
-        letter-spacing: 0.15em;
-        text-transform: uppercase;
-        color:          var(--c-text3);
-        margin-bottom:  12px;
-        display:        flex;
-        align-items:    center;
-        gap:            8px;
-      }
-
-      .section-title::after {
-        content:    '';
-        flex:       1;
-        height:     1px;
-        background: var(--c-border);
-      }
-
-      /* ── Hinweis-Box ── */
-      .hint-box {
-        display:       flex;
-        align-items:   center;
-        gap:           8px;
-        padding:       8px 14px;
-        background:    rgba(243, 156, 18, 0.10);
-        border:        1px solid rgba(243, 156, 18, 0.28);
-        border-radius: var(--r-sm);
-        font-size:     12px;
-        color:         #f0b429;
-        margin-bottom: 16px;
-      }
-
-      /* ── Scrollbar ── */
-      .view::-webkit-scrollbar              { width: 5px; }
-      .view::-webkit-scrollbar-track        { background: transparent; }
-      .view::-webkit-scrollbar-thumb        { background: var(--c-border2); border-radius: 3px; }
-      .view::-webkit-scrollbar-thumb:hover  { background: var(--c-text3); }
-
-      /* ════════════════════════════════════════════════════════════
-         VIEW 1 – KACHELN
-      ════════════════════════════════════════════════════════════ */
-      .filter-bar {
-        display:      flex;
-        align-items:  center;
-        gap:          10px;
-        margin-bottom: 14px;
-        flex-wrap:    wrap;
-      }
-
-      .filter-label {
-        font-family:    var(--font-mono);
-        font-size:      9px;
-        letter-spacing: 0.12em;
-        text-transform: uppercase;
-        color:          var(--c-text3);
-      }
-
-      .filter-chips { display: flex; gap: 5px; flex-wrap: wrap; }
-
-      .filter-chip {
-        padding:       4px 10px;
-        border-radius: 20px;
-        font-size:     11px;
-        font-weight:   500;
-        border:        1px solid var(--c-border2);
-        color:         var(--c-text2);
-        background:    transparent;
-        transition:    all 0.15s;
-        cursor:        pointer;
-      }
-
-      .filter-chip:hover  { border-color: var(--c-red-border); color: var(--c-text); }
-      .filter-chip.active { background: var(--c-red); border-color: var(--c-red); color: #fff; }
-
-      .te-grid {
-        display:               grid;
-        grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-        gap:                   12px;
-      }
-
-      /* ── TE-Karte ── */
-      .te-card {
-        background:    var(--c-bg2);
-        border:        1px solid var(--c-border);
-        border-radius: var(--r-lg);
-        padding:       15px 15px 13px;
-        cursor:        pointer;
-        position:      relative;
-        overflow:      hidden;
-        transition:    transform 0.18s var(--ease),
-                       box-shadow 0.18s var(--ease),
-                       border-color 0.18s;
-      }
-
-      .te-card:hover {
-        transform:    translateY(-2px);
-        box-shadow:   var(--shadow-md);
-        border-color: var(--c-border2);
-      }
-
-      /* Status-Akzentstreifen links */
-      .te-card::before {
-        content:        '';
-        position:       absolute;
-        top: 0; left: 0; bottom: 0;
-        width:          3px;
-        border-radius:  var(--r-lg) 0 0 var(--r-lg);
-      }
-
-      .te-card.s-erwartet::before   { background: var(--c-text3); }
-      .te-card.s-ankunft::before    { background: var(--c-yellow); }
-      .te-card.s-entladen::before   { background: var(--c-blue); }
-      .te-card.s-eingelagert::before{ background: var(--c-green); }
-      .te-card.s-abgefahren::before { background: var(--c-text3); opacity: 0.4; }
-      .te-card.s-verzögert::before  { background: var(--c-red); }
-
-      /* ── Karten-Header ── */
-      .tc-header {
-        display:       flex;
-        align-items:   flex-start;
-        justify-content: space-between;
-        gap:           8px;
-        margin-bottom: 11px;
-        padding-left:  6px;
-      }
-
-      .tc-meta { flex: 1; min-width: 0; }
-
-      .tc-te-nr {
-        font-family:    var(--font-mono);
-        font-size:      12px;
-        font-weight:    600;
-        color:          var(--c-text);
-        letter-spacing: 0.03em;
-        margin-bottom:  2px;
-      }
-
-      .tc-supplier {
-        font-size:      11px;
-        color:          var(--c-text2);
-        white-space:    nowrap;
-        overflow:       hidden;
-        text-overflow:  ellipsis;
-        max-width:      220px;
-      }
-
-      /* Status-Badge */
-      .tc-badge {
-        flex-shrink:    0;
-        padding:        3px 7px;
-        border-radius:  var(--r-sm);
-        font-family:    var(--font-mono);
-        font-size:      9px;
-        font-weight:    600;
-        letter-spacing: 0.09em;
-        text-transform: uppercase;
-        white-space:    nowrap;
-      }
-
-      .badge-erwartet   { background: var(--c-bg4);         color: var(--c-text3); }
-      .badge-ankunft    { background: var(--c-yellow-dim);  color: #f0b429; }
-      .badge-entladen   { background: var(--c-blue-dim);    color: #5dade2; }
-      .badge-eingelagert{ background: var(--c-green-dim);   color: #58d68d; }
-      .badge-abgefahren { background: var(--c-bg4);         color: var(--c-text3); }
-      .badge-verzögert  { background: var(--c-red-dim);     color: #e74c3c; }
-
-      /* ── Fortschrittsbalken ── */
-      .tc-progress {
-        display:       flex;
-        gap:           2px;
-        padding-left:  6px;
-        margin-bottom: 11px;
-      }
-
-      .tc-step {
-        flex:          1;
-        height:        4px;
-        background:    var(--c-bg4);
-        border-radius: 2px;
-        transition:    background 0.25s;
-      }
-
-      .tc-step.done    { background: var(--c-green); }
-      .tc-step.active  { background: var(--c-blue);
-                         animation: step-pulse 1.6s ease-in-out infinite; }
-      .tc-step.late    { background: var(--c-red); }
-      .tc-step.active.late { background: var(--c-red);
-                             animation: step-pulse 1.6s ease-in-out infinite; }
-
-      @keyframes step-pulse {
-        0%, 100% { opacity: 1; }
-        50%       { opacity: 0.45; }
-      }
-
-      /* ── Karten-Footer ── */
-      .tc-footer {
-        display:       flex;
-        align-items:   center;
-        gap:           10px;
-        padding-left:  6px;
-        flex-wrap:     wrap;
-      }
-
-      .tc-info {
-        display:       flex;
-        align-items:   center;
-        gap:           4px;
-        font-size:     11px;
-        color:         var(--c-text2);
-      }
-
-      .tc-info-icon { font-size: 10px; opacity: 0.65; }
-
-      /* Δ-Zeit Badge */
-      /* Ladestellen-Filter-Chips */
-      .ls-filter-chips { display: flex; gap: 4px; flex-wrap: wrap; }
-
-      .ls-filter-chip {
-        padding:       3px 10px;
-        border-radius: 20px;
-        font-size:     11px;
-        font-weight:   500;
-        border:        1px solid var(--c-border2);
-        color:         var(--c-text2);
-        background:    transparent;
-        cursor:        pointer;
-        transition:    all 0.15s;
-        white-space:   nowrap;
-      }
-      .ls-filter-chip:hover { border-color: rgba(192,57,43,.4); color: var(--c-text); }
-      .ls-filter-chip.active { background: var(--c-bg4); border-color: var(--c-border2); color: var(--c-text); }
-      .ls-chip-bsl.active  { background: rgba(142,68,173,.2);  border-color: rgba(142,68,173,.5); color: #c39bd3; }
-      .ls-chip-cont.active { background: rgba(230,126,34,.2);  border-color: rgba(230,126,34,.5); color: #f0a500; }
-      .ls-chip-land.active { background: var(--c-green-dim);   border-color: rgba(39,174,96,.4);  color: #58d68d; }
-
-      /* Gruppierungs-Toggle */
-      .group-toggle-btn {
-        display:        inline-flex;
-        align-items:    center;
-        gap:            6px;
-        padding:        4px 11px;
-        border-radius:  var(--r-sm);
-        border:         1px solid var(--c-border2);
-        font-family:    var(--font-mono);
-        font-size:      10px;
-        font-weight:    600;
-        letter-spacing: 0.07em;
-        text-transform: uppercase;
-        color:          var(--c-text3);
-        background:     transparent;
-        cursor:         pointer;
-        transition:     all 0.15s;
-        margin-left:    4px;
-        flex-shrink:    0;
-      }
-      .group-toggle-btn:hover { background: var(--c-bg3); color: var(--c-text2); }
-      .group-toggle-btn.active {
-        background:   rgba(41,128,185,.15);
-        border-color: rgba(41,128,185,.4);
-        color:        #5dade2;
-      }
-
-      /* Ladestellen-Gruppen-Header in Kacheln-View */
-      .ls-gruppe-header {
-        grid-column:    1 / -1;
-        display:        flex;
-        align-items:    center;
-        gap:            8px;
-        padding:        8px 2px 6px;
-        border-bottom:  1px solid var(--c-border);
-        margin-bottom:  4px;
-      }
-      .ls-gruppe-title {
-        font-family:    var(--font-mono);
-        font-size:      10px;
-        font-weight:    700;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-      }
-      .ls-gruppe-count {
-        font-family:  var(--font-mono);
-        font-size:    9px;
-        color:        var(--c-text3);
-        background:   var(--c-bg3);
-        padding:      1px 7px;
-        border-radius: 10px;
-      }
-      .ls-gruppe-line {
-        flex: 1; height: 1px; background: var(--c-border);
-      }
-      .ls-gruppe-dauer {
-        font-family: var(--font-mono);
-        font-size:   9px;
-        color:       var(--c-text3);
-      }
-
-      /* Ladestellen-Badge auf Kachel */
-      .ls-badge {
-        display:        inline-flex;
-        align-items:    center;
-        gap:            4px;
-        padding:        2px 7px;
-        border-radius:  var(--r-sm);
-        font-family:    var(--font-mono);
-        font-size:      9px;
-        font-weight:    600;
-        letter-spacing: 0.06em;
-        text-transform: uppercase;
-        flex-shrink:    0;
-      }
-      .ls-bsl  { background: rgba(142,68,173,.15); color: #c39bd3; }
-      .ls-cont { background: rgba(230,126,34,.15);  color: #f0a500; }
-      .ls-land { background: var(--c-green-dim);    color: #58d68d; }
-
-      /* Tor-Badge auf Kachel */
-      .tor-badge-card {
-        font-family:    var(--font-mono);
-        font-size:      10px;
-        font-weight:    700;
-        color:          var(--c-text3);
-        background:     var(--c-bg3);
-        border:         1px solid var(--c-border2);
-        border-radius:  var(--r-sm);
-        padding:        2px 6px;
-        flex-shrink:    0;
-      }
-
-      .tc-delta {
-        margin-left:    auto;
-        font-family:    var(--font-mono);
-        font-size:      10px;
-        font-weight:    600;
-        padding:        2px 7px;
-        border-radius:  var(--r-sm);
-        white-space:    nowrap;
-      }
-
-      .tc-delta.pos  { background: var(--c-red-dim);   color: #e74c3c; }
-      .tc-delta.neg  { background: var(--c-green-dim); color: #58d68d; }
-      .tc-delta.zero { background: var(--c-bg4);        color: var(--c-text3); }
-
-      /* Hinweis-Flag */
-      .tc-hint-flag {
-        position: absolute;
-        top:      10px;
-        right:    10px;
-        font-size: 13px;
-        filter:   drop-shadow(0 0 5px rgba(243,156,18,0.55));
-        line-height: 1;
-      }
-
-      /* Leerer-State innerhalb Grid */
-      .te-grid-empty {
-        grid-column:   1 / -1;
-        padding:       40px;
-        text-align:    center;
-        font-family:   var(--font-mono);
-        font-size:     11px;
-        letter-spacing: 0.1em;
-        text-transform: uppercase;
-        color:         var(--c-text3);
-        background:    var(--c-bg2);
-        border:        1px solid var(--c-border);
-        border-radius: var(--r-lg);
-      }
-
-      /* Platzhalter für noch nicht implementierte Views */
-      .view-placeholder {
-        display:       flex;
-        align-items:   center;
-        justify-content: center;
-        min-height:    200px;
-        background:    var(--c-bg2);
-        border:        1px solid var(--c-border);
-        border-radius: var(--r-lg);
-        font-family:   var(--font-mono);
-        font-size:     10px;
-        color:         var(--c-text3);
-        letter-spacing: 0.1em;
-        text-transform: uppercase;
-      }
-
-      /* ════════════════════════════════════════════════════════════
-         VIEW 2 – DETAIL
-      ════════════════════════════════════════════════════════════ */
-
-      .back-btn {
-        display:        inline-flex;
-        align-items:    center;
-        gap:            6px;
-        font-family:    var(--font-mono);
-        font-size:      10px;
-        font-weight:    600;
-        letter-spacing: 0.1em;
-        text-transform: uppercase;
-        color:          var(--c-text3);
-        margin-bottom:  14px;
-        transition:     color 0.15s;
-        padding:        0;
-      }
-
-      .back-btn:hover { color: var(--c-text2); }
-
-      /* ── Detail-Panel Rahmen ── */
-      .detail-panel {
-        background:    var(--c-bg2);
-        border:        1px solid var(--c-border2);
-        border-radius: var(--r-lg);
-        overflow:      hidden;
-      }
-
-      .detail-header {
-        background:    var(--c-bg3);
-        border-bottom: 1px solid var(--c-border);
-        padding:       14px 20px;
-        display:       flex;
-        align-items:   center;
-        gap:           14px;
-        flex-wrap:     wrap;
-      }
-
-      .dh-te-nr {
-        font-family:    var(--font-mono);
-        font-size:      15px;
-        font-weight:    700;
-        color:          var(--c-text);
-        letter-spacing: 0.03em;
-      }
-
-      .dh-supplier {
-        font-size:  12px;
-        color:      var(--c-text2);
-      }
-
-      .dh-spacer { flex: 1; }
-
-      .dh-delta {
-        font-family:  var(--font-mono);
-        font-size:    12px;
-        font-weight:  700;
-        padding:      4px 12px;
-        border-radius: var(--r-sm);
-      }
-
-      .dh-delta.pos  { background: var(--c-red-dim);   color: #e74c3c; }
-      .dh-delta.neg  { background: var(--c-green-dim); color: #58d68d; }
-
-      .detail-body { padding: 20px; }
-
-      /* ── Hinweis-Box im Detail ── */
-      .detail-hint {
-        display:       flex;
-        align-items:   flex-start;
-        gap:           8px;
-        padding:       10px 14px;
-        background:    rgba(243,156,18,0.09);
-        border:        1px solid rgba(243,156,18,0.28);
-        border-radius: var(--r-sm);
-        font-size:     12px;
-        color:         #f0b429;
-        margin-bottom: 18px;
-        line-height:   1.45;
-      }
-
-      .detail-hint-icon { font-size: 14px; flex-shrink: 0; margin-top: 1px; }
-
-      /* ── Sektion ── */
-      .d-section { margin-bottom: 22px; }
-
-      .d-section-title {
-        font-family:    var(--font-mono);
-        font-size:      9px;
-        font-weight:    600;
-        letter-spacing: 0.15em;
-        text-transform: uppercase;
-        color:          var(--c-text3);
-        margin-bottom:  12px;
-        display:        flex;
-        align-items:    center;
-        gap:            8px;
-      }
-
-      .d-section-title::after {
-        content:    '';
-        flex:       1;
-        height:     1px;
-        background: var(--c-border);
-      }
-
-      /* ── Zwei-Spalten-Layout für Metadaten ── */
-      .d-cols {
-        display:               grid;
-        grid-template-columns: 1fr 1fr;
-        gap:                   16px;
-        margin-bottom:         22px;
-      }
-
-      @media (max-width: 600px) { .d-cols { grid-template-columns: 1fr; } }
-
-      .d-info-list { display: flex; flex-direction: column; }
-
-      .d-info-row {
-        display:         flex;
-        justify-content: space-between;
-        align-items:     center;
-        padding:         6px 0;
-        border-bottom:   1px solid var(--c-border);
-        gap:             8px;
-      }
-
-      .d-info-row:last-child { border-bottom: none; }
-
-      .d-info-key {
-        font-size:  11px;
-        color:      var(--c-text3);
-        flex-shrink: 0;
-      }
-
-      .d-info-val {
-        font-family:  var(--font-mono);
-        font-size:    11px;
-        font-weight:  500;
-        color:        var(--c-text);
-        text-align:   right;
-      }
-
-      .d-info-val.ok  { color: #58d68d; }
-      .d-info-val.bad { color: #e74c3c; }
-      .d-info-val.dim { color: var(--c-text3); }
-
-      /* ── Zeitstrahl ── */
-      .tl-wrap {
-        overflow-x: auto;
-        padding-bottom: 4px;
-        margin-bottom: 6px;
-      }
-
-      .tl-track {
-        position:   relative;
-        min-width:  580px;
-        height:     88px;
-        padding:    0 24px;
-      }
-
-      /* Basis-Linie */
-      .tl-base {
-        position:   absolute;
-        top:        30px;
-        left:       24px; right: 24px;
-        height:     2px;
-        background: var(--c-border2);
-      }
-
-      /* Soll-Balken (gestrichelt) */
-      .tl-soll-bar {
-        position:   absolute;
-        top:        29px;
-        height:     4px;
-        border-radius: 2px;
-        background: repeating-linear-gradient(
-          90deg,
-          var(--c-text3) 0px, var(--c-text3) 5px,
-          transparent    5px, transparent   10px
-        );
-        opacity: 0.45;
-      }
-
-      /* Ist-Strecke zwischen zwei Punkten */
-      .tl-segment {
-        position:   absolute;
-        top:        30px;
-        height:     2px;
-        border-radius: 1px;
-      }
-
-      .tl-segment.ok   { background: var(--c-green); }
-      .tl-segment.warn { background: var(--c-yellow); }
-      .tl-segment.bad  { background: var(--c-red); }
-      .tl-segment.dim  { background: var(--c-text3); opacity: 0.4; }
-
-      /* Punkt auf dem Zeitstrahl */
-      .tl-point {
-        position:   absolute;
-        top:        22px;
-        transform:  translateX(-50%);
-        display:    flex;
-        flex-direction: column;
-        align-items: center;
-        gap:         0;
-      }
-
-      .tl-dot {
-        width:         16px; height: 16px;
-        border-radius: 50%;
-        border:        2px solid var(--c-bg2);
-        position:      relative;
-        z-index:       2;
-        transition:    transform 0.15s;
-      }
-
-      .tl-dot.ok   { background: var(--c-green);  box-shadow: 0 0 0 2px var(--c-green); }
-      .tl-dot.warn { background: var(--c-yellow); box-shadow: 0 0 0 2px var(--c-yellow); }
-      .tl-dot.bad  { background: var(--c-red);    box-shadow: 0 0 0 2px var(--c-red); }
-      .tl-dot.open { background: var(--c-bg3);    box-shadow: 0 0 0 2px var(--c-border2); }
-
-      .tl-time {
-        font-family:  var(--font-mono);
-        font-size:    9px;
-        color:        var(--c-text2);
-        margin-top:   5px;
-        white-space:  nowrap;
-        text-align:   center;
-      }
-
-      .tl-label {
-        font-family:    var(--font-mono);
-        font-size:      8px;
-        letter-spacing: 0.05em;
-        text-transform: uppercase;
-        color:          var(--c-text3);
-        margin-top:     3px;
-        white-space:    nowrap;
-        text-align:     center;
-        line-height:    1.3;
-      }
-
-      /* Δ-Chip über einem Punkt */
-      .tl-delta-chip {
-        position:       absolute;
-        top:            -20px;
-        left:           50%;
-        transform:      translateX(-50%);
-        font-family:    var(--font-mono);
-        font-size:      8px;
-        font-weight:    700;
-        padding:        1px 5px;
-        border-radius:  3px;
-        white-space:    nowrap;
-        z-index:        3;
-      }
-
-      .tl-delta-chip.pos { background: var(--c-red-dim);   color: #e74c3c; }
-      .tl-delta-chip.neg { background: var(--c-green-dim); color: #58d68d; }
-
-      /* Legende unter dem Zeitstrahl */
-      .tl-legend {
-        display:    flex;
-        gap:        14px;
-        flex-wrap:  wrap;
-        margin-top: 8px;
-      }
-
-      .tl-legend-item {
-        display:     flex;
-        align-items: center;
-        gap:         5px;
-        font-size:   10px;
-        color:       var(--c-text3);
-      }
-
-      .tl-legend-swatch {
-        width: 18px; height: 3px;
-        border-radius: 2px;
-      }
-
-      /* ── Produkt-Tabelle ── */
-      .prod-table {
-        width:           100%;
-        border-collapse: collapse;
-      }
-
-      .prod-table th {
-        font-family:    var(--font-mono);
-        font-size:      9px;
-        letter-spacing: 0.1em;
-        text-transform: uppercase;
-        color:          var(--c-text3);
-        font-weight:    500;
-        padding:        6px 10px;
-        text-align:     left;
-        border-bottom:  1px solid var(--c-border);
-        white-space:    nowrap;
-      }
-
-      .prod-table td {
-        padding:        8px 10px;
-        font-size:      12px;
-        color:          var(--c-text2);
-        border-bottom:  1px solid var(--c-border);
-        vertical-align: middle;
-      }
-
-      .prod-table tr:last-child td { border-bottom: none; }
-
-      .prod-table tbody tr:hover td {
-        background: rgba(255,255,255,0.02);
-      }
-
-      :host([theme="light"]) .prod-table tbody tr:hover td {
-        background: rgba(0,0,0,0.02);
-      }
-
-      .pt-nr   { font-family: var(--font-mono); font-size: 10px; color: var(--c-text3); }
-      .pt-name { font-size: 12px; color: var(--c-text); }
-      .pt-menge {
-        font-family:  var(--font-mono);
-        font-size:    12px;
-        color:        var(--c-text);
-        text-align:   right;
-        white-space:  nowrap;
-      }
-      .pt-halle {
-        display:       inline-block;
-        padding:       2px 7px;
-        background:    var(--c-blue-dim);
-        color:         #5dade2;
-        border-radius: var(--r-sm);
-        font-family:   var(--font-mono);
-        font-size:     10px;
-        font-weight:   600;
-      }
-      .pt-time {
-        font-family: var(--font-mono);
-        font-size:   10px;
-        color:       var(--c-green);
-        white-space: nowrap;
-      }
-      .pt-time.open { color: var(--c-text3); }
-
-      /* ════════════════════════════════════════════════════════════
-         VIEW 3 – GANTT
-      ════════════════════════════════════════════════════════════ */
-
-      .gantt-wrap {
-        background:    var(--c-bg2);
-        border:        1px solid var(--c-border2);
-        border-radius: var(--r-lg);
-        overflow:      hidden;
-      }
-
-      .gantt-inner { min-width: 700px; }
-
-      /* ── Kopfzeile ── */
-      .gantt-head {
-        display:       flex;
-        border-bottom: 1px solid var(--c-border);
-        background:    var(--c-bg3);
-        position:      sticky;
-        top:           0;
-        z-index:       5;
-      }
-
-      .gantt-label-col {
-        width:          200px;
-        min-width:      200px;
-        padding:        10px 16px;
-        font-family:    var(--font-mono);
-        font-size:      9px;
-        letter-spacing: 0.12em;
-        text-transform: uppercase;
-        color:          var(--c-text3);
-        display:        flex;
-        align-items:    center;
-        border-right:   1px solid var(--c-border);
-        flex-shrink:    0;
-      }
-
-      .gantt-axis {
-        flex:        1;
-        position:    relative;
-        height:      36px;
-      }
-
-      .gantt-tick {
-        position:       absolute;
-        top:            0;
-        transform:      translateX(-50%);
-        display:        flex;
-        flex-direction: column;
-        align-items:    center;
-        gap:            3px;
-        padding-top:    6px;
-      }
-
-      .gantt-tick-line {
-        width:         1px;
-        height:        6px;
-        background:    var(--c-border2);
-      }
-
-      .gantt-tick-label {
-        font-family:    var(--font-mono);
-        font-size:      9px;
-        color:          var(--c-text3);
-        white-space:    nowrap;
-      }
-
-      /* ── Zeile ── */
-      .gantt-row {
-        display:       flex;
-        align-items:   center;
-        border-bottom: 1px solid var(--c-border);
-        min-height:    52px;
-        transition:    background 0.12s;
-        cursor:        pointer;
-      }
-
-      .gantt-row:last-child  { border-bottom: none; }
-      .gantt-row:hover       { background: rgba(255,255,255,0.015); }
-      :host([theme="light"]) .gantt-row:hover { background: rgba(0,0,0,0.015); }
-
-      .gantt-row-label {
-        width:      200px;
-        min-width:  200px;
-        padding:    8px 14px;
-        border-right: 1px solid var(--c-border);
-        flex-shrink: 0;
-      }
-
-      .gantt-row-te {
-        font-family:    var(--font-mono);
-        font-size:      11px;
-        font-weight:    600;
-        color:          var(--c-text);
-        letter-spacing: 0.03em;
-      }
-
-      .gantt-row-supplier {
-        font-size:      10px;
-        color:          var(--c-text3);
-        white-space:    nowrap;
-        overflow:       hidden;
-        text-overflow:  ellipsis;
-        max-width:      172px;
-        margin-top:     2px;
-        display:        flex;
-        align-items:    center;
-        gap:            5px;
-      }
-
-      /* ── Balkenbereich ── */
-      .gantt-bars {
-        flex:       1;
-        position:   relative;
-        height:     52px;
-        overflow:   visible;
-      }
-
-      /* vertikale Gitterlinien */
-      .gantt-grid-line {
-        position:   absolute;
-        top: 0; bottom: 0;
-        width:      1px;
-        background: var(--c-border);
-        pointer-events: none;
-      }
-
-      /* Jetzt-Linie */
-      .gantt-now-line {
-        position:   absolute;
-        top: 0; bottom: 0;
-        width:      2px;
-        background: var(--c-red-light);
-        z-index:    4;
-        pointer-events: none;
-      }
-
-      .gantt-now-label {
-        position:       absolute;
-        top:            4px;
-        left:           4px;
-        font-family:    var(--font-mono);
-        font-size:      8px;
-        font-weight:    700;
-        color:          var(--c-red-light);
-        letter-spacing: 0.1em;
-        white-space:    nowrap;
-      }
-
-      /* Soll-Balken */
-      .gantt-bar-soll {
-        position:      absolute;
-        top:           10px;
-        height:        10px;
-        background:    var(--c-bg4);
-        border:        1px solid var(--c-border2);
-        border-radius: 2px;
-        pointer-events: none;
-      }
-
-      /* Ist-Balken */
-      .gantt-bar-ist {
-        position:      absolute;
-        top:           30px;
-        height:        10px;
-        border-radius: 2px;
-        cursor:        pointer;
-        transition:    opacity 0.15s, filter 0.15s;
-      }
-
-      .gantt-bar-ist:hover {
-        opacity: 0.82;
-        filter:  brightness(1.1);
-      }
-
-      .gantt-bar-ist.ok   { background: var(--c-green); }
-      .gantt-bar-ist.mild { background: var(--c-yellow); }
-      .gantt-bar-ist.bad  { background: var(--c-red); }
-      .gantt-bar-ist.dim  {
-        background: var(--c-text3);
-        opacity:    0.4;
-      }
-
-      /* Label auf dem Ist-Balken */
-      .gantt-bar-label {
-        position:       absolute;
-        top:            30px;
-        height:         10px;
-        line-height:    10px;
-        font-family:    var(--font-mono);
-        font-size:      8px;
-        font-weight:    600;
-        color:          rgba(255,255,255,0.75);
-        padding:        0 4px;
-        white-space:    nowrap;
-        pointer-events: none;
-        overflow:       hidden;
-      }
-
-      /* Legende unter dem Gantt */
-      .gantt-legend {
-        display:       flex;
-        gap:           14px;
-        flex-wrap:     wrap;
-        padding:       10px 16px;
-        border-top:    1px solid var(--c-border);
-        background:    var(--c-bg3);
-      }
-
-      .gantt-legend-item {
-        display:     flex;
-        align-items: center;
-        gap:         5px;
-        font-size:   10px;
-        color:       var(--c-text3);
-      }
-
-      .gantt-legend-swatch {
-        width:         16px;
-        height:        4px;
-        border-radius: 2px;
-      }
-
-      /* Gantt Gruppen-Header */
-      .gantt-group-header {
-        display:       flex;
-        align-items:   center;
-        gap:           8px;
-        padding:       7px 16px;
-        background:    var(--c-bg3);
-        border-top:    1px solid var(--c-border2);
-        border-bottom: 1px solid var(--c-border);
-      }
-      .gantt-group-header:first-child { border-top: none; }
-      .gantt-group-accent {
-        width: 3px; align-self: stretch; border-radius: 2px; flex-shrink: 0;
-      }
-      .gantt-group-title {
-        font-family:    var(--font-mono);
-        font-size:      10px;
-        font-weight:    700;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-      }
-      .gantt-group-count {
-        font-family:  var(--font-mono);
-        font-size:    9px;
-        color:        var(--c-text3);
-        background:   var(--c-bg4);
-        padding:      1px 7px;
-        border-radius: 10px;
-      }
-
-      /* Zeitraum-Chips (in filter-bar) */
-      .zeitraum-chips { display: flex; gap: 4px; flex-wrap: wrap; }
-
-      .zeitraum-chip {
-        padding:       3px 10px;
-        border-radius: 20px;
-        font-family:   var(--font-mono);
-        font-size:     10px;
-        font-weight:   500;
-        border:        1px solid var(--c-border2);
-        color:         var(--c-text2);
-        background:    transparent;
-        cursor:        pointer;
-        transition:    all 0.15s;
-        white-space:   nowrap;
-      }
-
-      .zeitraum-chip:hover  { border-color: var(--c-red-border); color: var(--c-text); }
-      .zeitraum-chip.active { background: var(--c-blue); border-color: var(--c-blue); color: #fff; }
-
-      /* Gantt-Steuerleiste */
-      .gantt-ctrl {
-        display:       flex;
-        align-items:   center;
-        gap:           10px;
-        padding:       8px 16px;
-        background:    var(--c-bg3);
-        border-bottom: 1px solid var(--c-border);
-        flex-wrap:     wrap;
-        flex-shrink:   0;
-      }
-
-      .gantt-nav { display: flex; align-items: center; gap: 6px; }
-
-      .gantt-nav-btn {
-        width: 28px; height: 28px;
-        border-radius: var(--r-sm);
-        border:  1px solid var(--c-border2);
-        color:   var(--c-text2);
-        font-size: 14px;
-        display: flex; align-items: center; justify-content: center;
-        cursor: pointer;
-        transition: background 0.12s, color 0.12s;
-      }
-
-      .gantt-nav-btn:hover { background: var(--c-bg4); color: var(--c-text); }
-
-      .gantt-nav-date {
-        font-family:  var(--font-mono);
-        font-size:    12px;
-        font-weight:  600;
-        color:        var(--c-text);
-        min-width:    130px;
-        text-align:   center;
-        white-space:  nowrap;
-      }
-
-      .gantt-heute-btn {
-        padding: 3px 9px;
-        border-radius: var(--r-sm);
-        border: 1px solid var(--c-border2);
-        font-family: var(--font-mono);
-        font-size: 9px; font-weight: 600;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        color: var(--c-text3);
-        cursor: pointer;
-        transition: all 0.12s;
-      }
-
-      .gantt-heute-btn:hover { background: var(--c-bg4); color: var(--c-text); }
-
-      .gantt-ctrl-sep { flex: 1; }
-
-      .gantt-fenster-tabs {
-        display: flex;
-        border: 1px solid var(--c-border2);
-        border-radius: var(--r-sm);
-        overflow: hidden;
-      }
-
-      .gantt-fenster-tab {
-        padding: 4px 11px;
-        font-family: var(--font-mono);
-        font-size: 9px; font-weight: 600;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        color: var(--c-text3);
-        cursor: pointer;
-        transition: background 0.12s, color 0.12s;
-        white-space: nowrap;
-      }
-
-      .gantt-fenster-tab:hover  { background: var(--c-bg4); color: var(--c-text2); }
-      .gantt-fenster-tab.active { background: var(--c-red-dim); color: #e74c3c; }
-
-      /* ════════════════════════════════════════════════════════════
-         VIEW – TORE (Hallen-Accordion)
-      ════════════════════════════════════════════════════════════ */
-      .engpass-banner {
-        display:       flex;
-        align-items:   center;
-        gap:           10px;
-        padding:       10px 14px;
-        background:    var(--c-red-dim);
-        border:        1px solid var(--c-red-border);
-        border-radius: var(--r-sm);
-        margin-bottom: 14px;
-      }
-      .engpass-icon { font-size: 16px; }
-      .engpass-text { font-size: 12px; color: #e74c3c; }
-      .engpass-text strong { font-weight: 600; }
-
-      .halle-section { margin-bottom: 10px; }
-
-      .halle-header {
-        display:       flex;
-        align-items:   center;
-        gap:           10px;
-        padding:       9px 14px;
-        background:    var(--c-bg2);
-        border:        1px solid var(--c-border);
-        border-radius: var(--r-sm);
-        cursor:        pointer;
-        user-select:   none;
-        transition:    background 0.12s;
-      }
-      .halle-header:hover { background: var(--c-bg3); }
-      .halle-header.engpass { border-left: 3px solid var(--c-red); }
-      .halle-header.voll    { border-left: 3px solid var(--c-yellow); }
-
-      .h-toggle { font-size: 10px; color: var(--c-text3); transition: transform 0.2s; flex-shrink: 0; }
-      .h-toggle.open { transform: rotate(90deg); }
-      .h-num { font-family: var(--font-mono); font-size: 11px; font-weight: 700; color: var(--c-text); }
-      .h-stats { display: flex; gap: 8px; font-family: var(--font-mono); font-size: 9px; }
-      .hs-b { color: #5dade2; }
-      .hs-f { color: var(--c-text3); }
-      .hs-v { color: #e74c3c; }
-      .h-sep { flex: 1; }
-      .h-util-pct { font-family: var(--font-mono); font-size: 9px; color: var(--c-text3); }
-
-      .halle-body { display: none; padding: 8px 0 0 0; }
-      .halle-body.open {
-        display:               grid;
-        grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-        gap:                   6px;
-      }
-
-      .tor-karte {
-        background:    var(--c-bg2);
-        border:        1px solid var(--c-border);
-        border-radius: var(--r-sm);
-        padding:       10px 12px;
-        cursor:        pointer;
-        position:      relative;
-        overflow:      hidden;
-        transition:    all 0.15s;
-      }
-      .tor-karte:hover { border-color: var(--c-border2); background: var(--c-bg3); }
-      .tor-karte::before {
-        content: ''; position: absolute; top: 0; left: 0; bottom: 0; width: 3px;
-      }
-      .tor-karte.t-entladen::before    { background: var(--c-blue); }
-      .tor-karte.t-ankunft::before     { background: var(--c-yellow); }
-      .tor-karte.t-eingelagert::before { background: var(--c-green); }
-      .tor-karte.t-verzögert::before   { background: var(--c-red); }
-
-      .tc2-top { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; padding-left: 5px; }
-      .tc2-num { font-family: var(--font-mono); font-size: 13px; font-weight: 700; color: var(--c-text); }
-      .tc2-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-      .dot-entladen    { background: var(--c-blue);   box-shadow: 0 0 5px var(--c-blue); }
-      .dot-ankunft     { background: var(--c-yellow); box-shadow: 0 0 5px var(--c-yellow); }
-      .dot-eingelagert { background: var(--c-green); }
-      .dot-verzögert   { background: var(--c-red); box-shadow: 0 0 6px var(--c-red); animation: step-pulse 1.4s ease-in-out infinite; }
-      .tc2-te { font-family: var(--font-mono); font-size: 10px; color: var(--c-text2); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-      .tc2-restzeit { font-family: var(--font-mono); font-size: 9px; font-weight: 600; padding: 2px 6px; border-radius: var(--r-sm); flex-shrink: 0; }
-      .rz-ok   { background: var(--c-green-dim);  color: #58d68d; }
-      .rz-warn { background: var(--c-yellow-dim); color: #f0b429; }
-      .rz-bad  { background: var(--c-red-dim);    color: #e74c3c; }
-
-      .tc2-steps { display: flex; gap: 2px; padding-left: 5px; margin-bottom: 7px; }
-      .tc2-step { flex: 1; height: 3px; background: var(--c-bg4); border-radius: 2px; }
-      .tc2-step.done { background: var(--c-green); }
-      .tc2-step.act  { background: var(--c-blue); animation: step-pulse 1.6s ease-in-out infinite; }
-      .tc2-step.late { background: var(--c-red); }
-
-      .tc2-bottom { display: flex; align-items: center; gap: 8px; padding-left: 5px; }
-      .tc2-sup { font-size: 10px; color: var(--c-text3); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-      .tc2-info { font-size: 10px; color: var(--c-text3); display: flex; align-items: center; gap: 3px; flex-shrink: 0; }
-
-      /* Freie Tore Toggle */
-      .frei-toggle-btn {
-        display:        inline-flex;
-        align-items:    center;
-        gap:            5px;
-        padding:        3px 9px;
-        border-radius:  var(--r-sm);
-        border:         1px solid var(--c-border2);
-        font-family:    var(--font-mono);
-        font-size:      9px;
-        font-weight:    600;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        color:          var(--c-text3);
-        background:     transparent;
-        cursor:         pointer;
-        transition:     all 0.15s;
-        flex-shrink:    0;
-      }
-      .frei-toggle-btn:hover { background: var(--c-bg4); color: var(--c-text2); }
-      .frei-toggle-btn.active {
-        background:   var(--c-green-dim);
-        border-color: rgba(39,174,96,0.35);
-        color:        #58d68d;
-      }
-
-      /* Freie-Tore-Container */
-      .frei-tore-wrap {
-        display:     none;
-        grid-column: 1 / -1;
-        padding:     10px 0 4px;
-        border-top:  1px solid var(--c-border);
-        margin-top:  4px;
-      }
-      .frei-tore-wrap.visible { display: block; }
-
-      .frei-tore-label {
-        font-family:    var(--font-mono);
-        font-size:      9px;
-        letter-spacing: 0.12em;
-        text-transform: uppercase;
-        color:          var(--c-text3);
-        margin-bottom:  6px;
-        display:        block;
-      }
-      .frei-tore-strip { display: flex; flex-wrap: wrap; gap: 4px; }
-      .frei-tor-tag {
-        font-family:    var(--font-mono);
-        font-size:      10px;
-        color:          var(--c-text3);
-        background:     var(--c-bg2);
-        border:         1px dashed var(--c-border2);
-        border-radius:  var(--r-sm);
-        padding:        3px 8px;
-        transition:     all 0.12s;
-      }
-      .frei-tor-tag:hover {
-        border-color: var(--c-green);
-        color:        #58d68d;
-        background:   var(--c-green-dim);
-      }
-    </style>
-
-    <!-- ── DOM ────────────────────────────────────────────────────────── -->
-    <div class="widget-root">
-
-      <!-- Header -->
-      <div class="header">
-        <div class="header-brand">
-          <div class="header-brand-dot"></div>
-          WE-Tracker
-        </div>
-        <div class="header-title" id="header-date">Wareneingang</div>
-        <div class="header-clock" id="header-clock" title="Aktuelle Uhrzeit">
-          <span class="clock-dot"></span>
-          <span id="clock-text">--:--:--</span>
-        </div>
-        <div class="header-sep"></div>
-
-        <!-- KPI-Chips -->
-        <div class="kpi-strip" id="kpi-strip">
-          <div class="kpi-chip k-total">
-            <span class="val" id="kpi-gesamt">–</span> TEs
-          </div>
-          <div class="kpi-chip k-active">
-            <span class="val" id="kpi-aktiv">–</span> aktiv
-          </div>
-          <div class="kpi-chip k-delayed">
-            <span class="val" id="kpi-verzoegert">–</span> verzögert
-          </div>
-          <div class="kpi-chip k-done">
-            <span class="val" id="kpi-abgefahren">–</span> abgefahren
-          </div>
-        </div>
-
-        <!-- Theme-Toggle bleibt im Header -->
-        <button class="theme-btn" id="theme-btn" title="Theme wechseln">◑</button>
-      </div>
-
-      <!-- ── NAVIGATIONSZEILE ── -->
-      <div class="navbar">
-        <div class="nav-tabs">
-          <button class="nav-tab active" data-view="kacheln">
-            <span class="nav-tab-icon">▦</span><span class="nav-tab-label">Übersicht</span>
-          </button>
-          <button class="nav-tab" data-view="tore">
-            <span class="nav-tab-icon">⊞</span><span class="nav-tab-label">Tore</span>
-          </button>
-          <button class="nav-tab" data-view="gantt">
-            <span class="nav-tab-icon">▤</span><span class="nav-tab-label">Zeitstrahl</span>
-          </button>
-        </div>
-
-        <div class="nav-sep"></div>
-
-        <!-- ── LIVE-REFRESH-STEUERUNG ── -->
-        <div class="refresh-ctrl">
-          <button class="refresh-btn" id="refresh-btn" disabled>
-            <span class="refresh-icon" id="refresh-icon">⟳</span>
-            <span>Aktualisieren</span>
-          </button>
-          <div class="countdown" id="countdown" title="Zeit bis zur nächsten Aktualisierung">
-            <span class="countdown-ring" id="countdown-ring"></span>
-            <span class="countdown-text" id="countdown-text">00:30</span>
-          </div>
-          <label class="auto-toggle" title="Automatisch aktualisieren">
-            <input type="checkbox" id="auto-check">
-            <span class="auto-box"></span>
-            <span class="auto-label">Auto</span>
-          </label>
-        </div>
-      </div>
-
-      <!-- Body -->
-      <div class="body">
-
-        <!-- Loading State -->
-        <div class="state-overlay" id="state-loading">
-          <div class="loader-ring"></div>
-          <div class="state-text">Daten werden geladen…</div>
-        </div>
-
-        <!-- Empty State -->
-        <div class="state-overlay hidden" id="state-empty">
-          <div class="state-icon">📦</div>
-          <div class="state-text">Keine Transporteinheiten vorhanden</div>
-        </div>
-
-        <!-- ── VIEW 1: KACHELN ── -->
-        <div class="view active" id="view-kacheln">
-          <div class="filter-bar">
-            <span class="filter-label">Zeitraum</span>
-            <div class="zeitraum-chips">
-              <button class="zeitraum-chip active" data-zeitraum="heute">Heute</button>
-              <button class="zeitraum-chip" data-zeitraum="woche">Diese Woche</button>
-              <button class="zeitraum-chip" data-zeitraum="7tage">Letzte 7 Tage</button>
-              <button class="zeitraum-chip" data-zeitraum="monat">Monat</button>
-            </div>
-            <span class="filter-label" style="margin-left:6px">Status</span>
-            <div class="filter-chips" id="filter-chips">
-              <button class="filter-chip active" data-filter="alle">Alle</button>
-              <button class="filter-chip" data-filter="erwartet">Erwartet</button>
-              <button class="filter-chip" data-filter="aktiv">Aktiv</button>
-              <button class="filter-chip" data-filter="verzögert">Verzögert</button>
-              <button class="filter-chip" data-filter="abgefahren">Abgefahren</button>
-            </div>
-            <span class="filter-label" style="margin-left:6px">Ladestelle</span>
-            <div class="ls-filter-chips">
-              <button class="ls-filter-chip active" data-ls="alle">Alle</button>
-              <button class="ls-filter-chip ls-chip-bsl" data-ls="BSL">🚛 BSL</button>
-              <button class="ls-filter-chip ls-chip-cont" data-ls="Container">🏗 Container</button>
-              <button class="ls-filter-chip ls-chip-land" data-ls="Landverkehr">🚚 Landverkehr</button>
-            </div>
-            <button class="group-toggle-btn" id="group-toggle-btn" title="Nach Ladestelle gruppieren">
-              <span id="group-toggle-icon">⊟</span> Gruppieren
-            </button>
-          </div>
-          <div class="te-grid" id="te-grid">
-          </div>
-        </div>
-
-        <!-- ── VIEW: TORE ── -->
-        <div class="view" id="view-tore">
-          <div id="tore-content"></div>
-        </div>
-
-        <!-- ── VIEW 2: DETAIL ── -->
-        <div class="view" id="view-detail">
-          <button class="back-btn" id="back-btn">← Zurück zur Übersicht</button>
-          <div id="detail-content">
-            <!-- Wird in Schritt 3 durch renderDetail() befüllt -->
-          </div>
-        </div>
-
-        <!-- ── VIEW 3: GANTT ── -->
-        <div class="view" id="view-gantt">
-          <div class="gantt-ctrl">
-            <div class="gantt-nav">
-              <button class="gantt-nav-btn" id="gantt-prev">&#8592;</button>
-              <div class="gantt-nav-date" id="gantt-nav-date">–</div>
-              <button class="gantt-nav-btn" id="gantt-next">&#8594;</button>
-            </div>
-            <button class="gantt-heute-btn" id="gantt-heute">Heute</button>
-            <div class="gantt-ctrl-sep"></div>
-            <div class="gantt-fenster-tabs">
-              <button class="gantt-fenster-tab active" data-fenster="tag">Tag</button>
-              <button class="gantt-fenster-tab" data-fenster="3tage">3 Tage</button>
-              <button class="gantt-fenster-tab" data-fenster="woche">Woche</button>
-            </div>
-          </div>
-          <div id="gantt-content"></div>
-        </div>
-
-      </div>
-    </div>
-  `;
-
-  // ── Web Component ─────────────────────────────────────────────────────────
-
-  class WEEingangWidget extends HTMLElement {
-
-    // ── Lifecycle ────────────────────────────────────────────────────────
-
+  /* =====================================================================
+   *  Template (Shadow DOM)
+   * ===================================================================== */
+  var tmpl = document.createElement("template");
+  tmpl.innerHTML =
+  '<style>' +
+  ':host{all:initial;display:block;width:100%;height:100%;' +
+    '--ink:#16202C;--muted:#5C6B7A;--faint:#909DAB;--canvas:#EEF1F5;--surface:#FFFFFF;' +
+    '--line:#DCE2E9;--line-2:#EAEEF3;--brand:#0A6E74;--brand-d:#075257;--brand-soft:#E1EFEF;' +
+    '--pos:#1F7A47;--pos-soft:#E6F2EB;--neg:#C0392B;--neg-soft:#FAE8E6;--warn:#9C5B00;--warn-soft:#FBEEDB;' +
+    'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;' +
+    'color:var(--ink);font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased;}' +
+  '*{box-sizing:border-box;}' +
+  '.wrap{height:100%;overflow:auto;background:var(--canvas);padding:18px 18px 26px;}' +
+  '.tab{font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1;}' +
+
+  /* header */
+  '.hd{display:flex;flex-wrap:wrap;align-items:flex-end;gap:14px 22px;margin-bottom:14px;}' +
+  '.hd h1{margin:0;font-size:17px;font-weight:700;letter-spacing:-.2px;}' +
+  '.hd .sub{margin:2px 0 0;color:var(--muted);font-size:12px;}' +
+  '.spacer{flex:1 1 auto;}' +
+  '.seg{display:inline-flex;background:var(--surface);border:1px solid var(--line);border-radius:9px;padding:3px;gap:2px;}' +
+  '.seg button{all:unset;cursor:pointer;padding:5px 11px;border-radius:6px;font-size:12px;font-weight:600;color:var(--muted);line-height:1;}' +
+  '.seg button:hover{color:var(--ink);}' +
+  '.seg button.on{background:var(--brand);color:#fff;}' +
+  '.lbl{font-size:10px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:var(--faint);margin:0 0 5px;display:block;}' +
+
+  /* kpi strip */
+  '.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px;}' +
+  '.kpi{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:13px 14px;position:relative;overflow:hidden;}' +
+  '.kpi .k-lbl{font-size:11px;color:var(--muted);font-weight:600;}' +
+  '.kpi .k-val{font-size:22px;font-weight:700;letter-spacing:-.4px;margin-top:3px;}' +
+  '.kpi .k-bm{font-size:11px;color:var(--faint);margin-top:1px;}' +
+  '.kpi .k-edge{position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--line);}' +
+  '.kpi.pos .k-edge{background:var(--pos);} .kpi.neg .k-edge{background:var(--neg);} .kpi.neutral .k-edge{background:var(--faint);}' +
+
+  '.pill{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;padding:2px 7px;border-radius:20px;line-height:1.3;}' +
+  '.pill.pos{background:var(--pos-soft);color:var(--pos);} .pill.neg{background:var(--neg-soft);color:var(--neg);} .pill.neutral{background:var(--line-2);color:var(--muted);}' +
+
+  /* card */
+  '.card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px 17px;}' +
+  '.card h2{margin:0 0 3px;font-size:13px;font-weight:700;}' +
+  '.card .hint{margin:0 0 13px;color:var(--muted);font-size:11.5px;}' +
+
+  /* driver tree */
+  '.tree{display:flex;align-items:stretch;gap:0;flex-wrap:wrap;}' +
+  '.col{display:flex;flex-direction:column;justify-content:center;gap:12px;}' +
+  '.op{display:flex;align-items:center;justify-content:center;width:30px;color:var(--faint);font-size:18px;font-weight:600;flex:0 0 auto;}' +
+  '.node{position:relative;background:var(--surface);border:1.5px solid var(--line);border-radius:12px;padding:11px 13px;min-width:138px;cursor:pointer;transition:border-color .12s,box-shadow .12s,transform .12s;}' +
+  '.node:hover{border-color:var(--brand);box-shadow:0 4px 14px rgba(10,110,116,.13);transform:translateY(-1px);}' +
+  '.node.sel{border-color:var(--brand);box-shadow:0 0 0 3px var(--brand-soft);}' +
+  '.node .n-lbl{font-size:11px;color:var(--muted);font-weight:600;display:flex;align-items:center;gap:6px;}' +
+  '.node .n-val{font-size:19px;font-weight:700;letter-spacing:-.3px;margin-top:2px;}' +
+  '.node .n-bm{font-size:10.5px;color:var(--faint);margin-top:1px;}' +
+  '.node .n-bar{height:4px;border-radius:3px;background:var(--line-2);margin-top:8px;overflow:hidden;}' +
+  '.node .n-bar > i{display:block;height:100%;border-radius:3px;}' +
+  '.node.root{border-color:var(--brand-d);background:linear-gradient(180deg,#fff, #f6fbfb);}' +
+  '.node.root .n-val{color:var(--brand-d);font-size:21px;}' +
+  '.node.eng{border-color:var(--neg);}' +
+  '.node.eng:before{content:"Engpass";position:absolute;top:-9px;left:11px;background:var(--neg);color:#fff;font-size:9px;font-weight:800;letter-spacing:.5px;padding:2px 6px;border-radius:5px;text-transform:uppercase;}' +
+  '.dot{width:7px;height:7px;border-radius:50%;flex:0 0 auto;}' +
+  '.dot.pos{background:var(--pos);} .dot.neg{background:var(--neg);} .dot.neutral{background:var(--faint);}' +
+
+  /* two-column lower area */
+  '.grid2{display:grid;grid-template-columns:1.05fr 1fr;gap:14px;margin-top:16px;}' +
+
+  /* befund */
+  '.finding{display:flex;gap:11px;padding:13px;border-radius:11px;background:var(--brand-soft);border:1px solid #cfe6e6;margin-bottom:14px;}' +
+  '.finding .ic{flex:0 0 auto;width:26px;height:26px;border-radius:7px;background:var(--brand);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;}' +
+  '.finding p{margin:0;font-size:12.5px;}' +
+  '.finding b{color:var(--brand-d);}' +
+  '.measure{border:1px solid var(--line);border-radius:11px;padding:12px 13px;margin-bottom:10px;background:#fff;}' +
+  '.measure:last-child{margin-bottom:0;}' +
+  '.measure .m-top{display:flex;align-items:baseline;gap:8px;}' +
+  '.measure .m-no{font-size:11px;font-weight:800;color:var(--brand);background:var(--brand-soft);border-radius:6px;padding:1px 7px;flex:0 0 auto;}' +
+  '.measure .m-ttl{font-size:12.5px;font-weight:700;}' +
+  '.measure .m-txt{margin:6px 0 0;color:var(--muted);font-size:11.5px;}' +
+  '.measure .m-lev{margin-top:7px;font-size:11px;color:var(--ink);}' +
+  '.measure .m-lev b{color:var(--brand-d);}' +
+
+  /* drill */
+  '.drill-head{display:flex;align-items:center;gap:8px;margin-bottom:11px;flex-wrap:wrap;}' +
+  '.drill-head .seg{margin-left:auto;}' +
+  '.row{display:grid;grid-template-columns:128px 1fr 88px;align-items:center;gap:10px;padding:7px 0;border-top:1px solid var(--line-2);}' +
+  '.row:first-of-type{border-top:none;}' +
+  '.row .r-name{font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}' +
+  '.row .r-track{height:18px;background:var(--line-2);border-radius:5px;position:relative;overflow:hidden;}' +
+  '.row .r-fill{position:absolute;left:0;top:0;bottom:0;border-radius:5px;background:var(--brand);opacity:.85;}' +
+  '.row .r-val{font-size:12px;font-weight:700;text-align:right;}' +
+  '.row .r-sub{font-size:10.5px;color:var(--faint);font-weight:500;}' +
+  '.foot{margin-top:13px;font-size:10.5px;color:var(--faint);}' +
+  '.src{display:inline-block;margin-left:6px;padding:1px 6px;border-radius:5px;background:var(--warn-soft);color:var(--warn);font-weight:700;font-size:10px;}' +
+
+  '@media(max-width:820px){.kpis{grid-template-columns:repeat(2,1fr);}.grid2{grid-template-columns:1fr;}}' +
+  '</style>' +
+  '<div class="wrap" id="root"></div>';
+
+  /* =====================================================================
+   *  Custom Element
+   * ===================================================================== */
+  class WerttreiberBaum extends HTMLElement {
     constructor() {
       super();
-      this._shadow = this.attachShadow({ mode: 'open' });
-      this._shadow.appendChild(template.content.cloneNode(true));
-
-      // Interner State
-      this._teMap       = new Map();    // { teNr → TEObjekt }
-      this._activeTE    = null;         // aktuell im Detail angezeigte TE-Nummer
-      this._activeFilter  = 'alle';     // aktiver Status-Filter
-      this._theme         = 'dark';     // 'dark' | 'light'
-      this._ac            = new AbortController();
-      this._activeZeitraum = 'heute';   // 'heute'|'woche'|'7tage'|'monat'
-      this._ganttDatum    = new Date(); // Anker-Datum Gantt
-      this._ganttFenster  = 'tag';      // 'tag'|'3tage'|'woche'
-      // Live-Refresh
-      this._countdownDauer = 30;        // Sekunden bis Aktualisierung möglich
-      this._countdownVal   = 30;        // aktueller Countdown-Wert
-      this._countdownTimer = null;      // setInterval-Handle
-      this._clockTimer     = null;      // Uhr-Timer-Handle
-      this._autoRefresh    = false;     // Auto-Aktualisierung aktiv?
-      this._lsFilter       = 'alle';    // Ladestellen-Filter: 'alle'|'BSL'|'Container'|'Landverkehr'
-      this._gruppiertLS    = false;     // Kacheln nach Ladestelle gruppieren
+      this.attachShadow({ mode: "open" });
+      this.shadowRoot.appendChild(tmpl.content.cloneNode(true));
+      this._root = this.shadowRoot.getElementById("root");
+      this._state = { fil: null, bench: "avg", drill: "wk", driver: "bonwert" };
+      this._live = false;
+      this._bind();
     }
 
-    connectedCallback() {
-      this._bindEvents();
-      this._hideLoading();
-      this._startCountdown();
-      this._startClock();
-    }
+    /* SAC lifecycle */
+    onCustomWidgetAfterUpdate() { this._render(); }
+    onCustomWidgetResize() { /* CSS-fluid */ }
+    connectedCallback() { this._render(); }
 
-    disconnectedCallback() {
-      // Alle Event-Listener in einem Zug entfernen
-      this._ac.abort();
-      this._stopCountdown();
-      this._stopClock();
-    }
-
-    // ── Hilfsmethode: Element im Shadow DOM finden ───────────────────────
-
-    _$(id) { return this._shadow.getElementById(id); }
-
-    // ── Event-Binding ────────────────────────────────────────────────────
-
-    _bindEvents() {
-      const opts = { signal: this._ac.signal };
-
-      // Navigations-Tabs
-      this._shadow.querySelectorAll('.nav-tab').forEach(btn => {
-        btn.addEventListener('click', () => this._switchView(btn.dataset.view), opts);
-      });
-
-      // Theme-Toggle
-      this._$('theme-btn').addEventListener('click', () => this._toggleTheme(), opts);
-
-      // Refresh-Button
-      this._$('refresh-btn').addEventListener('click', () => {
-        if (!this._$('refresh-btn').disabled) this._doRefresh();
-      }, opts);
-
-      // Auto-Aktualisierung Checkbox
-      this._$('auto-check').addEventListener('change', (e) => {
-        this._autoRefresh = e.target.checked;
-        // Wenn aktiviert und Countdown bereits abgelaufen: sofort refreshen
-        if (this._autoRefresh && this._countdownVal <= 0) this._doRefresh();
-      }, opts);
-
-      // Back-Button im Detail-View
-      this._$('back-btn').addEventListener('click', () => {
-        this._switchView('kacheln');
-      }, opts);
-
-      // Filter-Chips (Status)
-      this._shadow.querySelectorAll('.filter-chip').forEach(chip => {
-        chip.addEventListener('click', () => {
-          this._activeFilter = chip.dataset.filter;
-          this._shadow.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
-          chip.classList.add('active');
-          this._renderKacheln();
-        }, opts);
-      });
-
-      // Zeitraum-Chips
-      this._shadow.querySelectorAll('.zeitraum-chip').forEach(chip => {
-        chip.addEventListener('click', () => {
-          this._activeZeitraum = chip.dataset.zeitraum;
-          this._shadow.querySelectorAll('.zeitraum-chip').forEach(c => c.classList.remove('active'));
-          chip.classList.add('active');
-          this._updateKPIs();
-          this._renderKacheln();
-        }, opts);
-      });
-
-      // Ladestellen-Filter-Chips
-      this._shadow.querySelectorAll('.ls-filter-chip').forEach(chip => {
-        chip.addEventListener('click', () => {
-          this._lsFilter = chip.dataset.ls;
-          this._shadow.querySelectorAll('.ls-filter-chip').forEach(c => c.classList.remove('active'));
-          chip.classList.add('active');
-          this._renderKacheln();
-        }, opts);
-      });
-
-      // Gruppierungs-Toggle
-      this._$('group-toggle-btn')?.addEventListener('click', () => {
-        this._gruppiertLS = !this._gruppiertLS;
-        const btn  = this._$('group-toggle-btn');
-        const icon = this._$('group-toggle-icon');
-        btn?.classList.toggle('active', this._gruppiertLS);
-        if (icon) icon.textContent = this._gruppiertLS ? '⊞' : '⊟';
-        this._renderKacheln();
-      }, opts);
-
-      // Gantt-Navigation
-      this._$('gantt-prev')?.addEventListener('click', () => this._ganttNavigiere(-1), opts);
-      this._$('gantt-next')?.addEventListener('click', () => this._ganttNavigiere(+1), opts);
-      this._$('gantt-heute')?.addEventListener('click', () => {
-        this._ganttDatum = new Date();
-        this._renderGantt();
-      }, opts);
-
-      // Gantt-Fenster-Tabs
-      this._shadow.querySelectorAll('.gantt-fenster-tab').forEach(tab => {
-        tab.addEventListener('click', () => {
-          this._ganttFenster = tab.dataset.fenster;
-          this._shadow.querySelectorAll('.gantt-fenster-tab').forEach(t => t.classList.remove('active'));
-          tab.classList.add('active');
-          this._renderGantt();
-        }, opts);
+    _bind() {
+      this._root.addEventListener("click", (e) => {
+        var t = e.target.closest("[data-act]");
+        if (!t) return;
+        var act = t.getAttribute("data-act"), val = t.getAttribute("data-val");
+        if (act === "fil")    this._state.fil = (val === "ALL" ? null : val);
+        if (act === "bench")  this._state.bench = val;
+        if (act === "drill")  this._state.drill = val;
+        if (act === "driver") this._state.driver = val;
+        this._render();
       });
     }
 
-    // ── View-Switching ────────────────────────────────────────────────────
+    /* ---- Daten beschaffen: SAC live oder eingebettet ---- */
+    _data() {
+      var ds = this.myDataSource;
+      if (ds && ds.state === "success" && ds.data && ds.data.length) {
+        var p = this._parseSac(ds);
+        if (p && p.rows.length) { this._live = true; return p; }
+      }
+      this._live = false;
+      return { rows: EMBEDDED.rows.slice(), flaeche: EMBEDDED.flaeche };
+    }
 
-    _switchView(name) {
-      // Views
-      this._shadow.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-      this._$(`view-${name}`)?.classList.add('active');
-      // Tabs — Detail hat keinen Tab, daher nichts markieren wenn Detail aktiv
-      if (name !== 'detail') {
-        this._shadow.querySelectorAll('.nav-tab').forEach(t => {
-          t.classList.toggle('active', t.dataset.view === name);
+    _parseSac(ds) {
+      try {
+        var rows = [], flaeche = {};
+        var get = function (cell) { return cell ? (cell.label != null ? cell.label : (cell.id != null ? cell.id : "")) : ""; };
+        var raw = function (cell) { return cell && cell.raw != null ? Number(cell.raw) : 0; };
+        ds.data.forEach(function (d) {
+          var fil = get(d.dimension_filiale) || "?";
+          var row = {
+            fil: fil,
+            reg: get(d.dimension_region) || "",
+            st:  get(d.dimension_standorttyp) || "",
+            kt:  get(d.dimension_kundentyp) || "n/a",
+            wk:  get(d.dimension_warenkategorie) || "n/a",
+            pos: get(d.dimension_ma_position) || "n/a",
+            u:   raw(d.value_umsatz_netto),
+            br:  raw(d.value_umsatz_brutto),
+            rb:  raw(d.value_rabatt),
+            art: raw(d.value_anzahl_artikel),
+            bons:raw(d.value_anzahl_bons),
+            ret: 0, tx: raw(d.value_anzahl_bons)
+          };
+          rows.push(row);
+          var fl = raw(d.value_verkaufsflaeche);
+          if (fl > 0) flaeche[fil] = fl;
         });
-      }
-      // Tore-View bei Bedarf rendern
-      if (name === 'tore') this._renderTore();
+        return { rows: rows, flaeche: flaeche };
+      } catch (e) { return null; }
     }
 
-    // ── Live-Uhr ──────────────────────────────────────────────────────────
-
-    _startClock() {
-      this._stopClock();
-      this._tickClock();
-      this._clockTimer = setInterval(() => this._tickClock(), 1000);
-    }
-
-    _stopClock() {
-      if (this._clockTimer) {
-        clearInterval(this._clockTimer);
-        this._clockTimer = null;
-      }
-    }
-
-    _tickClock() {
-      const el = this._$('clock-text');
-      if (!el) return;
-      el.textContent = new Date().toLocaleTimeString('de-DE', {
-        hour: '2-digit', minute: '2-digit', second: '2-digit'
-      });
-    }
-
-    // ── Live-Refresh / Countdown ──────────────────────────────────────────
-
-    // Startet/Neustartet den 30s-Countdown. Button wird disabled, am Ende aktiv.
-    _startCountdown() {
-      this._stopCountdown();
-      this._countdownVal = this._countdownDauer;
-
-      const btn  = this._$('refresh-btn');
-      const cd   = this._$('countdown');
-      const icon = this._$('refresh-icon');
-      if (btn)  btn.disabled = true;
-      if (icon) icon.classList.remove('spinning');
-      if (cd)   { cd.classList.add('counting'); cd.classList.remove('ready'); }
-
-      this._updateCountdownText();
-
-      this._countdownTimer = setInterval(() => {
-        this._countdownVal--;
-        this._updateCountdownText();
-
-        if (this._countdownVal <= 0) {
-          this._countdownAbgelaufen();
-        }
-      }, 1000);
-    }
-
-    _stopCountdown() {
-      if (this._countdownTimer) {
-        clearInterval(this._countdownTimer);
-        this._countdownTimer = null;
-      }
-    }
-
-    // Wird aufgerufen wenn der Countdown 0 erreicht
-    _countdownAbgelaufen() {
-      this._stopCountdown();
-      const btn = this._$('refresh-btn');
-      const cd  = this._$('countdown');
-      if (cd) { cd.classList.remove('counting'); cd.classList.add('ready'); }
-
-      if (this._autoRefresh) {
-        // Auto: sofort neu laden
-        this._doRefresh();
-      } else {
-        // Manuell: Button aktivieren
-        if (btn) btn.disabled = false;
-        const txt = this._$('countdown-text');
-        if (txt) txt.textContent = 'bereit';
-      }
-    }
-
-    _updateCountdownText() {
-      const txt = this._$('countdown-text');
-      if (!txt) return;
-      const v = Math.max(0, this._countdownVal);
-      const m = String(Math.floor(v / 60)).padStart(2, '0');
-      const s = String(v % 60).padStart(2, '0');
-      txt.textContent = `${m}:${s}`;
-    }
-
-    // Löst die Aktualisierung aus: lädt Daten neu, startet Countdown neu
-    _doRefresh() {
-      const icon = this._$('refresh-icon');
-      if (icon) icon.classList.add('spinning');
-
-      // Datenquelle neu verarbeiten (falls vorhanden)
-      if (this._dataBinding) {
-        this.myDataSource = this._dataBinding;
-      }
-
-      // kurze Spin-Animation, dann Countdown neu starten
-      setTimeout(() => {
-        if (icon) icon.classList.remove('spinning');
-        this._startCountdown();
-      }, 600);
-    }
-
-    // ── Theme ─────────────────────────────────────────────────────────────
-
-    _toggleTheme() {
-      this._theme = this._theme === 'dark' ? 'light' : 'dark';
-      this._applyTheme();
-    }
-
-    _applyTheme() {
-      if (this._theme === 'light') {
-        this.setAttribute('theme', 'light');
-      } else {
-        this.removeAttribute('theme');
-      }
-    }
-
-    // ── Loading State ─────────────────────────────────────────────────────
-
-    _showLoading() {
-      this._$('state-loading')?.classList.remove('hidden');
-      this._$('state-empty')?.classList.add('hidden');
-    }
-
-    _hideLoading() {
-      this._$('state-loading')?.classList.add('hidden');
-    }
-
-    _showEmpty() {
-      this._$('state-empty')?.classList.remove('hidden');
-      this._$('state-loading')?.classList.add('hidden');
-    }
-
-    // ── KPI-Leiste aktualisieren ─────────────────────────────────────────
-
-    _zeitraumBereich() {
-      const jetzt = new Date();
-      const heute = new Date(jetzt.getFullYear(), jetzt.getMonth(), jetzt.getDate());
-      switch (this._activeZeitraum) {
-        case 'heute':
-          return { von: heute, bis: new Date(heute.getTime() + 86400000) };
-        case 'woche': {
-          const tag = heute.getDay();
-          const diff = (tag === 0 ? -6 : 1 - tag);
-          const mo = new Date(heute.getTime() + diff * 86400000);
-          return { von: mo, bis: new Date(mo.getTime() + 7 * 86400000) };
-        }
-        case '7tage':
-          return { von: new Date(heute.getTime() - 6 * 86400000), bis: new Date(heute.getTime() + 86400000) };
-        case 'monat': {
-          const von = new Date(heute.getFullYear(), heute.getMonth(), 1);
-          return { von, bis: new Date(heute.getFullYear(), heute.getMonth() + 1, 1) };
-        }
-        default:
-          return { von: new Date(0), bis: new Date(9999, 0) };
-      }
-    }
-
-    _tesFuerZeitraum() {
-      const { von, bis } = this._zeitraumBereich();
-      return [...this._teMap.values()].filter(te => {
-        const anker = te.geplantStart ?? te.tsAnkunft;
-        return anker && anker >= von && anker < bis;
-      });
-    }
-
-    _updateKPIs() {
-      const tes        = this._tesFuerZeitraum();
-      const aktiv      = tes.filter(t => ['ankunft', 'entladen'].includes(t.status)).length;
-      const verzoegert = tes.filter(t => t.status === 'verzögert').length;
-      const abgefahren = tes.filter(t => t.status === 'abgefahren').length;
-
-      this._$('kpi-gesamt').textContent     = tes.length;
-      this._$('kpi-aktiv').textContent      = aktiv;
-      this._$('kpi-verzoegert').textContent = verzoegert;
-      this._$('kpi-abgefahren').textContent = abgefahren;
-
-      const labels = {
-        heute:  'Heute · ' + new Date().toLocaleDateString('de-DE',{day:'2-digit',month:'2-digit',year:'numeric'}),
-        woche:  'Diese Woche',
-        '7tage':'Letzte 7 Tage',
-        monat:  new Date().toLocaleDateString('de-DE',{month:'long',year:'numeric'}),
-      };
-      this._$('header-date').textContent = 'Wareneingang · ' + (labels[this._activeZeitraum] ?? '');
-    }
-
-    // ── Render: Kacheln ──────────────────────────────────────────────────
-
-    _renderKacheln() {
-      const grid = this._$('te-grid');
-      if (!grid) return;
-
-      // Status-Filter
-      const statusMatch = (te) => {
-        switch (this._activeFilter) {
-          case 'aktiv':      return ['ankunft', 'entladen'].includes(te.status);
-          case 'verzögert':  return te.status === 'verzögert';
-          case 'abgefahren': return te.status === 'abgefahren';
-          case 'erwartet':   return te.status === 'erwartet';
-          default:           return true; // 'alle'
-        }
-      };
-
-      // Halle-Filter
-      const halleMatch = (te) => {
-        if (!this._halleFilter) return true;
-        return te.halle === this._halleFilter ||
-          te.produkte.some(p => p.halle === this._halleFilter);
-      };
-
-      // Ladestellen-Filter
-      const lsMatch = (te) => {
-        if (this._lsFilter === 'alle') return true;
-        return (te.ladestelle ?? 'Landverkehr') === this._lsFilter;
-      };
-
-      const tes = this._tesFuerZeitraum()
-        .filter(te => statusMatch(te) && halleMatch(te) && lsMatch(te));
-
-      if (tes.length === 0) {
-        grid.innerHTML = `<div class="te-grid-empty">Keine TEs für diesen Filter</div>`;
-        return;
-      }
-
-      if (this._gruppiertLS) {
-        // ── Gruppiert nach Ladestelle ──
-        const LS_ORDER = ['BSL', 'Container', 'Landverkehr'];
-        const LS_META  = {
-          BSL:         { icon: '🚛', col: 'rgba(142,68,173,0.85)', dauer: 'Ø 4–8h'     },
-          Container:   { icon: '🏗', col: 'rgba(230,126,34,0.85)', dauer: 'Ø 2–4h'     },
-          Landverkehr: { icon: '🚚', col: 'rgba(39,174,96,0.85)',  dauer: 'Ø 30–90min' },
-        };
-        const byLS = {};
-        for (const te of tes) {
-          const ls = te.ladestelle ?? 'Landverkehr';
-          if (!byLS[ls]) byLS[ls] = [];
-          byLS[ls].push(te);
-        }
-        grid.innerHTML = LS_ORDER
-          .filter(ls => byLS[ls]?.length > 0)
-          .map(ls => {
-            const m  = LS_META[ls];
-            const gr = byLS[ls];
-            const vz = gr.filter(t => t.status === 'verzögert').length;
-            const header = `<div class="ls-gruppe-header">
-              <span class="ls-gruppe-title" style="color:${m.col}">${m.icon} ${ls}</span>
-              <span class="ls-gruppe-count">${gr.length} TE${gr.length !== 1 ? 's' : ''}</span>
-              ${vz ? `<span class="ls-gruppe-count" style="background:var(--c-red-dim);color:#e74c3c">${vz} verzögert</span>` : ''}
-              <div class="ls-gruppe-line"></div>
-              <span class="ls-gruppe-dauer">${m.dauer}</span>
-            </div>`;
-            return header + gr.map(te => this._teKachelHTML(te)).join('');
-          }).join('');
-      } else {
-        // ── Ungroupiert ──
-        grid.innerHTML = tes.map(te => this._teKachelHTML(te)).join('');
-      }
-
-      // Klick-Handler: Delegation auf Grid-Ebene — ein Listener für alle Karten
-      // (vorher jeden einzelnen click-handler pro Karte setzen würde bei vielen TEs
-      //  zu O(n) Listener-Attachments führen)
-      grid.onclick = (e) => {
-        const card = e.target.closest('.te-card');
-        if (card?.dataset.te) this._renderDetail(card.dataset.te);
-      };
-    }
-
-    // Ladestellen-Badge HTML
-    _lsBadgeHTML(ladestelle) {
-      const map  = { BSL: 'ls-bsl', Container: 'ls-cont', Landverkehr: 'ls-land' };
-      const icon = { BSL: '🚛', Container: '🏗', Landverkehr: '🚚' };
-      const cls  = map[ladestelle] ?? 'ls-land';
-      const ico  = icon[ladestelle] ?? '🚛';
-      return `<span class="ls-badge ${cls}">${ico} ${esc(ladestelle)}</span>`;
-    }
-
-    // Baut das HTML für eine einzelne TE-Kachel
-    _teKachelHTML(te) {
-      const status = te.status;
-
-      // ── Status-Badge Label ──
-      const badgeLabel = {
-        erwartet:    'Erwartet',
-        ankunft:     'Eingetroffen',
-        entladen:    'Wird entladen',
-        eingelagert: 'Eingelagert',
-        abgefahren:  'Abgefahren',
-        'verzögert': 'Verzögert',
-      }[status] ?? status;
-
-      // ── Fortschrittsbalken ──
-      // 6 Schritte: Ankunft, Angedockt, Entladen▶, Entladen■, WE-Buchung, Abfahrt
-      const tsFelder = [
-        te.tsAnkunft, te.tsAngedockt, te.tsEntladenStart,
-        te.tsEntladenEnde, te.tsWeBuchung, te.tsAbfahrt,
-      ];
-      const isVerspaetet = status === 'verzögert';
-
-      const schritte = tsFelder.map((ts, i) => {
-        const isDone   = ts !== null;
-        const isActive = !isDone && i === te.fortschritt; // erster offener Schritt
-        let cls = 'tc-step';
-        if (isDone)    cls += isVerspaetet ? ' late' : ' done';
-        if (isActive)  cls += isVerspaetet ? ' active late' : ' active';
-        return `<div class="${cls}"></div>`;
-      }).join('');
-
-      // ── Δ-Zeit Badge ──
-      let deltaHTML = '';
-      if (te.verzoegerungMin != null && te.verzoegerungMin > 0) {
-        deltaHTML = `<span class="tc-delta pos">${fmtDauer(te.verzoegerungMin)}</span>`;
-      } else if (status === 'abgefahren' || status === 'eingelagert') {
-        deltaHTML = `<span class="tc-delta neg">pünktlich</span>`;
-      }
-
-      // ── Meta-Infos ──
-      const anzahlProdukte = te.produkte.length;
-      const hallen = [...new Set(te.produkte.map(p => p.halle).filter(Boolean))];
-      const halleText = hallen.length > 0 ? hallen.join('/') : (te.halle ?? '–');
-
-      const zeitText = te.tsAnkunft
-        ? `ab ${fmtTime(te.tsAnkunft)}`
-        : te.geplantStart
-          ? `geplant ${fmtTime(te.geplantStart)}`
-          : '';
-
-      // ── Hinweis-Flag ──
-      const hintFlag = te.teHinweis
-        ? `<div class="tc-hint-flag" title="${esc(te.teHinweis)}">⚠</div>`
-        : '';
-
-      return /* html */`
-        <div class="te-card s-${esc(status)}" data-te="${esc(te.te)}" role="button" tabindex="0"
-             aria-label="TE ${esc(te.te)}, Status: ${esc(badgeLabel)}">
-          ${hintFlag}
-          <div class="tc-header">
-            <div class="tc-meta">
-              <div class="tc-te-nr">${esc(te.te)}</div>
-              <div class="tc-supplier">${esc(te.lieferantName ?? '–')}</div>
-            </div>
-            <span class="tc-badge badge-${esc(status)}">${esc(badgeLabel)}</span>
-            ${te.tor ? `<span class="tor-badge-card">${esc(te.tor)}</span>` : ''}
-          </div>
-          <div class="tc-progress">${schritte}</div>
-          <div class="tc-footer">
-            ${this._lsBadgeHTML(te.ladestelle ?? 'Landverkehr')}
-            ${anzahlProdukte > 0
-              ? `<span class="tc-info"><span class="tc-info-icon">📦</span>${anzahlProdukte} Produkt${anzahlProdukte !== 1 ? 'e' : ''}</span>`
-              : ''}
-            ${halleText !== '–'
-              ? `<span class="tc-info"><span class="tc-info-icon">🏭</span>H ${esc(halleText)}</span>`
-              : ''}
-            ${zeitText
-              ? `<span class="tc-info"><span class="tc-info-icon">🕐</span>${esc(zeitText)}</span>`
-              : ''}
-            ${deltaHTML}
-          </div>
-        </div>
-      `;
-    }
-
-    // ── Render: Detail ───────────────────────────────────────────────────
-
-    _renderDetail(teNr) {
-      this._activeTE = teNr;
-      const te = this._teMap.get(teNr);
-      const content = this._$('detail-content');
-      if (!te || !content) return;
-
-      content.innerHTML = this._detailHTML(te);
-      this._switchView('detail');
-    }
-
-    // Baut das komplette HTML für den Detail-View einer TE
-    _detailHTML(te) {
-      const status = te.status;
-      const isVerspaetet = status === 'verzögert';
-
-      // ── Header-Delta ──
-      let deltaHTML = '';
-      if (te.verzoegerungMin != null && te.verzoegerungMin > 0) {
-        deltaHTML = `<span class="dh-delta pos">${fmtDauer(te.verzoegerungMin)} Verzögerung</span>`;
-      } else if (status === 'abgefahren' || status === 'eingelagert') {
-        deltaHTML = `<span class="dh-delta neg">Pünktlich abgewickelt</span>`;
-      }
-
-      // ── Hinweis-Box ──
-      const hintHTML = te.teHinweis
-        ? `<div class="detail-hint">
-             <span class="detail-hint-icon">⚠</span>
-             <span><strong>TE-Hinweis:</strong> ${esc(te.teHinweis)}</span>
-           </div>`
-        : '';
-
-      // ── Metadaten (linke Spalte) ──
-      const metaLinks = [
-        ['Transporteinheit',  te.te],
-        ['Bestellnummer',     te.bestellnummer],
-        ['Liefernummer',      te.liefernummer],
-        ['Lieferant-Nr.',     te.lieferantNr],
-        ['Transportmittel',   te.transportmittel],
-        ['Einlagerungshalle', te.halle ?? ([...new Set(te.produkte.map(p => p.halle).filter(Boolean))].join(' / ') || '–')],
-        ['Geplant ab',        fmtTime(te.geplantStart)],
-        ['Geplant bis',       fmtTime(te.geplantEnde)],
-      ].filter(([, v]) => v != null);
-
-      // ── Zeitdifferenzen (rechte Spalte) ──
-      const andockenMin   = diffMin(te.tsAnkunft, te.tsAngedockt);
-      const warteMin      = diffMin(te.tsAngedockt, te.tsEntladenStart);
-      const entladenMin   = diffMin(te.tsEntladenStart, te.tsEntladenEnde ?? te.tsEntladenTat);
-      const weBuchMin     = diffMin(te.tsEntladenEnde ?? te.tsEntladenTat, te.tsWeBuchung);
-      const abfahrtMin    = diffMin(te.tsWeBuchung, te.tsAbfahrt);
-      const gesamtMin     = diffMin(te.tsAnkunft, te.tsAbfahrt);
-
-      // Warte-Zeit ist kritisch wenn > VERZOEGERUNG_SCHWELLE_MIN
-      const warteKlasse = (warteMin != null && warteMin > VERZOEGERUNG_SCHWELLE_MIN) ? 'bad' : 'ok';
-
-      const zeitDiffs = [
-        ['Ankunft → Andocken',     andockenMin,  false],
-        ['Andocken → Entladestart', warteMin,    warteMin != null && warteMin > VERZOEGERUNG_SCHWELLE_MIN],
-        ['Entladen Dauer',          entladenMin, false],
-        ['Entladen → WE-Buchung',   weBuchMin,   false],
-        ['WE-Buchung → Abfahrt',    abfahrtMin,  false],
-        ['Gesamtdurchlaufzeit',     gesamtMin,   false],
-      ].filter(([, v]) => v != null);
-
-      // ── Zeitstrahl ──
-      const tlHTML = this._zeitstrahlHTML(te, isVerspaetet);
-
-      // ── Produkt-Tabelle ──
-      const prodHTML = this._produktTabelleHTML(te);
-
-      return /* html */`
-        <div class="detail-panel">
-
-          <!-- Header -->
-          <div class="detail-header">
-            <div>
-              <div class="dh-te-nr">${esc(te.te)}</div>
-              <div class="dh-supplier">${esc(te.lieferantName ?? '–')}${te.transportmittel ? ` · ${esc(te.transportmittel)}` : ''}</div>
-            </div>
-            <span class="tc-badge badge-${esc(status)}" style="margin-left:4px">${esc({
-              erwartet: 'Erwartet', ankunft: 'Eingetroffen',
-              entladen: 'Wird entladen', eingelagert: 'Eingelagert',
-              abgefahren: 'Abgefahren', 'verzögert': 'Verzögert',
-            }[status] ?? status)}</span>
-            <div class="dh-spacer"></div>
-            ${deltaHTML}
-          </div>
-
-          <!-- Body -->
-          <div class="detail-body">
-
-            ${hintHTML}
-
-            <!-- Zeitstrahl -->
-            <div class="d-section">
-              <div class="d-section-title">Prozess-Zeitstrahl</div>
-              <div class="tl-legend">
-                <div class="tl-legend-item">
-                  <div class="tl-legend-swatch" style="background:var(--c-border2);
-                    background: repeating-linear-gradient(90deg,var(--c-text3) 0,var(--c-text3) 5px,transparent 5px,transparent 10px);
-                    opacity:0.45"></div>
-                  Soll-Zeitfenster
-                </div>
-                <div class="tl-legend-item">
-                  <div class="tl-legend-swatch" style="background:var(--c-green)"></div>
-                  Pünktlich
-                </div>
-                <div class="tl-legend-item">
-                  <div class="tl-legend-swatch" style="background:var(--c-yellow)"></div>
-                  Leichte Verzögerung
-                </div>
-                <div class="tl-legend-item">
-                  <div class="tl-legend-swatch" style="background:var(--c-red)"></div>
-                  Verzögert
-                </div>
-              </div>
-              ${tlHTML}
-            </div>
-
-            <!-- Metadaten + Zeitdifferenzen -->
-            <div class="d-cols">
-              <div>
-                <div class="d-section-title">Sendungsinfo</div>
-                <div class="d-info-list">
-                  ${metaLinks.map(([k, v]) =>
-                    `<div class="d-info-row">
-                       <span class="d-info-key">${esc(k)}</span>
-                       <span class="d-info-val">${esc(v)}</span>
-                     </div>`
-                  ).join('')}
-                </div>
-              </div>
-              <div>
-                <div class="d-section-title">Zeitdifferenzen</div>
-                <div class="d-info-list">
-                  ${zeitDiffs.map(([k, v, warn]) => {
-                    const cls = warn ? 'bad' : (v != null && v > 0 ? '' : 'ok');
-                    const warnIcon = warn ? ' ⚠' : '';
-                    return `<div class="d-info-row">
-                       <span class="d-info-key">${esc(k)}</span>
-                       <span class="d-info-val ${cls}">${esc(fmtDauer(v))}${warnIcon}</span>
-                     </div>`;
-                  }).join('')}
-                </div>
-              </div>
-            </div>
-
-            <!-- Produkte -->
-            <div class="d-section">
-              <div class="d-section-title">Produkte (${te.produkte.length})</div>
-              ${prodHTML}
-            </div>
-
-          </div>
-        </div>
-      `;
-    }
-
-    // Baut den SVG-freien CSS-Zeitstrahl
-    _zeitstrahlHTML(te, isVerspaetet) {
-      // Alle Punkte mit Timestamp, Label und Soll-Referenz
-      const punkte = [
-        { ts: te.tsAnkunft,        label: 'Ankunft\nPförtner',  soll: te.geplantStart },
-        { ts: te.tsAngedockt,      label: 'Tor\nangedockt',     soll: null },
-        { ts: te.tsEntladenStart,  label: 'Entladen\ngestartet',soll: te.geplantStart },
-        { ts: te.tsEntladenEnde ?? te.tsEntladenTat,
-                                   label: 'Entladen\nbeendet',  soll: te.geplantEnde },
-        { ts: te.tsWeBuchung,      label: 'WE\ngebucht',        soll: null },
-        { ts: te.tsAbfahrt,        label: 'Abfahrt',            soll: null },
-      ];
-
-      // Zeitbereich für Positionierung bestimmen
-      // Alle vorhandenen Timestamps + Soll-Zeiten sammeln
-      const alleDaten = [
-        ...punkte.map(p => p.ts).filter(Boolean),
-        te.geplantStart, te.geplantEnde,
-      ].filter(Boolean);
-
-      if (alleDaten.length === 0) {
-        return `<div class="view-placeholder" style="min-height:80px;">Keine Zeitstempel vorhanden</div>`;
-      }
-
-      const minTs = new Date(Math.min(...alleDaten.map(d => d.getTime())));
-      const maxTs = new Date(Math.max(...alleDaten.map(d => d.getTime())));
-
-      // Etwas Puffer links und rechts
-      const pufferMs = Math.max((maxTs - minTs) * 0.08, 5 * 60000);
-      const startMs  = minTs.getTime() - pufferMs;
-      const endMs    = maxTs.getTime() + pufferMs;
-      const spanMs   = endMs - startMs;
-
-      // Prozent-Position eines Timestamps auf der Achse (0–100%)
-      const pct = (d) => d ? ((d.getTime() - startMs) / spanMs * 100).toFixed(2) : null;
-
-      // Soll-Balken
-      const sollHTML = (te.geplantStart && te.geplantEnde)
-        ? `<div class="tl-soll-bar" style="left:${pct(te.geplantStart)}%; width:${(pct(te.geplantEnde) - pct(te.geplantStart)).toFixed(2)}%"></div>`
-        : '';
-
-      // Segmente zwischen aufeinanderfolgenden vorhandenen Punkten
-      let segHTML = '';
-      const vorhandene = punkte.filter(p => p.ts !== null);
-      for (let i = 0; i < vorhandene.length - 1; i++) {
-        const a = vorhandene[i].ts;
-        const b = vorhandene[i + 1].ts;
-        const l = pct(a);
-        const w = (pct(b) - pct(a)).toFixed(2);
-        // Segment-Farbe: rot wenn Verzögerung > Schwelle zwischen Andocken und Entladestart
-        const isKritisch = isVerspaetet && i === 1; // Andocken → Entladestart
-        const cls = isKritisch ? 'bad' : 'ok';
-        segHTML += `<div class="tl-segment ${cls}" style="left:${l}%; width:${w}%"></div>`;
-      }
-
-      // Punkte mit Labels und optionalem Δ-Chip
-      let punkteHTML = '';
-      for (const p of punkte) {
-        if (!p.ts) continue;
-        const pos = pct(p.ts);
-        const dotCls = isVerspaetet && p.soll && diffMin(p.soll, p.ts) > VERZOEGERUNG_SCHWELLE_MIN
-          ? 'bad' : 'ok';
-
-        // Δ-Chip nur wenn Soll vorhanden und Abweichung > 5min
-        let chipHTML = '';
-        if (p.soll) {
-          const delta = diffMin(p.soll, p.ts);
-          if (delta != null && Math.abs(delta) > 5) {
-            const chipCls = delta > 0 ? 'pos' : 'neg';
-            chipHTML = `<div class="tl-delta-chip ${chipCls}">${fmtDauer(delta)}</div>`;
-          }
-        }
-
-        // Label mit Zeilenumbruch über \n
-        const labelLines = p.label.split('\n').map(l => `<span>${esc(l)}</span>`).join('<br>');
-
-        punkteHTML += `
-          <div class="tl-point" style="left:${pos}%">
-            ${chipHTML}
-            <div class="tl-dot ${dotCls}"></div>
-            <div class="tl-time">${fmtTime(p.ts)}</div>
-            <div class="tl-label">${labelLines}</div>
-          </div>`;
-      }
-
-      return `
-        <div class="tl-wrap">
-          <div class="tl-track">
-            <div class="tl-base"></div>
-            ${sollHTML}
-            ${segHTML}
-            ${punkteHTML}
-          </div>
-        </div>`;
-    }
-
-    // Baut die Produkt-Tabelle
-    _produktTabelleHTML(te) {
-      if (te.produkte.length === 0) {
-        return `<div class="view-placeholder" style="min-height:60px;">Keine Produktdaten</div>`;
-      }
-
-      const rows = te.produkte.map(p => {
-        const eingelagert = p.tsEinlagerung
-          ? `<span class="pt-time">${fmtTime(p.tsEinlagerung)}</span>`
-          : `<span class="pt-time open">–</span>`;
-
-        return `
-          <tr>
-            <td class="pt-nr">${esc(p.nr)}</td>
-            <td class="pt-name">${esc(p.name)}</td>
-            <td class="pt-menge">${fmtNum(p.menge)} ${esc(p.einheit)}</td>
-            <td><span class="pt-halle">${esc(p.halle || te.halle || '–')}</span></td>
-            <td>${eingelagert}</td>
-          </tr>`;
-      }).join('');
-
-      return `
-        <table class="prod-table">
-          <thead>
-            <tr>
-              <th>Produkt-Nr.</th>
-              <th>Bezeichnung</th>
-              <th style="text-align:right">Menge</th>
-              <th>Halle</th>
-              <th>Eingelagert</th>
-            </tr>
-          </thead>
-          <tbody>${rows}</tbody>
-        </table>`;
-    }
-
-    // ── Render: Gantt ────────────────────────────────────────────────────
-
-    _ganttFensterBereich() {
-      const anker = new Date(this._ganttDatum);
-      anker.setHours(0, 0, 0, 0);
-      switch (this._ganttFenster) {
-        case '3tage':
-          return { start: anker, ende: new Date(anker.getTime() + 3 * 86400000) };
-        case 'woche': {
-          const tag = anker.getDay();
-          const diff = (tag === 0 ? -6 : 1 - tag);
-          const mo = new Date(anker.getTime() + diff * 86400000);
-          return { start: mo, ende: new Date(mo.getTime() + 7 * 86400000) };
-        }
-        default: // 'tag'
-          return { start: anker, ende: new Date(anker.getTime() + 86400000) };
-      }
-    }
-
-    _ganttNavigiere(richtung) {
-      const schrittTage = { tag: 1, '3tage': 3, woche: 7 }[this._ganttFenster] ?? 1;
-      this._ganttDatum = new Date(this._ganttDatum.getTime() + richtung * schrittTage * 86400000);
-      this._renderGantt();
-    }
-
-    _renderGantt() {
-      const content = this._$('gantt-content');
-      if (!content) return;
-
-      const { start, ende } = this._ganttFensterBereich();
-
-      // Datum-Label in Steuerleiste
-      const navDate = this._$('gantt-nav-date');
-      if (navDate) {
-        const fmt = (d) => d.toLocaleDateString('de-DE', { day:'2-digit', month:'2-digit' });
-        navDate.textContent = this._ganttFenster === 'tag'
-          ? this._ganttDatum.toLocaleDateString('de-DE', { weekday:'short', day:'2-digit', month:'2-digit', year:'2-digit' })
-          : fmt(start) + ' – ' + fmt(new Date(ende.getTime() - 86400000));
-      }
-
-      const tes = [...this._teMap.values()].filter(te => {
-        const anker = te.geplantStart ?? te.tsAnkunft;
-        return anker && anker >= start && anker < ende;
-      });
-
-      if (tes.length === 0) {
-        content.innerHTML = '<div class="view-placeholder" style="min-height:200px;margin-top:0;">Keine TEs im gewählten Zeitfenster</div>';
-        return;
-      }
-
-      content.innerHTML = this._ganttHTML(tes, start, ende);
-
-      content.onclick = (e) => {
-        const bar = e.target.closest('.gantt-bar-ist[data-te]');
-        if (bar) this._renderDetail(bar.dataset.te);
-        const row = e.target.closest('.gantt-row[data-te]');
-        if (row && !bar) this._renderDetail(row.dataset.te);
-      };
-    }
-
-    _ganttHTML(tes, fensterStart, fensterEnde) {
-      const jetzt = new Date();
-
-      // ── Achse = exakt das gewählte Fenster ──
-      // Fallback falls Parameter fehlen (z.B. beim ersten Render)
-      const achseStart   = fensterStart instanceof Date ? fensterStart : new Date(jetzt.getFullYear(), jetzt.getMonth(), jetzt.getDate());
-      const achseEnde    = fensterEnde   instanceof Date ? fensterEnde  : new Date(achseStart.getTime() + 86400000);
-      const spanMs       = achseEnde.getTime() - achseStart.getTime();
-      const spanStunden  = spanMs / 3600000;
-      const tesFuerGantt = tes; // bereits von _renderGantt gefiltert
-
-      // Prozent-Position auf der Achse
-      const pct = (d) => ((d.getTime() - achseStart.getTime()) / spanMs * 100).toFixed(3);
-
-      // ── Adaptive Ticks ──
-      // < 24h  → 1h-Ticks mit Uhrzeit
-      // 24–72h → 2h-Ticks mit Uhrzeit
-      // > 72h  → 6h-Ticks mit Datum+Uhrzeit
-      let tickIntervallH, tickFormat;
-      if (spanStunden <= 24) {
-        tickIntervallH = 1;
-        tickFormat = (d) => fmtTime(d);
-      } else if (spanStunden <= 72) {
-        tickIntervallH = 2;
-        tickFormat = (d) => fmtTime(d);
-      } else {
-        tickIntervallH = 6;
-        tickFormat = (d) => {
-          const tag  = d.toLocaleDateString('de-DE', { day:'2-digit', month:'2-digit' });
-          const zeit = fmtTime(d);
-          return d.getHours() === 0 ? tag : zeit;
-        };
-      }
-
-      const ticks = [];
-      const tickStart = new Date(achseStart);
-      while (tickStart <= achseEnde) {
-        // Nur Ticks die auf das Intervall passen
-        if (tickStart.getHours() % tickIntervallH === 0) {
-          ticks.push(new Date(tickStart));
-        }
-        tickStart.setTime(tickStart.getTime() + 3600000); // +1h
-      }
-
-      const ticksHTML = ticks.map(t =>
-        `<div class="gantt-tick" style="left:${pct(t)}%">
-           <div class="gantt-tick-line"></div>
-           <div class="gantt-tick-label">${esc(tickFormat(t))}</div>
-         </div>`
-      ).join('');
-
-      // Vertikale Gitterlinien — nur bei Haupt-Ticks
-      const gridLines = ticks.map(t =>
-        `<div class="gantt-grid-line" style="left:${pct(t)}%"></div>`
-      ).join('');
-
-      // Jetzt-Linie (nur wenn im Zeitbereich)
-      const jetztInRange = jetzt >= achseStart && jetzt <= achseEnde;
-      const nowLineHTML  = jetztInRange
-        ? `<div class="gantt-now-line" style="left:${pct(jetzt)}%">
-             <div class="gantt-now-label">JETZT</div>
-           </div>`
-        : '';
-
-      // ── Zeilen nach Ladestelle gruppiert ──
-      const LS_ORDER = ['BSL', 'Container', 'Landverkehr'];
-      const LS_META  = {
-        BSL:         { icon: '🚛', col: 'rgba(142,68,173,0.85)', dauer: '4–8h'     },
-        Container:   { icon: '🏗', col: 'rgba(230,126,34,0.85)', dauer: '2–4h'     },
-        Landverkehr: { icon: '🚚', col: 'rgba(39,174,96,0.85)',  dauer: '30–90min' },
-      };
-      const byLS = {};
-      for (const te of tesFuerGantt) {
-        const ls = te.ladestelle ?? 'Landverkehr';
-        if (!byLS[ls]) byLS[ls] = [];
-        byLS[ls].push(te);
-      }
-      const zeilenHTML = LS_ORDER
-        .filter(ls => byLS[ls]?.length > 0)
-        .map(ls => {
-          const m  = LS_META[ls];
-          const gr = byLS[ls];
-          const vz = gr.filter(t => t.status === 'verzögert').length;
-          const gh = `<div class="gantt-group-header">
-            <div class="gantt-group-accent" style="background:${m.col}"></div>
-            <span class="gantt-group-title" style="color:${m.col}">${m.icon} ${ls}</span>
-            <span class="gantt-group-count">${gr.length} TE${gr.length !== 1 ? 's' : ''}</span>
-            ${vz ? `<span class="gantt-group-count" style="background:var(--c-red-dim);color:#e74c3c">${vz} verzögert</span>` : ''}
-            <div style="flex:1"></div>
-            <span style="font-family:var(--font-mono);font-size:9px;color:var(--c-text3)">Ø ${m.dauer}</span>
-          </div>`;
-          return gh + gr.map(te => this._ganttZeileHTML(te, pct, achseStart, achseEnde, gridLines, nowLineHTML)).join('');
-        }).join('');
-
-      return `
-        <div class="gantt-wrap">
-          <div class="gantt-inner">
-
-            <!-- Kopfzeile mit Uhrzeiten -->
-            <div class="gantt-head">
-              <div class="gantt-label-col">Transporteinheit</div>
-              <div class="gantt-axis">${ticksHTML}</div>
-            </div>
-
-            <!-- Datenzeilen (nach Ladestelle gruppiert) -->
-            ${zeilenHTML}
-
-            <!-- Legende -->
-            <div class="gantt-legend">
-              <div class="gantt-legend-item">
-                <div class="gantt-legend-swatch"
-                  style="background:var(--c-bg4);border:1px solid var(--c-border2)"></div>
-                Geplantes Zeitfenster
-              </div>
-              <div class="gantt-legend-item">
-                <div class="gantt-legend-swatch" style="background:var(--c-green)"></div>
-                Pünktlich
-              </div>
-              <div class="gantt-legend-item">
-                <div class="gantt-legend-swatch" style="background:var(--c-yellow)"></div>
-                Leichte Verzögerung
-              </div>
-              <div class="gantt-legend-item">
-                <div class="gantt-legend-swatch" style="background:var(--c-red)"></div>
-                Stark verzögert
-              </div>
-            </div>
-
-          </div>
-        </div>`;
-    }
-
-    // Baut eine einzelne Gantt-Zeile für eine TE
-    _ganttZeileHTML(te, pct, achseStart, achseEnde, gridLines, nowLineHTML) {
-
-      // ── Soll-Balken ──
-      let sollHTML = '';
-      if (te.geplantStart && te.geplantEnde) {
-        const l = pct(te.geplantStart);
-        const w = (pct(te.geplantEnde) - parseFloat(l)).toFixed(3);
-        if (parseFloat(w) > 0) {
-          sollHTML = `<div class="gantt-bar-soll" style="left:${l}%;width:${w}%"
-            title="Geplant: ${fmtTime(te.geplantStart)}–${fmtTime(te.geplantEnde)}"></div>`;
-        }
-      }
-
-      // ── Ist-Balken ──
-      // Startpunkt: frühester vorhandener Timestamp
-      // Endpunkt: Abfahrt → WE-Buchung → Entladen-Ende → Jetzt (wenn noch aktiv)
-      let istStart = te.tsAnkunft ?? te.tsAngedockt ?? te.tsEntladenStart;
-      let istEnde  = te.tsAbfahrt ?? te.tsWeBuchung ??
-                     (te.tsEntladenEnde ?? te.tsEntladenTat) ?? null;
-
-      // Wenn TE noch aktiv und kein Ende: bis Jetzt darstellen (gestrichelt wäre schöner,
-      // aber CSS-only — stattdessen leicht transparent machen via dim-Klasse)
-      const istLaufend = istStart && !te.tsAbfahrt;
-      if (istLaufend && !istEnde) istEnde = new Date();
-
-      let istHTML = '';
-      let labelHTML = '';
-      if (istStart && istEnde) {
-        // Abschneiden wenn außerhalb der Achse
-        const clampedStart = new Date(Math.max(istStart.getTime(), achseStart.getTime()));
-        const clampedEnde  = new Date(Math.min(istEnde.getTime(),  achseEnde.getTime()));
-        const l = pct(clampedStart);
-        const w = (pct(clampedEnde) - parseFloat(l)).toFixed(3);
-
-        if (parseFloat(w) > 0) {
-          // Farbe basierend auf Verzögerung
-          let cls = 'ok';
-          if (te.verzoegerungMin != null) {
-            if (te.verzoegerungMin >= VERZOEGERUNG_SCHWELLE_MIN * 2) cls = 'bad';
-            else if (te.verzoegerungMin >= VERZOEGERUNG_SCHWELLE_MIN) cls = 'mild';
-          }
-          if (te.status === 'abgefahren') cls = 'dim';
-
-          const tooltip = `${esc(te.te)}: ${fmtTime(istStart)}–${fmtTime(istEnde)}` +
-            (te.verzoegerungMin ? ` · ${fmtDauer(te.verzoegerungMin)} Verzögerung` : '');
-
-          istHTML = `<div class="gantt-bar-ist ${cls}" data-te="${esc(te.te)}"
-            style="left:${l}%;width:${w}%"
-            title="${tooltip}"></div>`;
-
-          // Balken-Label: TE-Nummer + Zeiten wenn breit genug
-          const breiteProzent = parseFloat(w);
-          if (breiteProzent > 4) {
-            const labelText = breiteProzent > 8
-              ? `${fmtTime(istStart)}–${fmtTime(istEnde)}`
-              : fmtTime(istStart);
-            labelHTML = `<div class="gantt-bar-label"
-              style="left:${l}%;width:${w}%">${esc(labelText)}</div>`;
-          }
-        }
-      }
-
-      return `
-        <div class="gantt-row" data-te="${esc(te.te)}"
-             role="button" tabindex="0"
-             aria-label="TE ${esc(te.te)}, ${esc(te.lieferantName ?? '')}">
-          <div class="gantt-row-label">
-            <div class="gantt-row-te">${esc(te.te)}</div>
-            <div class="gantt-row-supplier">
-              ${te.tor ? `<span style="font-family:var(--font-mono);font-size:9px;font-weight:700;color:var(--c-text3);background:var(--c-bg4);border:1px solid var(--c-border2);border-radius:3px;padding:1px 4px">${esc(te.tor)}</span>` : ''}
-              ${esc(te.lieferantName ?? '–')}
-            </div>
-          </div>
-          <div class="gantt-bars">
-            ${gridLines}
-            ${nowLineHTML}
-            ${sollHTML}
-            ${istHTML}
-            ${labelHTML}
-          </div>
-        </div>`;
-    }
-
-    // ── Render: Tore (Hallen-Accordion, Engpass-priorisiert) ──────────────
-
-    _renderTore() {
-      const content = this._$('tore-content');
-      if (!content) return;
-
-      const tes = [...this._teMap.values()];
-
-      // Tor-Belegung aus TEs ableiten (nur aktive TEs belegen ein Tor)
-      const torBelegung = new Map(); // torNr → TE
-      for (const te of tes) {
-        if (te.tor && !['abgefahren', 'erwartet'].includes(te.status)) {
-          torBelegung.set(String(te.tor), te);
-        }
-      }
-
-      // Hallen aus TOR_HALLE_MAP — alle bekannten Hallen, nicht nur aus den Daten
-      // Pro Halle: TEs die an einem ihrer Tore hängen
-      const hallenData = HALLEN_REIHENFOLGE.map(h => {
-        const toreDieserHalle = new Set(HALLE_TORE_MAP[h] || []);
-        const teInHalle = tes.filter(te => {
-          // TE ist dieser Halle zugeordnet wenn: eigenes Tor, eigene Halle, oder Produkt-Halle
-          if (te.tor && toreDieserHalle.has(te.tor)) return true;
-          if (te.halle === h) return true;
-          return te.produkte.some(p => p.halle === h);
-        });
-        const belegt = teInHalle.filter(te => !['abgefahren', 'erwartet'].includes(te.status));
-        const verz   = teInHalle.filter(te => te.status === 'verzögert');
-        // Tore dieser Halle mit Belegungsstatus
-        const torStatus = [...toreDieserHalle].map(tor => {
-          const belegteTE = belegt.find(te => te.tor === tor);
-          return { tor, te: belegteTE || null };
-        });
-        return { halle: h, teInHalle, belegt, verz, anzahl: teInHalle.length, torStatus };
-      }).filter(h => h.teInHalle.length > 0 || h.torStatus.length > 0);
-
-      // ENGPASS-PRIORISIERUNG: Hallen mit Verzögerungen zuerst
-      hallenData.sort((a, b) => {
-        if (b.verz.length !== a.verz.length) return b.verz.length - a.verz.length;
-        return b.belegt.length - a.belegt.length;
-      });
-
-      // Engpass-Banner
-      const totalVerz = hallenData.reduce((s, h) => s + h.verz.length, 0);
-      let bannerHTML = '';
-      if (totalVerz > 0) {
-        const engpassHallen = hallenData.filter(h => h.verz.length > 0)
-          .map(h => 'Halle ' + h.halle).join(', ');
-        bannerHTML = `<div class="engpass-banner">
-          <span class="engpass-icon">⚠</span>
-          <span class="engpass-text"><strong>${totalVerz} verzögerte TE${totalVerz !== 1 ? 's' : ''}</strong> in ${esc(engpassHallen)} — Engpass-Hallen zuerst</span>
-        </div>`;
-      }
-
-      // Hallen-Sektionen
-      const sektionen = hallenData.map(h => {
-        const auslastung = h.anzahl > 0 ? Math.round(h.belegt.length / h.anzahl * 100) : 0;
-
-        let headerCls = 'halle-header';
-        if (h.verz.length > 0) headerCls += ' engpass';
-        else if (auslastung >= 80) headerCls += ' voll';
-
-        // Freie Tore: alle Tore dieser Halle die keine aktive TE haben
-        const belegteTorenummern = new Set(h.belegt.map(te => te.tor).filter(Boolean));
-        const alleTorenummern    = HALLE_TORE_MAP[h.halle] ?? [];
-        const freie              = alleTorenummern.filter(tor => !belegteTorenummern.has(tor));
-        const freieToreAnzahl    = freie.length;
-
-        const freieToreHTML = freie.length > 0 ? `
-          <div class="frei-tore-wrap" id="frei-${esc(h.halle)}">
-            <span class="frei-tore-label">${freie.length} freie Tore</span>
-            <div class="frei-tore-strip">
-              ${freie.map(tor => `<span class="frei-tor-tag">${esc(tor)}</span>`).join('')}
-            </div>
-          </div>` : '';
-
-        // Tor-Karten für belegte TEs
-        const torKarten = h.belegt.map(te => this._torKarteHTML(te)).join('');
-
-        return `<div class="halle-section">
-          <div class="${headerCls}" data-halle="${esc(h.halle)}">
-            <span class="h-toggle">▶</span>
-            <span class="h-num">Halle ${esc(h.halle)}</span>
-            <div class="h-stats">
-              <span class="hs-b">${h.belegt.length} aktiv</span>
-              <span class="hs-f">${(HALLE_TORE_MAP[h.halle]||[]).length} Tore</span>
-              ${h.verz.length > 0 ? `<span class="hs-v">${h.verz.length} ⚠</span>` : ''}
-            </div>
-            <div class="h-sep"></div>
-            <span class="h-util-pct">${auslastung}%</span>
-            ${freieToreAnzahl > 0 ? `
-            <button class="frei-toggle-btn" data-halle="${esc(h.halle)}" title="Freie Tore ein-/ausblenden">
-              <span>○</span> ${freieToreAnzahl} frei
-            </button>` : ''}
-          </div>
-          <div class="halle-body">
-            ${torKarten || '<div style="grid-column:1/-1;padding:12px;font-family:var(--font-mono);font-size:10px;color:var(--c-text3)">Keine aktiven TEs</div>'}
-            ${freieToreHTML}
-          </div>
-        </div>`;
-      }).join('');
-
-      content.innerHTML = bannerHTML + sektionen;
-
-      // Accordion-Toggle + Frei-Toggle + Klick auf Tor-Karte
-      content.onclick = (e) => {
-        // Frei-Tore-Toggle — vor Accordion prüfen damit Button-Klick
-        // nicht den Accordion des Eltern-Headers auslöst
-        const freiBtn = e.target.closest('.frei-toggle-btn');
-        if (freiBtn) {
-          e.stopPropagation();
-          const halle = freiBtn.dataset.halle;
-          const wrap  = this._shadow.getElementById('frei-' + halle);
-          if (wrap) {
-            const isVisible = wrap.classList.toggle('visible');
-            freiBtn.classList.toggle('active', isVisible);
-            freiBtn.querySelector('span').textContent = isVisible ? '●' : '○';
-          }
-          return;
-        }
-
-        // Accordion-Toggle
-        const header = e.target.closest('.halle-header');
-        if (header) {
-          const section = header.closest('.halle-section');
-          const body    = section?.querySelector('.halle-body');
-          const toggle  = header.querySelector('.h-toggle');
-          if (body)   body.classList.toggle('open');
-          if (toggle) toggle.classList.toggle('open');
-          return;
-        }
-
-        // Klick auf Tor-Karte → Detail
-        const karte = e.target.closest('.tor-karte[data-te]');
-        if (karte) this._renderDetail(karte.dataset.te);
-      };
-    }
-
-    // Baut eine Tor-Karte für die Hallen-Ansicht
-    _torKarteHTML(te) {
-      const isV = te.status === 'verzögert';
-
-      // Restzeit-Schätzung (Platzhalter-Logik bis echte Sollwerte vorliegen)
-      let restzeit, rzCls;
-      if (te.status === 'eingelagert') {
-        restzeit = 'fertig'; rzCls = 'rz-ok';
-      } else if (isV) {
-        restzeit = '⚠ offen'; rzCls = 'rz-bad';
-      } else {
-        restzeit = 'läuft'; rzCls = 'rz-ok';
-      }
-
-      // Fortschritt (5 Stufen)
-      const fp = { ankunft: 1, entladen: 3, eingelagert: 5, 'verzögert': 2 }[te.status] || 0;
-      const steps = [0,1,2,3,4].map(i => {
-        let cls = 'tc2-step';
-        if (i < fp) cls += isV ? ' late' : ' done';
-        else if (i === fp) cls += ' act';
-        return `<div class="${cls}"></div>`;
-      }).join('');
-
-      const torLabel = te.tor ? 'T' + String(te.tor).padStart(3, '0') : '–';
-
-      return `<div class="tor-karte t-${esc(te.status)}" data-te="${esc(te.te)}">
-        <div class="tc2-top">
-          <span class="tc2-num">${esc(torLabel)}</span>
-          <span class="tc2-dot dot-${esc(te.status)}"></span>
-          <span class="tc2-te">${esc(te.te)}</span>
-          <span class="tc2-restzeit ${rzCls}">${restzeit}</span>
-        </div>
-        <div class="tc2-steps">${steps}</div>
-        <div class="tc2-bottom">
-          <span class="tc2-sup">${esc(te.lieferantName ?? '–')}</span>
-          <span class="tc2-info">📦 ${te.produkte.length}</span>
-        </div>
-      </div>`;
-    }
-
-    // ── Haupt-Render ─────────────────────────────────────────────────────
-
+    /* ================================================================= */
     _render() {
-      this._hideLoading();
+      var data = this._data();
+      var rows = data.rows, flaeche = data.flaeche;
+      var fils = Array.from(new Set(rows.map(function (r) { return r.fil; }))).sort();
+      if (!fils.length) { this._root.innerHTML = '<p style="color:#5C6B7A">Keine Daten gebunden.</p>'; return; }
+      if (!this._state.fil || fils.indexOf(this._state.fil) < 0) this._state.fil = fils[0];
+      var sel = this._state.fil;
 
-      if (this._teMap.size === 0) {
-        this._showEmpty();
-        return;
-      }
-
-      this._updateKPIs();
-      this._renderKacheln();
-      this._renderGantt();
-    }
-
-    // ── SAC DataSource-Setter ─────────────────────────────────────────────
-    //   Einstiegspunkt für BW-Datenbindung — SAC ruft diesen auf sobald
-    //   neue Daten verfügbar sind
-
-    set myDataSource(dataBinding) {
-      this._dataBinding = dataBinding;
-
-      if (!dataBinding || dataBinding.state !== 'success') {
-        this._showLoading();
-        return;
-      }
-
-      const rows = dataBinding.data ?? [];
-      console.info(`[WE-Tracker] myDataSource: ${rows.length} Rows empfangen`);
-
-      this._teMap = parseRows(rows);
-      console.info(`[WE-Tracker] ${this._teMap.size} TEs geparst`);
-
-      this._render();
-    }
-
-    // ── Public API (aufrufbar via SAC-Script) ─────────────────────────────
-
-    refreshData() {
-      if (this._dataBinding) {
-        this.myDataSource = this._dataBinding;
-      }
-    }
-
-    setTheme(theme) {
-      if (theme === 'dark' || theme === 'light') {
-        this._theme = theme;
-        this._applyTheme();
-      }
-    }
-
-    setView(view) {
-      if (['kacheln', 'detail', 'gantt'].includes(view)) {
-        this._switchView(view);
-      }
-    }
-
-    setStatusFilter(status) {
-      this._activeFilter = status;
-      this._shadow.querySelectorAll('.filter-chip').forEach(chip => {
-        chip.classList.toggle('active', chip.dataset.filter === status);
+      /* Treiber je Filiale + Netz */
+      var perFil = {};
+      fils.forEach(function (f) {
+        perFil[f] = drivers(rows.filter(function (r) { return r.fil === f; }), flaeche[f]);
       });
-      this._renderKacheln();
+      var net = drivers(rows, null);
+      // Netz-Benchmark je Treiber = Durchschnitt der Filialwerte (oder Bestwert)
+      var bench = {};
+      Object.keys(DRV).forEach(function (k) {
+        var vals = fils.map(function (f) { return perFil[f][k]; });
+        if (this._state.bench === "best") {
+          bench[k] = DRV[k].better > 0 ? Math.max.apply(null, vals) : Math.min.apply(null, vals);
+        } else {
+          bench[k] = vals.reduce(function (a, b) { return a + b; }, 0) / vals.length;
+        }
+      }.bind(this));
+
+      var D = perFil[sel];
+      var dev = function (k) { return bench[k] ? (D[k] / bench[k] - 1) * 100 : 0; };
+
+      /* ---------- HTML zusammensetzen ---------- */
+      var H = "";
+      H += this._header(fils, sel);
+      H += this._kpis(D, dev);
+      H += this._treeCard(D, bench, dev);
+      H += '<div class="grid2">';
+      H +=   this._befundCard(sel, D, bench, dev, perFil, rows, fils);
+      H +=   this._drillCard(sel, rows, flaeche, bench);
+      H += '</div>';
+      H += '<p class="foot">Werttreiber: Umsatz = Bons \u00D7 Bonwert; Bonwert = Artikel/Bon \u00D7 St\u00FCckpreis. ' +
+           'Benchmark = ' + (this._state.bench === "best" ? "Bestwert im Filialnetz" : "\u00D8 Filialnetz") + '. ' +
+           'Abweichungen > \u00B15 % werden farbig markiert.' +
+           (this._live ? '' : '<span class="src">Demo-Daten</span>') + '</p>';
+
+      this._root.innerHTML = H;
     }
 
-    setHalleFilter(halle) {
-      this._halleFilter = halle || null;
-      this._renderKacheln();
+    _header(fils, sel) {
+      var chips = '<div class="seg">' +
+        '<button data-act="fil" data-val="' + sel + '" class="on">' + sel + '</button>';
+      var others = fils.filter(function (f) { return f !== sel; });
+      others.forEach(function (f) { chips += '<button data-act="fil" data-val="' + f + '">' + f + '</button>'; });
+      chips += '</div>';
+      var benchSeg = '<div class="seg">' +
+        '<button data-act="bench" data-val="avg"' + (this._state.bench==="avg"?' class="on"':'') + '>\u00D8 Netz</button>' +
+        '<button data-act="bench" data-val="best"' + (this._state.bench==="best"?' class="on"':'') + '>Bestwert</button>' +
+        '</div>';
+      return '<div class="hd">' +
+        '<div><h1>Werttreiberbaum Filialumsatz</h1>' +
+        '<p class="sub">Wo entsteht der Umsatzunterschied \u2013 und was tun? Filiale ' + sel + ' im Vergleich.</p></div>' +
+        '<div class="spacer"></div>' +
+        '<div><span class="lbl">Filiale</span>' + chips + '</div>' +
+        '<div><span class="lbl">Vergleich</span>' + benchSeg + '</div>' +
+        '</div>';
+    }
+
+    _kpiCard(lbl, valStr, bmStr, devPct, better) {
+      var st = status(devPct, better);
+      return '<div class="kpi ' + st + '"><span class="k-edge"></span>' +
+        '<div class="k-lbl">' + lbl + '</div>' +
+        '<div class="k-val tab">' + valStr + '</div>' +
+        '<div class="k-bm tab">' + bmStr + ' &middot; <span class="pill ' + st + '">' + signPct(devPct) + '</span></div>' +
+        '</div>';
+    }
+    _kpis(D, dev) {
+      var H = '<div class="kpis">';
+      H += this._kpiCard("Netto-Umsatz", eur(D.umsatz), "\u00D8 " + eur(this._benchVal("umsatzApprox", D)), this._umsatzDev(D), 1);
+      H += this._kpiCard("Umsatz je qm", D.upqm?eur2(D.upqm):"\u2013", "\u00D8 " + eur2(this._netAvg("upqm")), dev("upqm"), 1);
+      H += this._kpiCard("Rabattquote", pct(D.rabq,1), "\u00D8 " + pct(this._netAvg("rabq"),1), dev("rabq"), -1);
+      H += this._kpiCard("Retourenquote", D._raw.tx?pct(D.retq,1):"\u2013", "\u00D8 " + pct(this._netAvg("retq"),1), dev("retq"), -1);
+      H += '</div>';
+      return H;
+    }
+
+    /* Werttreiber-Baum */
+    _treeCard(D, bench, dev) {
+      var self = this;
+      function node(key, opts) {
+        opts = opts || {};
+        var d = dev(key), st = status(d, DRV[key].better);
+        var w = Math.max(6, Math.min(100, 50 + d * (DRV[key].better) * 1.1));
+        var col = st==="pos"?"var(--pos)":st==="neg"?"var(--neg)":"var(--faint)";
+        var cls = "node" + (self._state.driver===key?" sel":"") + (opts.root?" root":"") + (opts.eng?" eng":"");
+        var bm = opts.root ? "" : '<div class="n-bm tab">\u00D8 ' + DRV[key].fmt(bench[key]) + ' &middot; ' + signPct(d) + '</div>';
+        var bar = opts.root ? "" : '<div class="n-bar"><i style="width:'+w+'%;background:'+col+'"></i></div>';
+        var dot = opts.root ? "" : '<span class="dot ' + st + '"></span>';
+        return '<div class="' + cls + '" data-act="driver" data-val="' + key + '">' +
+          '<div class="n-lbl">' + dot + (opts.lbl||DRV[key].label) + '</div>' +
+          '<div class="n-val tab">' + opts.valStr + '</div>' + bm + bar + '</div>';
+      }
+      var rootNode =
+        '<div class="node root" data-act="driver" data-val="bonwert">' +
+        '<div class="n-lbl">Netto-Umsatz</div>' +
+        '<div class="n-val tab">' + eur(D.umsatz) + '</div>' +
+        '<div class="n-bm tab">' + num(D.bons,0) + ' Bons \u00D7 ' + eur2(D.bonwert) + '</div></div>';
+
+      // Engpass bestimmen (multiplikative Faktoren Bons/ArtBon/Stueck)
+      var eng = this._bottleneck(dev);
+
+      var H = '<div class="card"><h2>Werttreiber-Zerlegung</h2>' +
+        '<p class="hint">Klicken Sie einen Treiber an, um ihn unten nach Dimension aufzuschl\u00FCsseln.</p>' +
+        '<div class="tree">' +
+        '<div class="col">' + rootNode + '</div>' +
+        '<div class="op">=</div>' +
+        '<div class="col">' + node("bons",{ valStr:num(D.bons,0), eng:eng==="bons" }) + '</div>' +
+        '<div class="op">\u00D7</div>' +
+        '<div class="col">' +
+            node("bonwert",{ valStr:eur2(D.bonwert), eng:eng==="bonwert" }) +
+        '</div>' +
+        '<div class="op">\u21B3</div>' +
+        '<div class="col">' +
+            node("artbon",{ valStr:num(D.artbon,1), eng:eng==="artbon" }) +
+            node("stueck",{ valStr:eur2(D.stueck), eng:eng==="stueck" }) +
+        '</div>' +
+        '</div></div>';
+      return H;
+    }
+
+    /* ---- Hilfen Benchmark/Netz ---- */
+    _allFilDrivers() {
+      var data = this._data(), rows = data.rows;
+      var fils = Array.from(new Set(rows.map(function (r){return r.fil;})));
+      var m = {};
+      fils.forEach(function (f){ m[f] = drivers(rows.filter(function(r){return r.fil===f;}), data.flaeche[f]); });
+      return m;
+    }
+    _netAvg(k) {
+      var m = this._allFilDrivers(), ks = Object.keys(m);
+      return ks.reduce(function (a,f){ return a + m[f][k]; }, 0) / ks.length;
+    }
+    _benchVal() { var m=this._allFilDrivers(),ks=Object.keys(m); return ks.reduce(function(a,f){return a+m[f].umsatz;},0)/ks.length; }
+    _umsatzDev(D){ var avg=this._benchVal(); return avg?(D.umsatz/avg-1)*100:0; }
+
+    /* ---- Engpass-Treiber: groesster negativer multiplikativer Beitrag ---- */
+    _bottleneck(dev) {
+      var cand = ["bons","artbon","stueck"];
+      var worst=null, wv=Infinity;
+      cand.forEach(function (k){
+        var d = dev(k); // better=+1 fuer alle drei
+        if (d < wv) { wv = d; worst = k; }
+      });
+      // Engpass nur markieren, wenn wirklich Rueckstand
+      if (wv < -5) {
+        // wenn artbon der Engpass ist, faellt das auch auf bonwert -> zeige spezifischer
+        return worst;
+      }
+      return null;
+    }
+
+    /* ================= BEFUND + MASSNAHMEN ================= */
+    _befundCard(sel, D, bench, dev, perFil, rows, fils) {
+      var eng = this._bottleneck(dev);
+      var uDev = this._umsatzDev(D);
+
+      /* Kontext: Kundenmix & schwaechste Warenkategorie der Filiale */
+      var ctx = this._context(sel, rows, fils);
+
+      /* Befundtext */
+      var lead;
+      if (eng) {
+        lead = 'Filiale <b>' + sel + '</b> liegt mit <b>' + eur(D.umsatz) + '</b> Netto-Umsatz ' +
+          (uDev<0? ('<b>'+signPct(uDev)+'</b> unter') : ('<b>'+signPct(uDev)+'</b> \u00FCber') ) +
+          ' dem ' + (this._state.bench==="best"?"Bestwert":"Filialnetz-\u00D8") + '. ' +
+          'Haupthebel ist <b>' + DRV[eng].label + '</b> (' + DRV[eng].fmt(D[eng]) +
+          ' vs. \u00D8 ' + DRV[eng].fmt(bench[eng]) + ', ' + signPct(dev(eng)) + ').';
+      } else if (uDev >= 0) {
+        lead = 'Filiale <b>' + sel + '</b> liegt mit <b>' + eur(D.umsatz) + '</b> <b>' + signPct(uDev) +
+          '</b> \u00FCber dem Vergleich \u2013 kein struktureller Engpass in der Mengen-/Preiskette. ' +
+          'Fokus auf Absicherung der St\u00E4rken und Margenqualit\u00E4t.';
+      } else {
+        lead = 'Filiale <b>' + sel + '</b> liegt <b>' + signPct(uDev) + '</b> unter Vergleich; ' +
+          'die Treiber sind ausgeglichen \u2013 Ansatzpunkte eher in Marge (Rabatt) und Retouren.';
+      }
+
+      var find = '<div class="finding"><div class="ic">i</div><p>' + lead + '</p></div>';
+
+      /* Massnahmen nach Engpass + Sekundaerflags */
+      var ms = this._measures(eng, dev, D, bench, ctx);
+      var mhtml = "";
+      ms.forEach(function (m, i) {
+        mhtml += '<div class="measure"><div class="m-top"><span class="m-no">M' + (i+1) + '</span>' +
+          '<span class="m-ttl">' + m.t + '</span></div>' +
+          '<p class="m-txt">' + m.d + '</p>' +
+          '<div class="m-lev">Hebel: <b>' + m.l + '</b></div></div>';
+      });
+
+      return '<div class="card"><h2>Befund &amp; Ma\u00DFnahmen</h2>' +
+        '<p class="hint">Automatisch abgeleitet aus der Treiber-Abweichung der Filiale.</p>' +
+        find + mhtml + '</div>';
+    }
+
+    _context(sel, rows, fils) {
+      // Kundenmix-Anteil Grosskunde (Filiale vs Netz)
+      function shareGK(rs){ var g=0,t=0; rs.forEach(function(r){ t+=r.u; if(r.kt&&r.kt.indexOf("Gross")===0) g+=r.u; }); return t?g/t*100:0; }
+      var filRows = rows.filter(function(r){return r.fil===sel;});
+      var gkFil = shareGK(filRows), gkNet = shareGK(rows);
+
+      // schwaechste Warenkategorie: groesster Anteils-Rueckstand vs Netz
+      function shareByWk(rs){ var m={},t=0; rs.forEach(function(r){ m[r.wk]=(m[r.wk]||0)+r.u; t+=r.u; }); Object.keys(m).forEach(function(k){m[k]=t?m[k]/t*100:0;}); return m; }
+      var sF=shareByWk(filRows), sN=shareByWk(rows), worstWk=null, worstGap=0;
+      Object.keys(sN).forEach(function(k){ var gap=(sF[k]||0)-sN[k]; if(gap<worstGap){worstGap=gap;worstWk=k;} });
+
+      // Position mit hoechstem Bonwert (Netz) -> Personal-/Schulungshebel
+      function bwByPos(rs){ var u={},b={}; rs.forEach(function(r){ u[r.pos]=(u[r.pos]||0)+r.u; b[r.pos]=(b[r.pos]||0)+r.bons; });
+        var best=null,bv=0; Object.keys(u).forEach(function(p){ var v=b[p]?u[p]/b[p]:0; if(v>bv){bv=v;best=p;} }); return {pos:best,bonwert:bv}; }
+      var topPos = bwByPos(rows);
+
+      return { gkFil:gkFil, gkNet:gkNet, worstWk:worstWk, worstGap:worstGap, topPos:topPos };
+    }
+
+    _measures(eng, dev, D, bench, ctx) {
+      var out = [];
+      var gkLow = ctx.gkFil < ctx.gkNet - 4;
+
+      if (eng === "artbon") {
+        out.push({ t:"Cross- & Up-Selling am Bon steigern",
+          d:"Nur "+num(D.artbon,1)+" Artikel je Bon (\u00D8 "+num(bench.artbon,1)+"). Zubeh\u00F6r-Bundles, Komplement"+
+            "produkte und Kassenplatzierung (Befestigung zu Holz, Werkzeug zu Baustoffen) erh\u00F6hen die Korbgr\u00F6\u00DFe.",
+          l:"+1 Artikel/Bon \u2248 "+signPct(100/Math.max(1,D.artbon))+" Bonwert" });
+        if (gkLow) out.push({ t:"Gro\u00DFkundengesch\u00E4ft ausbauen",
+          d:"Gro\u00DFkunden tragen hier nur "+pct(ctx.gkFil,0)+" des Umsatzes (Netz "+pct(ctx.gkNet,0)+
+            "). B2B kauft gr\u00F6\u00DFere K\u00F6rbe \u2013 Handwerker-/Gewerbeansprache, Projektberatung und Rahmenvertr\u00E4ge gezielt forcieren.",
+          l:"gr\u00F6\u00DFere K\u00F6rbe \u2192 Artikel/Bon & Bonwert" });
+        out.push({ t:"Fachberatung auf der Fl\u00E4che st\u00E4rken",
+          d:"Position \u201E"+(ctx.topPos.pos||"Fachberatung")+"\u201C erzielt netzweit den h\u00F6chsten Bonwert ("+eur2(ctx.topPos.bonwert)+"). "+
+            "Beratungsdichte zu Sto\u00DFzeiten und abgeschlossene Schulungen erh\u00F6hen.",
+          l:"Beratung \u2192 mehr Artikel/Bon" });
+      } else if (eng === "stueck") {
+        out.push({ t:"Sortiments- und Preismix anheben",
+          d:"\u00D8 St\u00FCckpreis "+eur2(D.stueck)+" liegt unter \u00D8 "+eur2(bench.stueck)+
+            ". H\u00F6herwertige Linien und Markenprodukte platzieren, Einstiegsartikel nicht \u00FCberbetonen.",
+          l:"Mix \u2192 St\u00FCckpreis \u2192 Bonwert" });
+        if (ctx.worstWk) out.push({ t:"Sortimentsl\u00FCcke schlie\u00DFen: "+ctx.worstWk,
+          d:"\u201E"+ctx.worstWk+"\u201C ist hier "+signPct(ctx.worstGap)+" unter dem Netz-Umsatzanteil \u2013 Regalfl\u00E4che, Verf\u00FCgbarkeit und Zweitplatzierung pr\u00FCfen.",
+          l:"Kategorie-Mix \u2192 Umsatz" });
+      } else if (eng === "bons") {
+        out.push({ t:"Frequenz & Bonzahl erh\u00F6hen",
+          d:"Mit "+num(D.bons,0)+" Bons liegt die Filiale unter \u00D8 "+num(bench.bons,0)+
+            ". Lokale Aktionen, schwache Wochentage gezielt bewerben, \u00D6ffnungszeiten/Personalbesetzung an Sto\u00DFzeiten ausrichten.",
+          l:"mehr Transaktionen \u2192 Umsatz" });
+        out.push({ t:"Conversion am POS verbessern",
+          d:"Wartezeiten an der Kasse senken, Self-Checkout f\u00FCr Kleink\u00E4ufe, Click&Collect-Abholung pr\u00FCfen.",
+          l:"weniger Abbr\u00FCche \u2192 mehr Bons" });
+      } else {
+        out.push({ t:"St\u00E4rken absichern",
+          d:"Die Mengen-/Preiskette ist intakt. Erfolgsmuster dieser Filiale (Sortiment, Beratung, Mix) als Blaupause f\u00FCr schw\u00E4chere Standorte dokumentieren.",
+          l:"Best-Practice-Transfer" });
+      }
+
+      /* Sekundaer: Marge & Retouren immer pruefen */
+      if (dev("rabq") > 8) out.push({ t:"Rabattvergabe steuern",
+        d:"Rabattquote "+pct(D.rabq,1)+" liegt \u00FCber \u00D8 "+pct(bench.rabq,1)+
+          ". Freigabegrenzen, Mindestmargen und Konditionsregeln sch\u00FCtzen den Netto-Umsatz, ohne Volumen zu verlieren.",
+        l:"Marge \u2192 Netto-Umsatz" });
+      if (D._raw.tx && dev("retq") > 12) out.push({ t:"Retouren reduzieren",
+        d:"Retourenquote "+pct(D.retq,1)+" \u00FCber \u00D8 "+pct(bench.retq,1)+
+          ". Beratungsqualit\u00E4t, korrekte Produktauszeichnung und Mengenpr\u00FCfung bei Gro\u00DFk\u00E4ufen adressieren.",
+        l:"weniger R\u00FCckgaben \u2192 Netto-Umsatz" });
+
+      return out.slice(0, 4);
+    }
+
+    /* ================= DRILL-DOWN ================= */
+    _drillCard(sel, rows, flaeche, bench) {
+      var dimKey = this._state.drill;        // wk|kt|pos
+      var drvKey = this._state.driver;       // bonwert|artbon|...
+      var filRows = rows.filter(function (r){ return r.fil===sel; });
+
+      // gruppiere
+      var groups = {};
+      filRows.forEach(function (r){ var g=r[dimKey]||"n/a"; (groups[g]=groups[g]||[]).push(r); });
+      var items = Object.keys(groups).map(function (g){
+        var dr = drivers(groups[g], null);
+        return { name:g, dr:dr, val:dr[drvKey], umsatz:dr.umsatz };
+      });
+      // sort by umsatz desc (Beitrag), Wert je Treiber zeigen
+      items.sort(function (a,b){ return b.umsatz - a.umsatz; });
+      var maxVal = Math.max.apply(null, items.map(function(i){return Math.abs(i.val)||0;}).concat([1]));
+
+      var dseg = '<div class="seg">';
+      ["wk","kt","pos"].forEach(function (k){
+        dseg += '<button data-act="drill" data-val="'+k+'"'+(dimKey===k?' class="on"':'')+'>'+DIM[k].label+'</button>';
+      });
+      dseg += '</div>';
+
+      var drvName = DRV[drvKey] ? DRV[drvKey].label : "Bonwert";
+      var rowsHtml = "";
+      items.forEach(function (it){
+        var w = Math.max(2, Math.abs(it.val)/maxVal*100);
+        var vstr = DRV[drvKey] ? DRV[drvKey].fmt(it.val) : eur2(it.val);
+        rowsHtml += '<div class="row"><div class="r-name" title="'+it.name+'">'+it.name+'</div>' +
+          '<div class="r-track"><div class="r-fill" style="width:'+w+'%"></div></div>' +
+          '<div><div class="r-val tab">'+vstr+'</div><div class="r-sub tab">'+eur(it.umsatz)+'</div></div>' +
+          '</div>';
+      });
+
+      return '<div class="card">' +
+        '<div class="drill-head"><h2 style="margin:0">Drill-Down &middot; '+drvName+'</h2>' + dseg + '</div>' +
+        '<p class="hint">Filiale '+sel+' nach '+DIM[dimKey].label+', sortiert nach Umsatzbeitrag. Balken = '+drvName+', klein = Umsatz.</p>' +
+        rowsHtml + '</div>';
     }
   }
 
-  // Idempotente Registrierung (safe bei HMR / Doppel-Load)
-  if (!customElements.get(TAG)) {
-    customElements.define(TAG, WEEingangWidget);
+  if (!customElements.get("werttreiberbaum-widget")) {
+    customElements.define("werttreiberbaum-widget", WerttreiberBaum);
   }
-
 })();
