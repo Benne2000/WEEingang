@@ -21,6 +21,11 @@
   function num(v,d){ return v==null?"\u2014":v.toLocaleString("de-DE",{minimumFractionDigits:d||0,maximumFractionDigits:d||0}); }
   function pct(v,d){ return v==null?"\u2014":v.toLocaleString("de-DE",{minimumFractionDigits:d||1,maximumFractionDigits:d||1})+" %"; }
   function signPct(v){ if(v==null) return "\u2014"; var s=v>=0?"+":"\u2212"; return s+Math.abs(v).toLocaleString("de-DE",{maximumFractionDigits:0})+" %"; }
+  function _lerp(a,b,t){return Math.round(a+(b-a)*t);}
+  function heat(t){ t=Math.max(0,Math.min(1,t));
+    var c1=[251,229,226],c2=[255,255,255],c3=[228,241,233];
+    var c = t<0.5? c1.map(function(v,i){return _lerp(v,c2[i],t/0.5);}) : c2.map(function(v,i){return _lerp(v,c3[i],(t-0.5)/0.5);});
+    return 'rgb('+c[0]+','+c[1]+','+c[2]+')'; }
   function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c];}); }
 
   /* ---------- Rollen-Erkennung aus Metadaten-Namen ---------- */
@@ -175,6 +180,31 @@
   '.src{display:inline-block;margin-left:6px;padding:1px 6px;border-radius:5px;background:var(--warn-soft);color:var(--warn);font-weight:700;font-size:10px;}' +
   '.setup{max-width:680px;margin:8px auto;}' +
   '.code{font-family:ui-monospace,Menlo,Consolas,monospace;background:#0f1822;color:#dbe7e7;border-radius:8px;padding:10px 12px;font-size:11.5px;white-space:pre-wrap;margin-top:8px;}' +
+  '.viewseg button{padding:5px 12px;}' +
+  '.mx{width:100%;border-collapse:separate;border-spacing:0;font-size:12px;}' +
+  '.mx th,.mx td{padding:9px 10px;text-align:right;border-bottom:1px solid var(--line-2);}' +
+  '.mx th{font-size:10px;letter-spacing:.5px;text-transform:uppercase;color:var(--faint);font-weight:700;}' +
+  '.mx th:first-child,.mx td:first-child{text-align:left;}' +
+  '.mx td.lbl-c{font-weight:600;color:var(--ink);}' +
+  '.mx td.heat{font-weight:700;font-variant-numeric:tabular-nums;}' +
+  '.mx .avg{color:var(--muted);font-variant-numeric:tabular-nums;background:var(--line-2);}' +
+  '.mx th.focus{color:var(--brand-d);box-shadow:inset 0 -3px 0 var(--brand);}' +
+  '.mx td.focus{box-shadow:inset 2px 0 0 var(--brand),inset -2px 0 0 var(--brand);}' +
+  '.sb{border:1px solid var(--line);border-radius:11px;padding:11px 12px;margin-bottom:10px;}' +
+  '.sb:last-child{margin-bottom:0;}' +
+  '.sb h3{margin:0 0 6px;font-size:12.5px;font-weight:700;display:flex;align-items:center;gap:8px;}' +
+  '.sb .tag{font-size:10px;font-weight:800;color:#fff;background:var(--brand);border-radius:5px;padding:1px 7px;letter-spacing:.3px;}' +
+  '.sb .ln{display:flex;justify-content:space-between;gap:10px;font-size:11.5px;padding:2px 0;}' +
+  '.sb .ln .s{color:var(--pos);font-weight:700;} .sb .ln .w{color:var(--neg);font-weight:700;}' +
+  '.pot{display:flex;align-items:center;gap:10px;border-top:1px solid var(--line-2);padding:9px 0;}' +
+  '.pot:first-of-type{border-top:none;}' +
+  '.pot .pf{font-weight:800;font-size:12.5px;min-width:40px;color:var(--brand-d);}' +
+  '.pot .pb{flex:1;height:16px;background:var(--line-2);border-radius:5px;position:relative;overflow:hidden;}' +
+  '.pot .pb>i{position:absolute;left:0;top:0;bottom:0;background:var(--brand);opacity:.85;border-radius:5px;}' +
+  '.pot .pv{text-align:right;min-width:150px;font-variant-numeric:tabular-nums;font-size:12px;}' +
+  '.pot .pv b{color:var(--brand-d);} .pot .pv small{color:var(--faint);}' +
+  '.pottot{margin-top:10px;padding-top:10px;border-top:2px solid var(--line);display:flex;justify-content:space-between;font-weight:800;font-size:13px;}' +
+  '.pottot span:last-child{color:var(--brand-d);}' +
   '@media(max-width:820px){.kpis{grid-template-columns:repeat(2,1fr);}.grid2{grid-template-columns:1fr;}}' +
   '</style><div class="wrap" id="root"></div>';
 
@@ -187,7 +217,7 @@
       this.attachShadow({mode:"open"});
       this.shadowRoot.appendChild(tmpl.content.cloneNode(true));
       this._root=this.shadowRoot.getElementById("root");
-      this._state={fil:null,bench:"avg",drill:"wk",driver:"bonwert",thr:5};
+      this._state={fil:null,bench:"avg",drill:"wk",driver:"bonwert",thr:5,view:"single"};
       this._live=false; this._diag=null;
       this._bind();
     }
@@ -211,6 +241,7 @@
         if(a==="drill") this._state.drill=v;
         if(a==="driver"){ if(t.classList.contains("na")) return; this._state.driver=v; }
         if(a==="thr") this._state.thr=Number(v);
+        if(a==="view") this._state.view=v;
         this._render();
       }.bind(this));
     }
@@ -334,6 +365,10 @@
           : vals.reduce(function(a,b){return a+b;},0)/vals.length;
       }.bind(this));
       this._bench=bench;
+      if(this._state.view==="compare"){
+        this._root.innerHTML=this._header(fils,sel,primary,thr)+this._compareView(perFil,fils,bench,cap,thr,primary);
+        return;
+      }
 
       var D=perFil[sel];
       var dev=function(k){ return (D[k]!=null&&bench[k])? (D[k]/bench[k]-1)*100 : null; };
@@ -361,10 +396,16 @@
             '<button data-act="bench" data-val="best"'+(this._state.bench==="best"?' class="on"':'')+'>Bestwert</button></div>';
       var ths='<div class="seg">'+[3,5,8,10].map(function(x){return '<button data-act="thr" data-val="'+x+'"'+(thr===x?' class="on"':'')+'>'+x+'%</button>';}).join("")+'</div>';
       var plbl = primary==="fil"?"Filiale":(DIMLBL[primary]||"Einheit");
+      var cmp=this._state.view==="compare";
+      var vw='<div class="seg viewseg"><button data-act="view" data-val="single"'+(!cmp?' class="on"':'')+'>Einzelanalyse</button>'+
+             '<button data-act="view" data-val="compare"'+(cmp?' class="on"':'')+'>Filialvergleich</button></div>';
+      var sub=cmp?('Alle '+esc(plbl)+'n nebeneinander \u2013 St\u00E4rken, Schw\u00E4chen und Umsatzpotenziale.')
+                 :('Wo entsteht der Umsatzunterschied \u2013 und was tun? '+esc(plbl)+' '+esc(sel)+' im Vergleich.');
       return '<div class="hd"><div><h1>Werttreiberbaum Filialumsatz</h1>'+
-        '<p class="sub">Wo entsteht der Umsatzunterschied \u2013 und was tun? '+esc(plbl)+' '+esc(sel)+' im Vergleich.</p></div>'+
+        '<p class="sub">'+sub+'</p></div>'+
         '<div class="spacer"></div>'+
-        '<div><span class="lbl">'+esc(plbl)+'</span>'+chips+'</div>'+
+        '<div><span class="lbl">Ansicht</span>'+vw+'</div>'+
+        '<div><span class="lbl">'+(cmp?'Fokus':esc(plbl))+'</span>'+chips+'</div>'+
         '<div><span class="lbl">Vergleich</span>'+b+'</div>'+
         '<div><span class="lbl">Schwelle</span>'+ths+'</div></div>';
     }
@@ -374,6 +415,106 @@
         'Bonwert und Artikel je Bon ben\u00F6tigen die Anzahl der Transaktionen. Da jede Belegzeile ein Bon ist, gen\u00FCgt es, '+
         '<b>Transaktion_ID</b> im Slot <b>Transaktion</b> anzubinden \u2013 das Widget z\u00E4hlt die Zeilen. '+
         'Keine berechnete Kennzahl n\u00F6tig. Umsatz, St\u00FCckpreis und Rabattquote werden weiterhin angezeigt.</p></div>';
+    }
+
+    /* ================= FILIALVERGLEICH ================= */
+    _potential(perFil,bench,f){
+      var U=perFil[f].umsatz, best=null;
+      ["bons","artbon","stueck"].forEach(function(k){
+        var v=perFil[f][k], tg=bench[k];
+        if(v==null||tg==null||v<=0||tg<=v) return;
+        var dU=U*(tg/v-1);
+        if(!best||dU>best.dU) best={k:k,dU:dU,tg:tg,v:v};
+      });
+      return best;
+    }
+    _rankDriver(perFil,fils,f){
+      var cand=[["bonwert",1],["artbon",1],["stueck",1],["rabq",-1],["retq",-1],["upqm",1]];
+      var self=this,best=null,worst=null;
+      cand.forEach(function(c){ var k=c[0],b=c[1],v=perFil[f][k]; if(v==null) return;
+        var a=self._netAvg(k); if(!a) return; var adj=(v/a-1)*b;
+        if(!best||adj>best.adj) best={k:k,adj:adj,v:v};
+        if(!worst||adj<worst.adj) worst={k:k,adj:adj,v:v}; });
+      return {best:best,worst:worst};
+    }
+    _compareView(perFil,fils,bench,cap,thr,primary){
+      var self=this, focus=this._state.fil;
+      var benchLabel=this._state.bench==="best"?"Bestwert":"Netz-\u00D8";
+      if(fils.length<2){
+        return '<div class="card"><h2>Filialvergleich</h2><p class="hint">F\u00FCr den Vergleich werden mindestens zwei Filialen ben\u00F6tigt. Binde im Slot <b>Filiale</b> mehrere Filialen an.</p></div>';
+      }
+      // --- Matrix ---
+      var ROWS=[
+        {k:"umsatz",lbl:"Netto-Umsatz",b:1,fmt:eur},
+        {k:"bons",lbl:"Anzahl Bons",b:1,fmt:function(v){return num(v,0);}},
+        {k:"bonwert",lbl:"Bonwert",b:1,fmt:eur2},
+        {k:"artbon",lbl:"Artikel je Bon",b:1,fmt:function(v){return num(v,1);}},
+        {k:"stueck",lbl:"\u00D8 St\u00FCckpreis",b:1,fmt:eur2},
+        {k:"rabq",lbl:"Rabattquote",b:-1,fmt:function(v){return pct(v,1);}},
+        {k:"retq",lbl:"Retourenquote",b:-1,fmt:function(v){return pct(v,1);}},
+        {k:"upqm",lbl:"Umsatz / qm",b:1,fmt:eur2}
+      ];
+      var head='<tr><th>Werttreiber</th>'+fils.map(function(f){return '<th'+(f===focus?' class="focus"':'')+'>'+esc(f)+'</th>';}).join("")+'<th class="avg">\u00D8 Netz</th></tr>';
+      var body='';
+      ROWS.forEach(function(r){
+        var vals=fils.map(function(f){return perFil[f][r.k];});
+        var nn=vals.filter(function(v){return v!=null;});
+        if(!nn.length) return;
+        var mn=Math.min.apply(null,nn),mx=Math.max.apply(null,nn);
+        var avg=nn.reduce(function(a,b){return a+b;},0)/nn.length;
+        var cells=fils.map(function(f){ var v=perFil[f][r.k];
+          if(v==null) return '<td>\u2013</td>';
+          var t = mx===mn?0.5:(v-mn)/(mx-mn); if(r.b<0) t=1-t;
+          return '<td class="heat'+(f===focus?' focus':'')+'" style="background:'+heat(t)+'">'+r.fmt(v)+'</td>';
+        }).join("");
+        body+='<tr><td class="lbl-c">'+r.lbl+'</td>'+cells+'<td class="avg">'+r.fmt(avg)+'</td></tr>';
+      });
+      var matrix='<table class="mx"><thead>'+head+'</thead><tbody>'+body+'</tbody></table>';
+
+      // --- Synthese (Ableitung) ---
+      var byU=fils.slice().sort(function(a,b){return perFil[b].umsatz-perFil[a].umsatz;});
+      var lead=byU[0], lag=byU[byU.length-1];
+      var gap=perFil[lead].umsatz?(perFil[lag].umsatz/perFil[lead].umsatz-1)*100:0;
+      var levers=["bons","artbon","stueck"].map(function(k){
+        var tot=0; fils.forEach(function(f){ var v=perFil[f][k],tg=bench[k]; if(v!=null&&tg!=null&&v>0&&tg>v) tot+=perFil[f].umsatz*(tg/v-1); });
+        return {k:k,tot:tot};
+      }).filter(function(x){return x.tot>0;}).sort(function(a,b){return b.tot-a.tot;});
+      var lever=levers[0];
+      var leadTxt='Umsatzf\u00FChrer ist <b>'+esc(lead)+'</b> mit <b>'+eur(perFil[lead].umsatz)+'</b>; <b>'+esc(lag)+'</b> liegt <b>'+signPct(gap)+'</b> darunter ('+eur(perFil[lag].umsatz)+'). '+
+        (lever?('Gr\u00F6\u00DFter gemeinsamer Hebel: <b>'+DRV[lever.k].label+'</b> \u2013 br\u00E4chte man jede Filiale auf den '+benchLabel+', erg\u00E4be das rund <b>+'+eur(lever.tot)+'</b> Mehrumsatz.'):'');
+      var finding='<div class="finding"><div class="ic">\u2211</div><p>'+leadTxt+'</p></div>';
+
+      // --- Steckbriefe ---
+      var sb=fils.map(function(f){ var r=self._rankDriver(perFil,fils,f); var sx=r.best,wx=r.worst;
+        return '<div class="sb"><h3><span class="tag">'+esc(f)+'</span> Profil</h3>'+
+          '<div class="ln"><span>St\u00E4rkster Treiber</span><span class="s">'+(sx?(DRV[sx.k].label+' \u00B7 '+DRV[sx.k].fmt(sx.v)):'\u2013')+'</span></div>'+
+          '<div class="ln"><span>Schw\u00E4chster Treiber</span><span class="w">'+(wx?(DRV[wx.k].label+' \u00B7 '+DRV[wx.k].fmt(wx.v)):'\u2013')+'</span></div></div>';
+      }).join("");
+
+      // --- Potenzial ---
+      var pots=fils.map(function(f){return {f:f,p:self._potential(perFil,bench,f)};}).filter(function(x){return x.p;}).sort(function(a,b){return b.p.dU-a.p.dU;});
+      var potHtml, totP=0;
+      if(pots.length){
+        var maxP=pots[0].p.dU;
+        potHtml=pots.map(function(x){ var w=Math.max(3,x.p.dU/maxP*100); totP+=x.p.dU;
+          return '<div class="pot"><div class="pf">'+esc(x.f)+'</div><div class="pb"><i style="width:'+w+'%"></i></div>'+
+            '<div class="pv"><b>+'+eur(x.p.dU)+'</b> <small>('+signPct(x.p.dU/perFil[x.f].umsatz*100)+' \u00B7 '+DRV[x.p.k].label+')</small></div></div>';
+        }).join("");
+      } else {
+        potHtml='<p class="hint">Kein Aufholpotenzial berechenbar \u2013 binde <b>Transaktion</b> und <b>Anzahl Artikel</b>, um Bonwert-Treiber zu vergleichen.</p>';
+      }
+      var potCard='<div class="card"><h2>Umsatzpotenzial</h2>'+
+        '<p class="hint">Mehrumsatz, wenn jede Filiale ihren schw\u00E4chsten Mengen-/Preistreiber auf den '+benchLabel+' hebt (\u00FCbrige Treiber unver\u00E4ndert).</p>'+
+        potHtml+(pots.length?('<div class="pottot"><span>Gesamtpotenzial Netz</span><span>+'+eur(totP)+'</span></div>'):'')+'</div>';
+
+      return '<div class="card"><h2>Filialvergleich</h2>'+
+        '<p class="hint">Alle Filialen je Werttreiber. Farbe = relative Position (gr\u00FCn stark, rot schwach), \u00D8-Spalte = Netzmittel. Klick auf eine Filiale oben hebt ihre Spalte hervor.</p>'+
+        finding+matrix+'</div>'+
+        '<div class="grid2"><div class="card"><h2>St\u00E4rken &amp; Schw\u00E4chen</h2>'+
+        '<p class="hint">St\u00E4rkster und schw\u00E4chster Treiber je Filiale gegen\u00FCber dem Netz-\u00D8.</p>'+sb+'</div>'+
+        potCard+'</div>'+
+        '<p class="foot">Potenzial = Umsatz \u00D7 (Zielwert / Istwert \u2212 1) je schw\u00E4chstem Faktor. Benchmark: '+benchLabel+'.'+
+        (this._live?'':'<span class="src">Demo-Daten</span>')+'</p>';
     }
 
     _netAvg(k){ var f=this._fils, m=this._perFil; var v=f.map(function(x){return m[x][k];}).filter(function(x){return x!=null;}); return v.length?v.reduce(function(a,b){return a+b;},0)/v.length:null; }
