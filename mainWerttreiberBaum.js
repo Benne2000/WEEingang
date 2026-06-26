@@ -234,62 +234,66 @@
     _parseSac(ds){
       var rows=[], flaeche={}, diag={dims:[],meas:[],missing:[]};
       try{
+        // Feed-ID -> Rolle (neues Manifest: ein Feed je Feld)
+        var FEEDROLE={ filiale:"fil",warenkategorie:"wk",kundentyp:"kt",position:"pos",mitarbeiter:"mit",
+          transaktion:"txid",retoure:"retdim",region:"reg",standorttyp:"st",zahlungsart:"za",
+          wochentag:"wd",beschaeftigung:"besch",
+          umsatz_netto:"u",umsatz_brutto:"br",rabatt:"rb",anzahl_artikel:"art",verkaufsflaeche:"fl" };
         var sample=ds.data[0]||{};
-        var dKeys=Object.keys(sample).filter(function(k){return /^dimensions_\d+$/.test(k);})
-                  .sort(function(a,b){return +a.split("_")[1]-(+b.split("_")[1]);});
-        var mKeys=Object.keys(sample).filter(function(k){return /^measures_\d+$/.test(k);})
-                  .sort(function(a,b){return +a.split("_")[1]-(+b.split("_")[1]);});
         var meta=ds.metadata||{};
-        function dname(key,i){ var m=meta.dimensions&&meta.dimensions[key];
-          var t=m&&(m.description||m.name||m.id); if(t) return t;
-          var c=sample[key]; return (c&&c.description)|| ("Dimension "+(i+1)); }
-        function mname(key,i){ var src=meta.mainStructureMembers||meta.measures||{}; var m=src[key];
-          var t=m&&(m.description||m.name||m.id); if(t) return t;
-          var c=sample[key]; return (c&&c.description)|| ("Kennzahl "+(i+1)); }
+        function isMeasCell(c){ return !!(c && c.raw!==undefined && c.label===undefined); }
+        function nameFor(key){ var md=(meta.dimensions&&meta.dimensions[key])||((meta.mainStructureMembers||meta.measures||{})[key]);
+          if(md&&(md.description||md.name||md.id)) return md.description||md.name||md.id;
+          var c=sample[key]; return (c&&c.description)||key; }
+        // Spaltenplan aus allen *_<n> Keys
+        var allKeys=Object.keys(sample).filter(function(k){return /_(\d+)$/.test(k);});
+        var plan=[];
+        allKeys.forEach(function(k){
+          var m=k.match(/^(.+)_(\d+)$/); var prefix=m[1]; var c=sample[k];
+          var isMeas=isMeasCell(c); var role=null;
+          var generic=false;
+          if(FEEDROLE[prefix]!=null){ role=FEEDROLE[prefix]; }
+          else { generic=true; var nm=nameFor(k); role=isMeas?classifyMeas(nm):classifyDim(nm); } // alt: dimensions_/measures_
+          plan.push({key:k, idx:+m[2], role:role, isMeas:isMeas, generic:generic, name:nameFor(k)});
+        });
+        plan.sort(function(a,b){return a.key<b.key?-1:1;});
+        // Positions-Fallback nur fuer generische (Alt-Format) Spalten ohne erkannte Rolle
+        var measFb=["u","bons","art","br","rb","fl"], dimFb=["fil","wk","kt","pos","mit","reg","st","za","wd","besch"];
+        var usedR={}; plan.forEach(function(c){ if(c.role) usedR[c.role]=1; });
+        plan.forEach(function(c){ if(c.role||!c.generic) return; var fb=c.isMeas?measFb:dimFb;
+          for(var i=0;i<fb.length;i++){ if(!usedR[fb[i]]){ c.role=fb[i]; usedR[fb[i]]=1; break; } } });
+        plan.forEach(function(c){ if(!c.role) return;
+          if(c.isMeas) diag.meas.push({name:c.name,role:c.role,lbl:MEASLBL[c.role]||c.role});
+          else diag.dims.push({name:c.name,role:c.role,lbl:DIMLBL[c.role]||c.role}); });
 
-        // Rollen je Index bestimmen (Name -> sonst Positions-Fallback)
-        var dimFallback=["fil","wk","kt","pos","mit","reg","st","za","wd","besch"];
-        var measFallback=["u","bons","art","br","rb","fl"];
-        var dimRole=[], measRole=[], usedD={}, usedM={};
-        dKeys.forEach(function(k,i){ var nm=dname(k,i); var r=classifyDim(nm);
-          if(!r||usedD[r]){ r=null; for(var j=0;j<dimFallback.length;j++){ if(!usedD[dimFallback[j]]){ r=(classifyDim(nm)&&!usedD[classifyDim(nm)])?classifyDim(nm):dimFallback[j]; break; } } }
-          if(!r) r="d"+i; usedD[r]=1; dimRole.push(r);
-          diag.dims.push({name:nm,role:r,lbl:DIMLBL[r]||r}); });
-        measRole=[]; mKeys.forEach(function(k,i){ var nm=mname(k,i); var r=classifyMeas(nm);
-          if(!r||usedM[r]){ for(var j=0;j<measFallback.length;j++){ if(!usedM[measFallback[j]]){ r=measFallback[j]; break; } } }
-          if(!r) r="m"+i; usedM[r]=1; measRole.push(r);
-          diag.meas.push({name:nm,role:r,lbl:MEASLBL[r]||r}); });
-
-        // primary = fil, sonst erste Dimension
-        var grainTx = dimRole.indexOf("txid")>=0;        // Transaktion_ID gebunden -> je Zeile 1 Bon
-        var hasRet  = dimRole.indexOf("retdim")>=0;       // Retoure-Dimension gebunden
-        var hasBonsMeas = measRole.indexOf("bons")>=0;
+        var dimRoles=plan.filter(function(c){return !c.isMeas && c.role;}).map(function(c){return c.role;});
+        var measRoles=plan.filter(function(c){return c.isMeas && c.role;}).map(function(c){return c.role;});
+        var grainTx=dimRoles.indexOf("txid")>=0, hasRet=dimRoles.indexOf("retdim")>=0, hasBonsMeas=measRoles.indexOf("bons")>=0;
         function isYes(v){ v=String(v==null?"":v).toLowerCase(); return v==="ja"||v==="yes"||v==="y"||v==="true"||v==="x"||v==="1"; }
-        // primary = Filiale, sonst erste Nicht-Hilfs-Dimension
-        var primary = dimRole.indexOf("fil")>=0 ? "fil" : (dimRole.filter(function(r){return r!=="txid"&&r!=="retdim";})[0]||dimRole[0]||"fil");
+        var primary = dimRoles.indexOf("fil")>=0 ? "fil" : (dimRoles.filter(function(r){return r!=="txid"&&r!=="retdim";})[0]||dimRoles[0]||"fil");
 
         ds.data.forEach(function(d){
           var row={};
-          dKeys.forEach(function(k,i){ var c=d[k]; row[dimRole[i]]=c?(c.label!=null?c.label:c.id):""; });
-          mKeys.forEach(function(k,i){ var c=d[k]; var val=c&&c.raw!=null?Number(c.raw):0; row[measRole[i]]=(row[measRole[i]]||0)+val; });
+          plan.forEach(function(col){ if(!col.role) return; var c=d[col.key];
+            if(col.isMeas){ var v=c&&c.raw!=null?Number(c.raw):0; row[col.role]=(row[col.role]||0)+v; }
+            else { row[col.role]= c?(c.label!=null?c.label:c.id):""; } });
           if(row[primary]==null||row[primary]==="") row[primary]="(gesamt)";
           if(!("u" in row)) row.u=0;
           if(grainTx){
-            var ja = hasRet && isYes(row.retdim);
-            row.tx = 1; row.ret = ja?1:0;
+            var ja=hasRet&&isYes(row.retdim); row.tx=1; row.ret=ja?1:0;
             if(ja){ row.u=0; if("br"in row)row.br=0; if("rb"in row)row.rb=0; if("art"in row)row.art=0; row.bons=0; }
-            else if(!hasBonsMeas){ row.bons = 1; }
+            else if(!hasBonsMeas){ row.bons=1; }
           }
           rows.push(row);
-          if("fl" in row){ var f=Number(row.fl)||0; if(f>0) flaeche[row[primary]]=f; }
+          if("fl" in row){ var fv=Number(row.fl)||0; if(fv>0) flaeche[row[primary]]=fv; }
         });
 
-        var cap={ u:measRole.indexOf("u")>=0, br:measRole.indexOf("br")>=0, rb:measRole.indexOf("rb")>=0,
-          art:measRole.indexOf("art")>=0, bons:(hasBonsMeas||grainTx), fl:Object.keys(flaeche).length>0, retq:(grainTx&&hasRet) };
+        var cap={ u:measRoles.indexOf("u")>=0, br:measRoles.indexOf("br")>=0, rb:measRoles.indexOf("rb")>=0,
+          art:measRoles.indexOf("art")>=0, bons:(hasBonsMeas||grainTx), fl:Object.keys(flaeche).length>0, retq:(grainTx&&hasRet) };
         if(!cap.u) diag.missing.push("Umsatz Netto");
-        if(!cap.bons) diag.missing.push("Anzahl Bons / Transaktion_ID");
+        if(!cap.bons) diag.missing.push("Anzahl Bons / Transaktion");
 
-        var dims = dimRole.filter(function(r){ return r!==primary && DIMLBL[r]; });
+        var seen={}, dims=[]; dimRoles.forEach(function(r){ if(r!==primary && DIMLBL[r] && !seen[r]){seen[r]=1;dims.push(r);} });
         return { rows:rows, flaeche:flaeche, cap:cap, dims:dims, primary:primary, diag:diag };
       }catch(e){
         diag.error=String(e);
@@ -368,7 +372,7 @@
     _bonsNote(){
       return '<div class="note"><div class="ic">!</div><p><b>Anzahl Bons fehlt.</b> '+
         'Bonwert und Artikel je Bon ben\u00F6tigen die Anzahl der Transaktionen. Da jede Belegzeile ein Bon ist, gen\u00FCgt es, '+
-        '<b>Transaktion_ID</b> in die <b>Dimensionen</b>-Bindung aufzunehmen \u2013 das Widget z\u00E4hlt die Zeilen. '+
+        '<b>Transaktion_ID</b> im Slot <b>Transaktion</b> anzubinden \u2013 das Widget z\u00E4hlt die Zeilen. '+
         'Keine berechnete Kennzahl n\u00F6tig. Umsatz, St\u00FCckpreis und Rabattquote werden weiterhin angezeigt.</p></div>';
     }
 
@@ -556,14 +560,14 @@
       function chipList(arr,kind){ if(!arr||!arr.length) return '<span class="chip">\u2013</span>';
         return arr.map(function(x){return '<span class="chip">'+esc(x.name)+' \u2192 <b>'+esc(x.lbl)+'</b></span>';}).join(""); }
       var miss=(diag.missing||[]).map(function(m){return '<span class="chip miss">fehlt: '+esc(m)+'</span>';}).join("");
-      var recipe='Anzahl Bons ohne neue Kennzahl:\n  Transaktion_ID  als DIMENSION mit anbinden.\nJede Belegzeile = 1 Bon, das Widget z\u00E4hlt die Zeilen.\nOptional: Retoure als Dimension -> Retourenquote.';
+      var recipe='Anzahl Bons ohne neue Kennzahl:\n  Transaktion_ID  im Slot "Transaktion" anbinden.\nJede Belegzeile = 1 Bon, das Widget z\u00E4hlt die Zeilen.\nOptional: Retoure im Slot "Retoure" -> Retourenquote.';
       return '<div class="card setup"><h2>Datenanbindung einrichten</h2>'+
         '<p class="hint">Das Widget hat eine Bindung erhalten, aber noch keine ausreichenden Kennzahlen. Binden Sie im Builder-Panel:</p>'+
         '<p class="lbl">Erkannte Dimensionen</p><div class="chips">'+chipList(diag.dims)+'</div>'+
         '<p class="lbl" style="margin-top:12px">Erkannte Kennzahlen</p><div class="chips">'+chipList(diag.meas)+'</div>'+
         ((diag.missing&&diag.missing.length)?('<p class="lbl" style="margin-top:12px">Erforderlich / empfohlen</p><div class="chips">'+miss+'</div>'):'')+
-        '<div class="note" style="margin-top:14px"><div class="ic">!</div><p><b>Reihenfolge:</b> 1.\u00A0Dimension = Filiale, danach Drill-Dimensionen (Warenkategorie, Kundentyp, Position, Mitarbeiter \u2026). '+
-        'Erste Kennzahl = <b>Umsatz Netto</b> (erforderlich). F\u00FCr <b>Anzahl Bons</b> einfach <b>Transaktion_ID</b> als Dimension mitnehmen. Zuordnung automatisch \u00FCber die Namen.</p></div>'+
+        '<div class="note" style="margin-top:14px"><div class="ic">!</div><p><b>Eigener Slot pro Feld:</b> Binde mindestens <b>Filiale</b> und <b>Umsatz Netto</b>; f\u00FCr Drill-Downs Warenkategorie, Kundentyp, Position, Mitarbeiter \u2026 in die jeweiligen Slots. '+
+        'F\u00FCr <b>Anzahl Bons</b> die <b>Transaktion_ID</b> im Slot "Transaktion" anbinden \u2013 keine berechnete Kennzahl n\u00F6tig.</p></div>'+
         '<p class="lbl" style="margin-top:12px">\u201EAnzahl Bons\u201C anlegen</p><div class="code">'+esc(recipe)+'</div>'+
         (diag.error?('<p class="foot">Hinweis: '+esc(diag.error)+'</p>'):'')+'</div>';
     }
