@@ -1,7 +1,8 @@
 /* =========================================================================
- * WE Prozess-Cockpit – SAC Custom Widget (v0.4.0) · Entwickler: Benne
- * <we-cockpit> (main) + <we-cockpit-builder> (Builder Panel) in einer Datei.
- * Neu: In-Widget-Kalibrierung (⚙) und Dark-Mode-Umschalter (◐)
+ * WE Prozess-Cockpit – SAC Custom Widget (v0.5.0) · Entwickler: Benne
+ * Nur die Hauptkomponente <we-cockpit>. Kein separates Builder-Panel mehr:
+ * Kalibrierung (Ausreisser-Schwelle, Toleranz, Baseline, Team-Rotation) und
+ * Dark Mode sind ueber ⚙ / ◐ direkt im Widget bedienbar (siehe README).
  * ========================================================================= */
 /* =========================================================================
  * WE Prozess-Cockpit  –  SAC Custom Widget (Grundgerüst v0.1)
@@ -1071,87 +1072,4 @@
   }
 
   customElements.define("we-cockpit", WECockpit);
-})();
-
-/* WE Prozess-Cockpit – Builder Panel */
-(function () {
-  "use strict";
-  if (typeof customElements === "undefined") return; // Nicht-Browser-Umgebung
-  const TPL = `
-  <style>
-    :host{ font-family:"72","Segoe UI",system-ui,sans-serif; font-size:13px; color:#22303C; display:block; padding:8px 4px;}
-    label{ display:block; margin:10px 0 3px; font-weight:600; font-size:12px;}
-    input,select,textarea{ width:100%; padding:6px 8px; border:1px solid #C9D2DA; border-radius:4px; font:inherit; box-sizing:border-box;}
-    small{ color:#7A8794; display:block; margin-top:2px;}
-    button{ margin-top:14px; padding:7px 14px; border:0; border-radius:4px; background:#2E6FA3; color:#fff; font:inherit; cursor:pointer;}
-  </style>
-  <label>Ausreißer-Schwellwert (robuster z-Score)</label>
-  <input id="madThreshold" type="number" min="1" max="10" step="0.1">
-  <small>Standard 3,5 · kleiner = empfindlicher</small>
-
-  <label>Team mit Frühschicht in geraden KW</label>
-  <input id="teamEvenFrueh" type="text">
-  <label>Team mit Frühschicht in ungeraden KW</label>
-  <input id="teamOddFrueh" type="text">
-  <small>Anker der wöchentlichen F/S-Rotation für den Team-Vergleich</small>
-
-  <label>Baseline-Segmentierung</label>
-  <select id="baselineMode">
-    <option value="segment">Je Segment (LKW / Container / BSL getrennt)</option>
-    <option value="global">Global (eine Grenze für alle)</option>
-  </select>
-
-  <label>Termintreue-Toleranz (Minuten)</label>
-  <input id="toleranzMin" type="number" min="0" max="240" step="5">
-  <small>Ankunft bis zu X Minuten nach Fensterende gilt noch als pünktlich</small>
-
-  <label>Farbschema</label>
-  <select id="theme">
-    <option value="light">Hell</option>
-    <option value="dark">Dunkel</option>
-  </select>
-
-  <label>Standardansicht</label>
-  <select id="defaultView">
-    <option value="hof">Hofprozess</option>
-    <option value="lager">Lagerprozess</option>
-    <option value="termin">Termintreue</option>
-    <option value="mengen">Mengen</option>
-    <option value="muster">Muster &amp; Schicht</option>
-  </select>
-
-  <button id="apply">Übernehmen</button>`;
-
-  class WECockpitBuilder extends HTMLElement {
-    constructor() {
-      super();
-      this._shadow = this.attachShadow({ mode: "open" });
-      this._shadow.innerHTML = TPL;
-      this._shadow.getElementById("apply").addEventListener("click", () => {
-        const g = (id) => this._shadow.getElementById(id).value;
-        this.dispatchEvent(new CustomEvent("propertiesChanged", {
-          detail: { properties: {
-            madThreshold: parseFloat(g("madThreshold")) || 3.5,
-            teamEvenFrueh: g("teamEvenFrueh") || "Team A",
-            teamOddFrueh: g("teamOddFrueh") || "Team B",
-            baselineMode: g("baselineMode"),
-            toleranzMin: parseInt(g("toleranzMin"), 10) || 30,
-            theme: g("theme"),
-            defaultView: g("defaultView"),
-          }},
-        }));
-      });
-    }
-    onCustomWidgetAfterUpdate(changed) {
-      const set = (id, v) => { if (v !== undefined) this._shadow.getElementById(id).value = v; };
-      set("madThreshold", changed.madThreshold);
-      set("teamEvenFrueh", changed.teamEvenFrueh);
-      set("teamOddFrueh", changed.teamOddFrueh);
-      set("baselineMode", changed.baselineMode);
-      set("toleranzMin", changed.toleranzMin);
-      set("theme", changed.theme);
-      set("defaultView", changed.defaultView);
-    }
-  }
-  customElements.define("we-cockpit-builder", WECockpitBuilder);
 })();
