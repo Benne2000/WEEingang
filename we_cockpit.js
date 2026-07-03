@@ -1,8 +1,7 @@
 /* =========================================================================
- * WE Prozess-Cockpit – SAC Custom Widget Bundle (v0.3.0)
- * Entwickler: Benne
- * <we-cockpit> (main) + <we-cockpit-builder> (Builder Panel)
- * Neu: geführter Drill-down in Transporteinheiten (Detailansicht)
+ * WE Prozess-Cockpit – SAC Custom Widget (v0.4.0) · Entwickler: Benne
+ * <we-cockpit> (main) + <we-cockpit-builder> (Builder Panel) in einer Datei.
+ * Neu: In-Widget-Kalibrierung (⚙) und Dark-Mode-Umschalter (◐)
  * ========================================================================= */
 /* =========================================================================
  * WE Prozess-Cockpit  –  SAC Custom Widget (Grundgerüst v0.1)
@@ -371,10 +370,28 @@
     *,*::before,*::after{ box-sizing:border-box; }
     .root{ display:flex; flex-direction:column; height:100%; background:${C.bg};
       border:1px solid ${C.border}; border-radius:8px; overflow:hidden; }
-    /* Kopf: Titel + KPI-Leiste */
-    header{ padding:10px 14px 0; }
-    .title{ font-size:13px; font-weight:700; letter-spacing:.4px; text-transform:uppercase; }
+    /* Kopf: Titel + Steuerung + KPI-Leiste */
+    header{ padding:10px 14px 0; position:relative;}
+    .titlebar{ display:flex; align-items:center; gap:8px;}
+    .title{ font-size:13px; font-weight:700; letter-spacing:.4px; text-transform:uppercase;}
     .title small{ color:${C.muted}; font-weight:400; text-transform:none; letter-spacing:0; margin-left:8px;}
+    .ctrl{ margin-left:auto; display:flex; gap:6px;}
+    .ctrl button{ font:inherit; font-size:13px; line-height:1; padding:5px 8px; border:1px solid ${C.border};
+      border-radius:5px; background:${C.panel}; color:${C.ink}; cursor:pointer;}
+    .ctrl button:hover{ border-color:${C.outlier};}
+    .ctrl button.on{ border-color:${C.outlier}; color:${C.outlier};}
+    /* Kalibrierungs-Panel */
+    .cfg{ position:absolute; right:14px; top:38px; z-index:20; width:250px; padding:12px;
+      background:${C.bg}; border:1px solid ${C.border}; border-radius:8px;
+      box-shadow:0 6px 22px rgba(0,0,0,.18); font-size:12px;}
+    .cfg[hidden]{ display:none;}
+    .cfg h4{ margin:0 0 8px; font-size:11px; text-transform:uppercase; letter-spacing:.4px; color:${C.muted};}
+    .cfg label{ display:flex; justify-content:space-between; margin:8px 0 3px; font-weight:600; font-size:11px;}
+    .cfg label output{ font-weight:400; color:${C.outlier}; font-variant-numeric:tabular-nums;}
+    .cfg input,.cfg select{ width:100%; padding:5px 7px; border:1px solid ${C.border}; border-radius:4px;
+      font:inherit; font-size:12px; background:${C.panel}; color:${C.ink}; box-sizing:border-box;}
+    .cfg input[type=range]{ padding:0; accent-color:${C.outlier};}
+    .cfg .hint{ color:${C.muted}; font-size:10px; margin-top:2px;}
     .kpis{ display:flex; gap:0; margin:8px 0 0; border:1px solid ${C.border}; border-radius:6px; overflow:hidden;}
     .kpi{ flex:1; padding:7px 10px; border-right:1px solid ${C.border}; background:${C.panel}; min-width:0;}
     .kpi:last-child{ border-right:0;}
@@ -421,7 +438,30 @@
   </style>
   <div class="root">
     <header>
-      <div class="title">WE Prozess-Cockpit <small id="sub"></small></div>
+      <div class="titlebar">
+        <div class="title">WE Prozess-Cockpit <small id="sub"></small></div>
+        <div class="ctrl">
+          <button id="btnTheme" title="Dark-/Light-Mode umschalten">◐</button>
+          <button id="btnCfg" title="Kalibrierung">⚙</button>
+        </div>
+      </div>
+      <div class="cfg" id="cfg" hidden>
+        <h4>Kalibrierung</h4>
+        <label>Ausreißer-Schwelle |z| <output id="outMad">3,5</output></label>
+        <input type="range" id="cfgMad" min="2" max="6" step="0.1">
+        <div class="hint">kleiner = empfindlicher · wirkt sofort auf alle Ansichten</div>
+        <label>Termintreue-Toleranz (Minuten)</label>
+        <input type="number" id="cfgTol" min="0" max="240" step="5">
+        <label>Baseline-Segmentierung</label>
+        <select id="cfgBase">
+          <option value="segment">Je Segment (LKW / Container / BSL)</option>
+          <option value="global">Global (eine Grenze für alle)</option>
+        </select>
+        <label>Team Frühschicht in geraden KW</label>
+        <input type="text" id="cfgTeamE">
+        <label>Team Frühschicht in ungeraden KW</label>
+        <input type="text" id="cfgTeamO">
+      </div>
       <div class="kpis" id="kpis"></div>
     </header>
     <nav id="tabs"></nav>
@@ -520,6 +560,30 @@
         const el = e.target.closest("[data-drill]");
         if (el) this.openDetail(el.dataset.drill);
       });
+      /* ---- In-Widget-Steuerung: Theme + Kalibrierung ---- */
+      const $ = (id) => this._shadow.getElementById(id);
+      $("btnTheme").addEventListener("click", () =>
+        this.setTheme(this._props.theme === "dark" ? "light" : "dark"));
+      $("btnCfg").addEventListener("click", () => {
+        const p = $("cfg");
+        p.hidden = !p.hidden;
+        $("btnCfg").classList.toggle("on", !p.hidden);
+        if (!p.hidden) this._syncCfg();
+      });
+      // Live-Kalibrierung: Änderungen wirken sofort auf das Modell
+      $("cfgMad").addEventListener("input", () => {
+        this._props.madThreshold = parseFloat($("cfgMad").value);
+        $("outMad").textContent = this._props.madThreshold.toLocaleString("de-DE", { minimumFractionDigits: 1 });
+        this._rebuild();
+      });
+      $("cfgTol").addEventListener("change", () => {
+        this._props.toleranzMin = Math.max(0, parseInt($("cfgTol").value, 10) || 0);
+        this._rebuild();
+      });
+      $("cfgBase").addEventListener("change", () => { this._props.baselineMode = $("cfgBase").value; this._rebuild(); });
+      $("cfgTeamE").addEventListener("change", () => { this._props.teamEvenFrueh = $("cfgTeamE").value || "Team A"; this._rebuild(); });
+      $("cfgTeamO").addEventListener("change", () => { this._props.teamOddFrueh = $("cfgTeamO").value || "Team B"; this._rebuild(); });
+      this._syncCfg();
     }
 
     /* ---- SAC-Lifecycle ---- */
@@ -528,6 +592,7 @@
       if (changed && "theme" in changed) this._applyTheme();
       if (changed && "defaultView" in changed && MODES.some((m) => m.id === changed.defaultView))
         this._mode = changed.defaultView;
+      this._syncCfg();
       if (changed && changed.myDataSource) { this.myDataSource = changed.myDataSource; return; }
       this._rebuild();
     }
@@ -566,6 +631,17 @@
     }
 
     _applyTheme() { this.setAttribute("data-theme", this._props.theme === "dark" ? "dark" : "light"); }
+
+    /** Kalibrierungs-Panel mit aktuellen Properties befüllen. */
+    _syncCfg() {
+      const $ = (id) => this._shadow.getElementById(id);
+      $("cfgMad").value = this._props.madThreshold;
+      $("outMad").textContent = Number(this._props.madThreshold).toLocaleString("de-DE", { minimumFractionDigits: 1 });
+      $("cfgTol").value = this._props.toleranzMin;
+      $("cfgBase").value = this._props.baselineMode;
+      $("cfgTeamE").value = this._props.teamEvenFrueh;
+      $("cfgTeamO").value = this._props.teamOddFrueh;
+    }
 
     _rebuild() {
       this._model = this._rows && this._rows.length ? WEEngine.buildModel(this._rows, this._props) : null;
