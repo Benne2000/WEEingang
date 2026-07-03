@@ -1,8 +1,7 @@
 /* =========================================================================
- * WE Prozess-Cockpit – SAC Custom Widget (v0.5.0) · Entwickler: Benne
- * Nur die Hauptkomponente <we-cockpit>. Kein separates Builder-Panel mehr:
- * Kalibrierung (Ausreisser-Schwelle, Toleranz, Baseline, Team-Rotation) und
- * Dark Mode sind ueber ⚙ / ◐ direkt im Widget bedienbar (siehe README).
+ * WE Prozess-Cockpit – SAC Custom Widget (v0.6.0) · Entwickler: Benne
+ * Management-Ueberblick: Engpass-Wasserfall, KPI-Trends, Klartext-Befunde.
+ * Kalibrierung (⚙) und Dark Mode (◐) direkt im Widget.
  * ========================================================================= */
 /* =========================================================================
  * WE Prozess-Cockpit  –  SAC Custom Widget (Grundgerüst v0.1)
@@ -322,7 +321,127 @@
       nErrors: dataErrors.length,
     };
 
-    return { positions, deliveries, baselines, phaseMed, dataErrors, heat, teams, kpis, cfg };
+    /* --- Perioden-Aggregation für Trends (Sparklines, Δ ggü. Vorperiode) -
+     * Granularität automatisch: Spanne ≤ 21 Tage -> Tag, sonst KW.        */
+    const ankTimes = deliveries.map((d) => d.ts_ankunft).filter(Boolean).map(Number);
+    const spanDays = ankTimes.length ? (Math.max(...ankTimes) - Math.min(...ankTimes)) / 864e5 : 0;
+    const gran = spanDays <= 21 ? "day" : "week";
+    const periodKey = (dt) => {
+      if (!dt) return null;
+      if (gran === "day") return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+      // ISO-Woche
+      const t = new Date(Date.UTC(dt.getFullYear(), dt.getMonth(), dt.getDate()));
+      const day = t.getUTCDay() || 7; t.setUTCDate(t.getUTCDate() + 4 - day);
+      const ys = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
+      const wk = Math.ceil(((t - ys) / 864e5 + 1) / 7);
+      return `${t.getUTCFullYear()}-W${String(wk).padStart(2, "0")}`;
+    };
+    const collect = (recs, phaseKey, tsField) => {
+      const buckets = new Map();
+      for (const r of recs) {
+        const v = r.phases && r.phases[phaseKey];
+        const dt = r[tsField];
+        if (v == null || !dt) continue;
+        const k = periodKey(dt);
+        (buckets.get(k) || buckets.set(k, []).get(k)).push(v);
+      }
+      // Perioden mit zu wenigen Belegen sind statistisch instabil -> raus.
+      const minN = gran === "day" ? 5 : 15;
+      return [...buckets.entries()].sort((a, b) => a[0] < b[0] ? -1 : 1)
+        .map(([k, vals]) => ({ period: k, med: median(vals), n: vals.length }))
+        .filter((p) => p.n >= minN);
+    };
+    const trends = {
+      dwell:   collect(deliveries, "dwell", "ts_ankunft"),
+      putaway: collect(positions, "putaway", "ts_we_pos"),
+      unload:  collect(deliveries, "unload", "ts_ankunft"),
+    };
+    // Termintreue-Quote je Periode
+    const otBuckets = new Map();
+    for (const d of deliveries) {
+      const v = d.phases && d.phases.delay, dt = d.ts_ankunft;
+      if (v == null || !dt) continue;
+      const k = periodKey(dt);
+      const b = otBuckets.get(k) || otBuckets.set(k, { ok: 0, n: 0 }).get(k);
+      b.n++; if (v <= (cfg.toleranzMin ?? 30) / 60) b.ok++;
+    }
+    trends.onTime = [...otBuckets.entries()].sort((a, b) => a[0] < b[0] ? -1 : 1)
+      .map(([k, b]) => ({ period: k, med: b.n ? b.ok / b.n : 0, n: b.n }))
+      .filter((p) => p.n >= (gran === "day" ? 5 : 15));
+
+    /* --- Δ letzte vollständige Periode vs. Median der vorherigen -------- */
+    const deltaOf = (series, lowerIsBetter = true) => {
+      if (!series || series.length < 2) return null;
+      const last = series[series.length - 1];
+      const prev = series.slice(0, -1);
+      const base = median(prev.map((p) => p.med));
+      if (base == null || !isFinite(base) || base === 0) return null;
+      const rel = (last.med - base) / Math.abs(base);
+      return { last: last.med, base, rel, better: lowerIsBetter ? rel < 0 : rel > 0 };
+    };
+    const deltas = {
+      dwell: deltaOf(trends.dwell, true),
+      putaway: deltaOf(trends.putaway, true),
+      onTime: deltaOf(trends.onTime, false),
+    };
+
+    /* --- Engpass-Erkennung: Phase mit größtem Beitrag × Streuung -------- */
+    const flowPhases = ["wait_gate", "reaction", "unload", "booking", "putaway"];
+    const bottleneck = flowPhases.map((k) => {
+      const recs = PHASES[k].level === "delivery" ? deliveries : positions;
+      const vals = recs.map((r) => r.phases && r.phases[k]).filter((v) => v != null);
+      if (vals.length < 8) return null;
+      const med = median(vals), p75 = quantile(vals, 0.75), p25 = quantile(vals, 0.25);
+      // Score: Median-Beitrag gewichtet mit relativer Streuung (IQR/Median)
+      const spread = med > 0 ? (p75 - p25) / med : 0;
+      return { key: k, label: PHASES[k].label, med, p75, spread, score: med * (1 + spread) };
+    }).filter(Boolean).sort((a, b) => b.score - a.score);
+
+    // Welches Segment treibt den Top-Engpass?
+    let bottleneckSeg = null;
+    if (bottleneck.length) {
+      const top = bottleneck[0];
+      const recs = PHASES[top.key].level === "delivery" ? deliveries : positions;
+      const bySeg = {};
+      for (const r of recs) {
+        const v = r.phases && r.phases[top.key];
+        if (v == null) continue;
+        (bySeg[r.segment] ||= []).push(v);
+      }
+      const ranked = Object.entries(bySeg).filter(([, v]) => v.length >= 5)
+        .map(([s, v]) => ({ seg: s, med: median(v) })).sort((a, b) => b.med - a.med);
+      if (ranked.length > 1 && ranked[0].med > 1.3 * ranked[ranked.length - 1].med)
+        bottleneckSeg = ranked[0].seg;
+    }
+
+    /* --- Klartext-Befunde (kurze Sätze, Management-Sicht) -------------- */
+    const findings = [];
+    const fmtHrs = (h) => h >= 48 ? (h / 24).toFixed(1) + " Tagen" : h >= 1 ? h.toFixed(1) + " h" : Math.round(h * 60) + " min";
+    if (bottleneck.length) {
+      const t = bottleneck[0];
+      let s = `Größter Engpass ist ${t.label} (Median ${fmtHrs(t.med)}`;
+      if (t.spread > 0.8) s += `, stark schwankend bis ${fmtHrs(t.p75)} im oberen Viertel`;
+      s += ")";
+      if (bottleneckSeg) s += ` — vor allem ${bottleneckSeg}-Anlieferungen`;
+      findings.push({ text: s + ".", tone: "warn" });
+    }
+    const dwD = deltas.dwell;
+    if (dwD) findings.push({
+      text: `Standzeit ${dwD.better ? "verbessert" : "verschlechtert"} um ${Math.abs(dwD.rel * 100).toFixed(0)} % ggü. Vorperiode.`,
+      tone: dwD.better ? "ok" : "warn",
+    });
+    const otD = deltas.onTime;
+    if (otD) findings.push({
+      text: `Termintreue bei ${(otD.last * 100).toFixed(0)} % (${otD.better ? "+" : ""}${(otD.rel * 100).toFixed(0)} % ggü. Vorperiode).`,
+      tone: otD.better ? "ok" : "warn",
+    });
+    if (kpis.nErrors > 0) findings.push({
+      text: `${kpis.nErrors} Datensätze mit unplausibler Zeitstempel-Reihenfolge — im Tab „Muster & Schicht" gelistet.`,
+      tone: "err",
+    });
+
+    return { positions, deliveries, baselines, phaseMed, dataErrors, heat, teams, kpis, cfg,
+             trends, deltas, gran, bottleneck, bottleneckSeg, findings };
   }
 
   function num(v) {
@@ -341,21 +460,27 @@
 
   const C = {
     // Theme-abhängig (CSS-Variablen, definiert in :host / :host([data-theme=dark]))
-    ink: "var(--ink)", muted: "var(--muted)", border: "var(--border)",
-    panel: "var(--panel)", bg: "var(--bg)", band: "var(--band)",
-    // Akzentfarben (theme-unabhängig)
-    lkw: "#2E6FA3", container: "#1F8A70", sonst: "#9BA6B2",
-    outlier: "#E8590C", error: "#8A4FFF", ok: "#2F9E44",
+    ink: "var(--ink)", ink2: "var(--ink2)", muted: "var(--muted)", border: "var(--border)",
+    panel: "var(--panel)", card: "var(--card)", bg: "var(--bg)", band: "var(--band)",
+    grid: "var(--grid)",
+    // Semantische Farben (theme-abhängig)
+    accent: "var(--accent)", good: "var(--good)", bad: "var(--bad)",
+    outlier: "var(--accent)", error: "#8A5CF6", ok: "var(--good)",
+    // Segmentfarben (fest, theme-unabhängig für Wiedererkennung)
+    lkw: "#3B7BB5", container: "#2AA084", sonst: "#9BA6B2",
   };
-  const SEGC = { LKW: C.lkw, Container: C.container, BSL: "#B0801F", Sonstige: C.sonst };
+  const SEGC = { LKW: C.lkw, Container: C.container, BSL: "#C79A3A", Sonstige: C.sonst };
 
   const THEME_VARS = `
-    :host{ --bg:#FFFFFF; --panel:#F6F8FA; --ink:#22303C; --muted:#7A8794;
-           --border:#E2E8EE; --band:rgba(232,89,12,.08); }
-    :host([data-theme="dark"]){ --bg:#1B232C; --panel:#232E39; --ink:#E8EEF4;
-           --muted:#93A1B0; --border:#33404D; --band:rgba(232,89,12,.18); }`;
+    :host{ --bg:#FFFFFF; --panel:#F7F9FB; --card:#FFFFFF; --ink:#1B2733; --ink2:#48586A;
+           --muted:#8A97A5; --border:#E6EBF0; --band:rgba(224,122,63,.10);
+           --good:#2C9A6B; --bad:#D8624A; --grid:#EEF2F6; --accent:#E07A3F; }
+    :host([data-theme="dark"]){ --bg:#161D24; --panel:#1E2831; --card:#202B35; --ink:#EAF1F7;
+           --ink2:#B4C2CF; --muted:#7E8D9C; --border:#2E3B47; --band:rgba(224,122,63,.20);
+           --good:#3FB483; --bad:#E87760; --grid:#28333D; --accent:#E68A4E; }`;
 
   const MODES = [
+    { id: "ueberblick", label: "Überblick", metric: null, level: null, phases: [], unit: "", desc: "Engpass, Trends und Kurzbefund" },
     { id: "hof",    label: "Hofprozess",  metric: "dwell",   level: "delivery", phases: ["wait_gate", "reaction", "unload"], unit: "h", desc: "Standzeit Ankunft → Abfahrt" },
     { id: "lager",  label: "Lagerprozess", metric: "putaway", level: "position", phases: ["booking", "putaway"], unit: "h", desc: "WE-Buchung → Einlagerung" },
     { id: "termin", label: "Termintreue", metric: "delay",   level: "delivery", phases: [], unit: "h", desc: "Ankunft vs. geplante Lieferung" },
@@ -393,22 +518,50 @@
       font:inherit; font-size:12px; background:${C.panel}; color:${C.ink}; box-sizing:border-box;}
     .cfg input[type=range]{ padding:0; accent-color:${C.outlier};}
     .cfg .hint{ color:${C.muted}; font-size:10px; margin-top:2px;}
-    .kpis{ display:flex; gap:0; margin:8px 0 0; border:1px solid ${C.border}; border-radius:6px; overflow:hidden;}
-    .kpi{ flex:1; padding:7px 10px; border-right:1px solid ${C.border}; background:${C.panel}; min-width:0;}
-    .kpi:last-child{ border-right:0;}
-    .kpi b{ display:block; font-size:17px; font-variant-numeric:tabular-nums; line-height:1.15;}
-    .kpi span{ font-size:10px; color:${C.muted}; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; display:block;}
-    .kpi.warn b{ color:${C.outlier};} .kpi.err b{ color:${C.error};} .kpi.ok b{ color:${C.ok};}
+    .kpis{ display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin:10px 0 0;}
+    .kpi{ padding:11px 13px; border:1px solid ${C.border}; border-radius:9px; background:${C.card};
+      cursor:pointer; min-width:0; transition:border-color .15s, transform .1s;}
+    .kpi:hover{ border-color:${C.accent};}
+    .kpi:active{ transform:translateY(1px);}
+    .kpi .lbl{ font-size:10.5px; color:${C.muted}; text-transform:uppercase; letter-spacing:.4px; display:block;}
+    .kpi .val{ display:flex; align-items:baseline; gap:7px; margin:3px 0 5px;}
+    .kpi .val b{ font-size:22px; font-weight:700; font-variant-numeric:tabular-nums; line-height:1;}
+    .kpi .d{ font-size:11px; font-weight:600; font-style:normal; font-variant-numeric:tabular-nums;}
+    .kpi .d.up{ color:${C.good};} .kpi .d.down{ color:${C.bad};}
+    .kpi .sub{ font-size:10px; color:${C.muted}; display:block;}
+    .kpi svg.spark{ display:block; width:100%; height:26px;}
+    .kpi.err .val b{ color:${C.error};}
     /* Tabs */
     nav{ display:flex; gap:2px; padding:8px 14px 0;}
     nav button{ font:inherit; font-size:12px; padding:6px 12px; border:0; background:transparent;
       color:${C.muted}; cursor:pointer; border-bottom:2px solid transparent;}
     nav button.on{ color:${C.ink}; font-weight:600; border-bottom-color:${C.outlier};}
     nav button:focus-visible{ outline:2px solid ${C.lkw}; outline-offset:-2px;}
-    main{ flex:1; overflow:auto; padding:10px 14px;}
+    main{ flex:1; overflow:auto; padding:12px 14px;}
     .row{ display:flex; gap:14px; flex-wrap:wrap;}
-    .card{ flex:1 1 340px; min-width:280px;}
-    .card h3{ font-size:11px; font-weight:600; color:${C.muted}; margin:0 0 4px; text-transform:uppercase; letter-spacing:.4px;}
+    .card{ flex:1 1 340px; min-width:280px; background:${C.card}; border:1px solid ${C.border};
+      border-radius:10px; padding:12px 14px;}
+    .card.grow{ flex:2 1 460px;}
+    .card h3{ font-size:11px; font-weight:600; color:${C.muted}; margin:0 0 8px; text-transform:uppercase; letter-spacing:.5px;}
+    /* Klartext-Befunde */
+    .findings{ display:flex; flex-direction:column; gap:7px; margin-bottom:14px;}
+    .finding{ display:flex; align-items:flex-start; gap:9px; padding:10px 13px; border-radius:9px;
+      font-size:13px; line-height:1.4; background:${C.panel}; border:1px solid ${C.border};}
+    .finding i{ width:8px; height:8px; border-radius:50%; margin-top:5px; flex:none; background:${C.muted};}
+    .finding.warn i{ background:${C.accent};} .finding.warn{ border-color:${C.accent}66;}
+    .finding.ok i{ background:${C.good};}
+    .finding.err i{ background:${C.error};}
+    .finding span{ color:${C.ink};}
+    /* Einstiegsliste auffälliger Anlieferungen */
+    .outrow{ display:flex; align-items:center; gap:10px; padding:8px 4px; border-bottom:1px solid ${C.border}; cursor:pointer;}
+    .outrow:last-child{ border-bottom:0;}
+    .outrow:hover{ background:${C.band};}
+    .outrow .seg{ width:4px; height:30px; border-radius:2px; flex:none;}
+    .outrow .oi{ flex:1; min-width:0;}
+    .outrow .oi b{ font-size:12.5px; display:block;}
+    .outrow .oi small,.outrow .ov small{ font-size:10.5px; color:${C.muted}; display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+    .outrow .ov{ text-align:right;}
+    .outrow .ov b{ font-size:13px; color:${C.accent}; font-variant-numeric:tabular-nums;}
     svg text{ font-family:inherit;}
     /* Tabelle */
     table{ width:100%; border-collapse:collapse; font-size:11.5px; margin-top:6px;}
@@ -543,9 +696,9 @@
       this._shadow.innerHTML = TPL;
       this._props = {
         madThreshold: 3.5, teamEvenFrueh: "Team A", teamOddFrueh: "Team B",
-        baselineMode: "segment", toleranzMin: 30, theme: "light", defaultView: "hof",
+        baselineMode: "segment", toleranzMin: 30, theme: "light", defaultView: "ueberblick",
       };
-      this._rows = null; this._model = null; this._mode = "hof"; this._detail = null;
+      this._rows = null; this._model = null; this._mode = "ueberblick"; this._detail = null;
       this._applyTheme();
       this._shadow.getElementById("tabs").addEventListener("click", (e) => {
         const b = e.target.closest("button"); if (!b) return;
@@ -663,6 +816,7 @@
       main.innerHTML = "";
       if (this._detail) { this._renderDetail(main); return; }
       const mode = MODES.find((m) => m.id === this._mode);
+      if (mode.id === "ueberblick") { this._viewUeberblick(main); return; }
       if (mode.id === "muster") { this._viewMuster(main); return; }
       if (mode.id === "mengen") { this._viewMengen(main); return; }
       this._viewMetric(main, mode);
@@ -671,14 +825,119 @@
     _renderKpis() {
       const el = this._shadow.getElementById("kpis"), M = this._model;
       if (!M) { el.innerHTML = ""; return; }
-      const k = M.kpis;
-      el.innerHTML = `
-        <div class="kpi" data-goto="hof" title="Zum Hofprozess"><b>${fmtH(k.medDwell)}</b><span>Ø Standzeit (Median)</span></div>
-        <div class="kpi" data-goto="lager" title="Zum Lagerprozess"><b>${fmtH(k.medPutaway)}</b><span>Ø Einlagerung (Median)</span></div>
-        <div class="kpi ${k.outDwell > 0.05 ? "warn" : ""}" data-goto="hof" title="Ausreißer im Hofprozess ansehen"><b>${fmtP(k.outDwell)}</b><span>Ausreißer Hof</span></div>
-        <div class="kpi ${k.outPutaway > 0.05 ? "warn" : ""}" data-goto="lager" title="Ausreißer im Lagerprozess ansehen"><b>${fmtP(k.outPutaway)}</b><span>Ausreißer Lager</span></div>
-        <div class="kpi ${k.onTime >= 0.9 ? "ok" : ""}" data-goto="termin" title="Zur Termintreue"><b>${fmtP(k.onTime)}</b><span>Termintreue (+${k.tolMin} min)</span></div>
-        <div class="kpi ${k.nErrors ? "err" : ""}" data-goto="muster" title="Datenfehler ansehen"><b>${k.nErrors}</b><span>Datenfehler</span></div>`;
+      const k = M.kpis, t = M.trends, d = M.deltas;
+      const tile = (goto, title, value, series, delta, lowerBetter, invPct) => {
+        let badge = "";
+        if (delta) {
+          const cls = delta.better ? "up" : "down";
+          const arrow = (delta.rel < 0) ? "▼" : "▲";
+          badge = `<em class="d ${cls}">${arrow} ${Math.abs(delta.rel * 100).toFixed(0)}%</em>`;
+        }
+        return `<div class="kpi" data-goto="${goto}" title="${title}">
+          <span class="lbl">${title}</span>
+          <div class="val"><b>${value}</b>${badge}</div>
+          ${this._sparkline(series, invPct)}
+        </div>`;
+      };
+      el.innerHTML =
+        tile("hof", "Ø Standzeit", fmtH(k.medDwell), t.dwell, d.dwell, true, false) +
+        tile("lager", "Ø Einlagerung", fmtH(k.medPutaway), t.putaway, d.putaway, true, false) +
+        tile("termin", "Termintreue", fmtP(k.onTime), t.onTime, d.onTime, false, true) +
+        `<div class="kpi ${k.nErrors ? "err" : ""}" data-goto="muster" title="Datenfehler ansehen">
+          <span class="lbl">Datenfehler</span>
+          <div class="val"><b>${k.nErrors}</b></div>
+          <span class="sub">unplausible Zeitstempel</span>
+        </div>`;
+    }
+
+    /** Mini-Trendkurve als SVG; invPct skaliert 0–1 Quoten. */
+    _sparkline(series, isPct) {
+      if (!series || series.length < 2) return `<span class="sub">kein Trend (Zeitraum zu kurz)</span>`;
+      const vals = series.map((p) => p.med);
+      const lo = Math.min(...vals), hi = Math.max(...vals), rng = hi - lo || 1;
+      const W = 108, Hh = 26;
+      const X = (i) => (i / (series.length - 1)) * (W - 2) + 1;
+      const Y = (v) => Hh - 3 - ((v - lo) / rng) * (Hh - 6);
+      const pts = series.map((p, i) => `${X(i).toFixed(1)},${Y(p.med).toFixed(1)}`).join(" ");
+      const last = series[series.length - 1];
+      return `<svg class="spark" viewBox="0 0 ${W} ${Hh}" width="${W}" height="${Hh}" preserveAspectRatio="none">
+        <polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="1.5" stroke-linejoin="round"/>
+        <circle cx="${X(series.length - 1).toFixed(1)}" cy="${Y(last.med).toFixed(1)}" r="2.2" fill="var(--accent)"/>
+      </svg>`;
+    }
+
+    /* ---- Überblick: Engpass-Wasserfall + Befunde + Einstieg ---- */
+    _viewUeberblick(main) {
+      const M = this._model;
+      const wrap = document.createElement("div");
+      wrap.innerHTML = `
+        <div class="findings" id="findings"></div>
+        <div class="row">
+          <div class="card grow"><h3>Engpass-Analyse · Median-Zeit je Prozessphase</h3><div id="waterfall"></div></div>
+          <div class="card"><h3>Auffällige Anlieferungen</h3><div id="topout"></div></div>
+        </div>`;
+      main.appendChild(wrap);
+      this._renderFindings(wrap.querySelector("#findings"));
+      this._svgWaterfall(wrap.querySelector("#waterfall"));
+      this._topOutliers(wrap.querySelector("#topout"));
+    }
+
+    _renderFindings(el) {
+      const f = this._model.findings || [];
+      if (!f.length) { el.innerHTML = ""; return; }
+      el.innerHTML = f.map((x) =>
+        `<div class="finding ${x.tone}"><i></i><span>${esc(x.text)}</span></div>`).join("");
+    }
+
+    /* Engpass-Wasserfall: Phasen als aufeinander aufbauende Balken, Top-Engpass betont. */
+    _svgWaterfall(el) {
+      const M = this._model, bn = M.bottleneck;
+      if (!bn || !bn.length) { el.innerHTML = `<div class="empty">Zu wenige Daten für die Engpass-Analyse.</div>`; return; }
+      const order = ["wait_gate", "reaction", "unload", "booking", "putaway"];
+      const steps = order.map((k) => bn.find((b) => b.key === k)).filter(Boolean);
+      const topKey = bn[0].key;
+      const total = steps.reduce((a, s) => a + s.med, 0) || 1;
+      const W = 560, rowH = 40, padL = 130, padR = 56, H0 = steps.length * rowH + 30;
+      const barW = W - padL - padR;
+      const X = (v) => (v / total) * barW;
+      let cum = 0;
+      let svg = `<svg viewBox="0 0 ${W} ${H0}" width="100%" role="img" aria-label="Engpass-Wasserfall">`;
+      steps.forEach((s, i) => {
+        const y = i * rowH + 6;
+        const isTop = s.key === topKey;
+        const x = padL + X(cum), w = Math.max(2, X(s.med));
+        // Verbindungslinie zum nächsten Balken (Wasserfall-Treppe)
+        if (i > 0) svg += `<line x1="${padL + X(cum)}" x2="${padL + X(cum)}" y1="${y - 6}" y2="${y}" stroke="${C.border}" stroke-dasharray="2 2"/>`;
+        svg += `<text x="0" y="${y + 17}" font-size="11.5" fill="${isTop ? C.accent : C.ink}" font-weight="${isTop ? 700 : 500}">${s.label}</text>`;
+        svg += `<rect x="${x}" y="${y + 4}" width="${w}" height="20" rx="3"
+                  fill="${isTop ? C.accent : C.ink2}" opacity="${isTop ? 1 : 0.32}">
+                  <title>${s.label}: Median ${fmtH(s.med)}, P75 ${fmtH(s.p75)}</title></rect>`;
+        // Streuungsmarke (P75) als schmale Verlängerung
+        const wSpread = Math.max(0, X(s.p75) - X(s.med));
+        if (wSpread > 1) svg += `<rect x="${x + w}" y="${y + 10}" width="${wSpread}" height="8" rx="2" fill="${isTop ? C.accent : C.ink2}" opacity="0.18"><title>Streuung bis P75: ${fmtH(s.p75)}</title></rect>`;
+        svg += `<text x="${x + w + wSpread + 6}" y="${y + 18}" font-size="10.5" fill="${C.muted}">${fmtH(s.med)}</text>`;
+        cum += s.med;
+      });
+      svg += `<line x1="${padL}" x2="${padL}" y1="4" y2="${H0 - 18}" stroke="${C.border}"/>`;
+      svg += `<text x="${padL}" y="${H0 - 4}" font-size="10" fill="${C.muted}">Summe Median-Durchlaufzeit: ${fmtH(total)}</text>`;
+      svg += `<text x="${W - padR + 4}" y="${H0 - 4}" font-size="9" fill="${C.muted}" text-anchor="end">▏ heller Balken = Streuung bis P75</text>`;
+      el.innerHTML = svg + "</svg>";
+    }
+
+    /* Kompakte Einstiegs-Liste: die auffälligsten Anlieferungen, klickbar. */
+    _topOutliers(el) {
+      const M = this._model;
+      const scored = M.deliveries
+        .filter((d) => d.outlier && (d.outlier.dwell || d.outlier.unload || d.outlier.wait_gate))
+        .map((d) => ({ d, z: Math.max(d.z.dwell || 0, d.z.unload || 0, d.z.wait_gate || 0) }))
+        .sort((a, b) => b.z - a.z).slice(0, 6);
+      if (!scored.length) { el.innerHTML = `<div class="empty">Keine auffälligen Anlieferungen im Zeitraum.</div>`; return; }
+      el.innerHTML = scored.map(({ d, z }) => `
+        <div class="outrow" data-drill="${esc(d.belegnr)}" title="Details zu TE ${esc(d.belegnr)}">
+          <span class="seg" style="background:${SEGC[d.segment] || C.sonst}"></span>
+          <div class="oi"><b>TE ${esc(d.belegnr)}</b><small>${esc((d.lieferant || "–").slice(0, 26))}</small></div>
+          <div class="ov"><b>${fmtH(d.phases.dwell)}</b><small>z ${z.toFixed(1)}</small></div>
+        </div>`).join("");
     }
 
     /* ---- gemeinsame Metrik-Ansicht (Hof / Lager / Termin) ---- */
