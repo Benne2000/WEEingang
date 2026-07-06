@@ -1,7 +1,6 @@
 /* =========================================================================
- * WE-Prozess-Cockpit – SAC Custom Widget (v0.8.4) · Entwickler: Benne
- * Dark Mode fuer bestehende Instanzen erklaert, Diagramm-Proportionen fuer
- * schmale Einbettung korrigiert.
+ * WE-Prozess-Cockpit – SAC Custom Widget (v0.8.5) · Entwickler: Benne
+ * Diagramme skalieren nicht mehr ueber ihre native Groesse hinaus.
  * ========================================================================= */
 /* =========================================================================
  * WE Prozess-Cockpit  –  SAC Custom Widget (Grundgerüst v0.1)
@@ -628,6 +627,15 @@
     /* Tabellen & Grafiken scrollen bei schmaler Einbettung innerhalb der Karte,
        statt das Widget-Layout horizontal zu sprengen */
     .card > div{ overflow-x:auto; }
+    /* Diagramme dürfen NICHT über ihre native viewBox-Breite hinaus hochskalieren,
+       sonst wächst die Schrift (Teil des viewBox) bei breiter Einbettung mit und
+       wird riesig. max-width deckelt die Skalierung; Diagramm bleibt linksbündig. */
+    #waterfall svg{ max-width:440px; }
+    #scatter svg, #qsc svg{ max-width:520px; }
+    #ribbon svg, #cmp svg{ max-width:400px; }
+    #heat svg{ max-width:420px; }
+    #teams svg{ max-width:400px; }
+    #tl svg{ max-width:560px; }
     .card.grow{ flex:2 1 460px;}
     .card h3{ font-size:11px; font-weight:600; color:${C.muted}; margin:0 0 8px; text-transform:uppercase; letter-spacing:.5px;}
     /* Klartext-Befunde */
