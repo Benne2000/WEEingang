@@ -1,7 +1,6 @@
 /* =========================================================================
- * WE Prozess-Cockpit – SAC Custom Widget (v0.6.0) · Entwickler: Benne
- * Management-Ueberblick: Engpass-Wasserfall, KPI-Trends, Klartext-Befunde.
- * Kalibrierung (⚙) und Dark Mode (◐) direkt im Widget.
+ * WE-Prozess-Cockpit – SAC Custom Widget (v0.8.2) · Entwickler: Benne
+ * Visuelle Robustheit (schmale Einbettung, Wasserfall-Skala) + Bugfixes.
  * ========================================================================= */
 /* =========================================================================
  * WE Prozess-Cockpit  –  SAC Custom Widget (Grundgerüst v0.1)
@@ -92,7 +91,9 @@
 
   /** Teamzuordnung aus wöchentlicher F/S-Rotation. */
   function teamOf(sh, kwObj, cfg) {
-    if (!sh || sh === "#" || !kwObj) return null;
+    // Nur F/S sind gültige Schichtlagen; unbekannte Codes (z. B. "N")
+    // dürfen NICHT stillschweigend als Spätschicht gewertet werden.
+    if ((sh !== "F" && sh !== "S") || !kwObj) return null;
     const even = kwObj.kw % 2 === 0;
     const frueh = sh === "F";
     // gerade KW + Früh -> teamEvenFrueh; alles andere spiegelbildlich
@@ -138,13 +139,33 @@
       for (const k of Object.keys(r)) if (k.startsWith("ts_")) r[k] = parseTs(r[k]);
       // Korrekturfeld "Tatsächliches Ende" hat Vorrang
       r.ts_entladen_ende_eff = r.ts_entladen_tat || r.ts_entladen_ende;
+      // Fallback: Wenn nur der TE-weite WE-Buchungszeitpunkt gebunden ist
+      // (altes Feed dimension_ts_we_buchung), diesen für die Positionsebene nutzen.
+      if (!r.ts_we_pos && r.ts_we_buchung) r.ts_we_pos = r.ts_we_buchung;
       // Zeitfenster (geplant_start/ende) hat Vorrang vor Einzeltermin
       if (!r.ts_geplant && r.ts_geplant_ende) r.ts_geplant = r.ts_geplant_ende;
       r.segment = segmentOf(r.ladestelle, r.transportmittel);
+      // Alle 7 Schicht/KW-Paare aus dem Export parsen
+      r.kw_ankunft = parseKw(r.kw_ankunft); r.kw_andocken = parseKw(r.kw_andocken);
+      r.kw_entl_start = parseKw(r.kw_entl_start); r.kw_entl_tat = parseKw(r.kw_entl_tat);
       r.kw_entl = parseKw(r.kw_entl); r.kw_we = parseKw(r.kw_we); r.kw_einl = parseKw(r.kw_einl);
-      r.team_entl = teamOf(r.sh_entl, r.kw_entl, cfg);
-      r.team_einl = teamOf(r.sh_einl, r.kw_einl, cfg);
+      // Team je Phase = Team, dessen Schicht bei ENDE der Phase lief (Konvention wie zuvor).
+      // sh_ankunft/kw_ankunft hat keine Phase, die dort endet -> kein team_*, bleibt nur als
+      // Ankunfts-Schicht für Volumen-Auswertungen (z.B. "Anlieferungen je Schicht") erhalten.
+      r.team_wait     = teamOf(r.sh_andocken, r.kw_andocken, cfg);       // Wartezeit Tor endet bei Andocken
+      r.team_reaction = teamOf(r.sh_entl_start, r.kw_entl_start, cfg);  // Reaktionszeit endet bei Entladen-Start
+      r.team_unload   = teamOf(r.sh_entl_tat || r.sh_entl, r.kw_entl_tat || r.kw_entl, cfg); // Entladedauer: tats. Ende bevorzugt
+      r.sh_unload_eff = r.sh_entl_tat || r.sh_entl; // gleiche Präferenz für Schichtlage-Einordnung in teamStats
+      r.team_booking  = teamOf(r.sh_we, r.kw_we, cfg);                  // Buchungsverzug ~ Schicht bei WE gebucht
+      r.team_entl     = teamOf(r.sh_entl, r.kw_entl, cfg);              // (Kompatibilität: bisheriges Feld)
+      r.team_putaway  = teamOf(r.sh_einl, r.kw_einl, cfg);
+      r.team_einl     = r.team_putaway;                                  // (Kompatibilität: bisheriges Feld)
       r.menge_ist = num(r.menge_ist); r.menge_soll = num(r.menge_soll);
+      r.pa1 = num(r.pa1);
+      r.paletten = (r.menge_ist != null && r.pa1 > 0) ? r.menge_ist / r.pa1 : null;
+      // Business-geflaggte Sonderfälle (keine statistischen Ausreißer, sondern im SAP markiert)
+      r.isDiffLieferung = !isNull(r.processcode);
+      r.isKritArt = !isNull(r.kategorie_krit_art) || !isNull(r.freitext_krit_art);
       r.qty_dev = (r.menge_ist != null && r.menge_soll != null) ? r.menge_ist - r.menge_soll : null;
       r.qty_dev_pct = (r.qty_dev != null && r.menge_soll) ? (100 * r.qty_dev) / r.menge_soll : null;
       positions.push(r);
@@ -158,15 +179,25 @@
         dmap.set(key, {
           belegnr: key, segment: p.segment, lieferant: p.lieferant,
           frachtfuehrer: p.frachtfuehrer, transportmittel: p.transportmittel,
+          lagernummer: p.lagernummer, land: p.land, hwg: p.hwg,
           ts_ankunft: p.ts_ankunft, ts_angedockt: p.ts_angedockt,
           ts_entladen_start: p.ts_entladen_start, ts_entladen_ende_eff: p.ts_entladen_ende_eff,
           ts_abfahrt: p.ts_abfahrt, ts_geplant: p.ts_geplant,
           ts_geplant_start: p.ts_geplant_start, ts_geplant_ende: p.ts_geplant_ende,
+          sh_ankunft: p.sh_ankunft, kw_ankunft: p.kw_ankunft,
+          te_intern: p.te_intern, te_extern: p.te_extern,
+          ts_ist_start: p.ts_ist_start, ts_ist_ende: p.ts_ist_ende,
+          team_wait: p.team_wait, team_reaction: p.team_reaction, team_unload: p.team_unload,
+          sh_andocken: p.sh_andocken, sh_entl_start: p.sh_entl_start, sh_unload_eff: p.sh_unload_eff,
           team_entl: p.team_entl, sh_entl: p.sh_entl, kw_entl: p.kw_entl,
+          isDiffLieferung: p.isDiffLieferung, isKritArt: p.isKritArt,
           nPos: 0,
         });
       }
-      dmap.get(key).nPos++;
+      const d = dmap.get(key);
+      d.nPos++;
+      d.isDiffLieferung = d.isDiffLieferung || p.isDiffLieferung;
+      d.isKritArt = d.isKritArt || p.isKritArt;
     }
     const deliveries = [...dmap.values()];
 
@@ -263,7 +294,10 @@
     for (const d of deliveries)
       if (d.ts_ankunft) heat[(d.ts_ankunft.getDay() + 6) % 7][d.ts_ankunft.getHours()]++;
 
-    /* --- Team-Vergleich (rotationsbereinigt) ----------------------------- */
+    /* --- Team-Vergleich (rotationsbereinigt), alle 5 passenden Phasen ---
+     * Zuordnung: Phase -> Team/Schicht, in der die Phase ENDET.
+     * sh_ankunft hat keine eigene Phase (nichts endet bei Ankunft) und
+     * fließt stattdessen separat als Anlieferungs-Volumen je Schicht ein. */
     function teamStats(recs, phaseKey, teamField, shField) {
       const out = {};
       for (const r of recs) {
@@ -281,9 +315,16 @@
       return res;
     }
     const teams = {
-      unload:  teamStats(deliveries, "unload", "team_entl", "sh_entl"),
-      putaway: teamStats(positions, "putaway", "team_einl", "sh_einl"),
+      wait_gate: teamStats(deliveries, "wait_gate", "team_wait", "sh_andocken"),
+      reaction:  teamStats(deliveries, "reaction", "team_reaction", "sh_entl_start"),
+      unload:    teamStats(deliveries, "unload", "team_unload", "sh_unload_eff"),
+      booking:   teamStats(positions, "booking", "team_booking", "sh_we"),
+      putaway:   teamStats(positions, "putaway", "team_putaway", "sh_einl"),
     };
+    // Anlieferungs-Volumen je Schicht (nutzt sh_ankunft, das sonst ungenutzt bliebe)
+    const arrivalsByShift = { Früh: 0, Spät: 0 };
+    for (const d of deliveries) if (d.sh_ankunft === "F") arrivalsByShift["Früh"]++;
+      else if (d.sh_ankunft === "S") arrivalsByShift["Spät"]++;
 
     /* --- Phasen-Mediane je Segment (Vergleichsbasis für Detailansicht) -- */
     const phaseMed = {};
@@ -297,6 +338,36 @@
       }
       phaseMed[k] = {};
       for (const [s, vals] of Object.entries(bySeg)) phaseMed[k][s] = median(vals);
+    }
+
+    /* --- Treiber-Dimensionen: welche Lagernummer/Land/HWG/Lieferant hat --
+     * die meisten Ausreißer je Metrik? Ergänzt die bisherige reine
+     * Lieferanten-Sicht um weitere Stammdaten-Dimensionen.               */
+    function driverRanking(recs, metricKey, dimField) {
+      const groups = new Map();
+      for (const r of recs) {
+        if (r.phases[metricKey] == null) continue;
+        const val = r[dimField];
+        if (val == null || val === "") continue;
+        const g = groups.get(val) || { val, n: 0, outN: 0 };
+        g.n++;
+        if (r.outlier[metricKey]) g.outN++;
+        groups.set(val, g);
+      }
+      return [...groups.values()]
+        .filter((g) => g.n >= 3)
+        .map((g) => ({ ...g, outRate: g.outN / g.n }))
+        .sort((a, b) => b.outN - a.outN || b.outRate - a.outRate)
+        .slice(0, 8);
+    }
+    const driverDims = { lieferant: "lieferant", lagernummer: "lagernummer", land: "land", hwg: "hwg" };
+    const drivers = {};
+    for (const [metricKey, def] of Object.entries(metricDefs)) {
+      if (metricKey === "delay") continue; // zweiseitig, hier weniger aussagekräftig
+      const recs = def.level === "delivery" ? deliveries : positions;
+      drivers[metricKey] = {};
+      for (const [outKey, field] of Object.entries(driverDims))
+        drivers[metricKey][outKey] = driverRanking(recs, metricKey, field);
     }
 
     /* --- KPIs ------------------------------------------------------------ */
@@ -319,6 +390,8 @@
       nDeliveries: deliveries.length,
       nPositions: positions.length,
       nErrors: dataErrors.length,
+      nDiffLieferung: deliveries.filter((d) => d.isDiffLieferung).length,
+      nKritArt: positions.filter((p) => p.isKritArt).length,
     };
 
     /* --- Perioden-Aggregation für Trends (Sparklines, Δ ggü. Vorperiode) -
@@ -440,7 +513,16 @@
       tone: "err",
     });
 
-    return { positions, deliveries, baselines, phaseMed, dataErrors, heat, teams, kpis, cfg,
+    // Business-geflaggte Sonderfälle für die Muster-Ansicht (getrennt von Datenfehlern)
+    const diffAll = deliveries.filter((d) => d.isDiffLieferung);
+    const kritAll = positions.filter((p) => p.isKritArt);
+    const sonderfaelle = {
+      diffLieferung: diffAll.slice(0, 20), nDiff: diffAll.length,
+      kritArt: kritAll.slice(0, 20), nKrit: kritAll.length,
+    };
+
+    return { positions, deliveries, baselines, phaseMed, dataErrors, heat, teams, arrivalsByShift,
+             drivers, sonderfaelle, kpis, cfg,
              trends, deltas, gran, bottleneck, bottleneckSeg, findings };
   }
 
@@ -532,15 +614,19 @@
     .kpi svg.spark{ display:block; width:100%; height:26px;}
     .kpi.err .val b{ color:${C.error};}
     /* Tabs */
-    nav{ display:flex; gap:2px; padding:8px 14px 0;}
+    nav{ display:flex; gap:2px; padding:8px 14px 0; overflow-x:auto; scrollbar-width:none;}
+    nav::-webkit-scrollbar{ display:none;}
     nav button{ font:inherit; font-size:12px; padding:6px 12px; border:0; background:transparent;
-      color:${C.muted}; cursor:pointer; border-bottom:2px solid transparent;}
+      color:${C.muted}; cursor:pointer; border-bottom:2px solid transparent; flex:none; white-space:nowrap;}
     nav button.on{ color:${C.ink}; font-weight:600; border-bottom-color:${C.outlier};}
     nav button:focus-visible{ outline:2px solid ${C.lkw}; outline-offset:-2px;}
     main{ flex:1; overflow:auto; padding:12px 14px;}
     .row{ display:flex; gap:14px; flex-wrap:wrap;}
     .card{ flex:1 1 340px; min-width:280px; background:${C.card}; border:1px solid ${C.border};
       border-radius:10px; padding:12px 14px;}
+    /* Tabellen & Grafiken scrollen bei schmaler Einbettung innerhalb der Karte,
+       statt das Widget-Layout horizontal zu sprengen */
+    .card > div{ overflow-x:auto; }
     .card.grow{ flex:2 1 460px;}
     .card h3{ font-size:11px; font-weight:600; color:${C.muted}; margin:0 0 8px; text-transform:uppercase; letter-spacing:.5px;}
     /* Klartext-Befunde */
@@ -571,6 +657,22 @@
     .tag{ display:inline-block; padding:1px 6px; border-radius:3px; font-size:10px; color:#fff;}
     .empty{ color:${C.muted}; font-size:12px; padding:24px; text-align:center;}
     .legend{ font-size:10.5px; color:${C.muted}; display:flex; gap:12px; margin:2px 0 6px; flex-wrap:wrap;}
+    /* Treiber-Dimensionen-Panel */
+    .drvgrid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:16px;}
+    .drvcol h4{ font-size:10.5px; font-weight:700; color:${C.ink}; margin:0 0 6px; text-transform:uppercase; letter-spacing:.3px;}
+    .drvrow{ display:flex; align-items:center; gap:6px; margin:3px 0; font-size:11px;}
+    .drvlbl{ width:78px; flex:none; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:${C.ink};}
+    .drvbar{ flex:1; height:7px; border-radius:4px; background:${C.border}; overflow:hidden;}
+    .drvbar i{ display:block; height:100%; background:${C.outlier}; border-radius:4px;}
+    .drvn{ width:44px; text-align:right; color:${C.muted}; font-variant-numeric:tabular-nums;}
+    .drvn b{ color:${C.outlier};}
+    /* Sonderfälle-Tabelle */
+    .sfnote{ font-size:10.5px; color:${C.muted}; margin-top:6px;}
+    /* Belegdaten-Raster im TE-Detail */
+    .bdgrid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:8px 18px;}
+    .bditem{ font-size:11.5px; display:flex; flex-direction:column; gap:1px;}
+    .bditem span{ color:${C.muted}; font-size:10px; text-transform:uppercase; letter-spacing:.3px;}
+    .bditem b{ color:${C.ink}; font-weight:600; word-break:break-word;}
     .legend i{ display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:4px; vertical-align:-1px;}
     /* Drill-down-Führung */
     .kpi[data-goto]{ cursor:pointer;}
@@ -627,10 +729,25 @@
   const fmtP = (p) => isNaN(p) ? "–" : (100 * p).toFixed(1) + " %";
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
-  /* ---- BW-Row-Zugriff (Konventionen aus dem WE-Tracker) ----------------
-   * SAC liefert Dimensionen als { id, label } mit _0-Suffix,
-   * Measures als { raw, formatted }.                                     */
-  const extractVal = (v) => {
+  /* ---- BW-Row-Zugriff ---------------------------------------------------
+   * SAC liefert je Dimension ein Objekt { id, label } (mit _0-Suffix),
+   * Measures als { raw, formatted }. Sobald BW angebunden ist, kommt der
+   * Klartext (label) automatisch mit dem Schluessel mit - deshalb gibt es
+   * pro Sachverhalt nur noch EIN Feed (z. B. dimension_lieferant), nicht
+   * mehr getrennte "_nr"/"_name"-Paare wie im Rohexport.
+   *   readDim()  -> bevorzugt das Label (Klartext), sonst der Code
+   *   readCode() -> immer der rohe Code/Schluessel (fuer Keys, F/S, KW.JJJJ)
+   *   readVal()  -> numerischer Measure-Wert                              */
+  const extractLabel = (v) => {
+    if (v == null) return null;
+    if (typeof v === "object") {
+      if ("label" in v && v.label != null && String(v.label).trim() !== "") return String(v.label).trim();
+      if ("id" in v) return String(v.id).trim();
+      return null;
+    }
+    return String(v).trim();
+  };
+  const extractCode = (v) => {
     if (v == null) return null;
     if (typeof v === "object" && "id" in v) return String(v.id).trim();
     return String(v).trim();
@@ -640,8 +757,16 @@
   const readDim = (row, ...keys) => {
     for (const key of keys)
       for (const k of [`${key}_0`, key]) {
-        const raw = extractVal(row[k]);
-        if (!isNullTok(raw)) return raw;
+        const v = extractLabel(row[k]);
+        if (!isNullTok(v)) return v;
+      }
+    return null;
+  };
+  const readCode = (row, ...keys) => {
+    for (const key of keys)
+      for (const k of [`${key}_0`, key]) {
+        const v = extractCode(row[k]);
+        if (!isNullTok(v)) return v;
       }
     return null;
   };
@@ -656,36 +781,74 @@
     return null;
   };
 
-  /** Feed-IDs (Manifest) -> kanonische Zeilen für die Engine. */
+  /** Feed-IDs (Manifest v0.7) -> kanonische Zeilen für die Engine.
+   *  Alle Spalten des WE-Exports sind abgedeckt; die frueheren separaten
+   *  Klartext-Spalten (z.B. "Unnamed: 20" neben WS/Lieferant) entfallen,
+   *  weil readDim() das Label automatisch aus der Dimension zieht.       */
   function ingestRows(rows) {
     return rows.map((row) => ({
-      belegnr:          readDim(row, "dimension_te", "dimension_belegnr"),      // TE = Anlieferungsschlüssel
-      pos:              readDim(row, "dimension_produkt_nr", "dimension_pos"),
-      produkt_name:     readDim(row, "dimension_produkt_name"),
-      lieferant:        readDim(row, "dimension_lieferant_name", "dimension_lieferant_nr"),
-      frachtfuehrer:    readDim(row, "dimension_frachtfuehrer"),
-      transportmittel:  readDim(row, "dimension_transportmittel"),
-      ladestelle:       readDim(row, "dimension_ladestelle"),
-      halle:            readDim(row, "dimension_halle"),
-      tor:              readDim(row, "dimension_tor"),
-      hwg:              readDim(row, "dimension_hwg"),
-      ts_ankunft:        readDim(row, "dimension_ts_ankunft"),
-      ts_angedockt:      readDim(row, "dimension_ts_angedockt"),
-      ts_entladen_start: readDim(row, "dimension_ts_entladen_start"),
-      ts_entladen_ende:  readDim(row, "dimension_ts_entladen_ende"),
-      ts_entladen_tat:   readDim(row, "dimension_ts_entladen_tat"),
-      ts_we_pos:         readDim(row, "dimension_ts_we_buchung"),
-      ts_we_buchung:     readDim(row, "dimension_ts_we_buchung"),
-      ts_einlagerung:    readDim(row, "dimension_ts_einlagerung"),
-      ts_abfahrt:        readDim(row, "dimension_ts_abfahrt"),
-      ts_geplant_start:  readDim(row, "dimension_geplant_start"),
-      ts_geplant_ende:   readDim(row, "dimension_geplant_ende"),
-      sh_entl:          readDim(row, "dimension_schicht_entladen"),
-      kw_entl:          readDim(row, "dimension_kw_entladen"),
-      sh_einl:          readDim(row, "dimension_schicht_einlagerung"),
-      kw_einl:          readDim(row, "dimension_kw_einlagerung"),
-      menge_ist:        readVal(row, "value_menge_ist", "value_menge"),
-      menge_soll:       readVal(row, "value_menge_soll"),
+      // Schlüssel (immer Code, keine Label-Bevorzugung)
+      belegnr:            readCode(row, "dimension_te"),
+      te_intern:          readCode(row, "dimension_te_intern"),
+      te_extern:          readCode(row, "dimension_te_extern"),
+      pos:                readCode(row, "dimension_pos", "dimension_produkt_nr"),
+      bestellung:         readCode(row, "dimension_bestellung"),
+      bestellposition:    readCode(row, "dimension_bestellposition"),
+      // Stammdaten (Klartext bevorzugt); alte Feed-IDs als Fallback für bestehende Bindings
+      produkt_name:       readDim(row, "dimension_produkt", "dimension_produkt_name"),
+      hwg:                readDim(row, "dimension_hwg"),
+      ksp:                readDim(row, "dimension_ksp"),
+      pgr:                readDim(row, "dimension_pgr"),
+      lagernummer:        readDim(row, "dimension_lagernummer"),
+      land:               readDim(row, "dimension_ursprungsland"),
+      lieferant:          readDim(row, "dimension_lieferant", "dimension_lieferant_name", "dimension_lieferant_nr"),
+      frachtfuehrer:      readDim(row, "dimension_frachtfuehrer"),
+      transportmittel:    readDim(row, "dimension_transportmittel"),
+      ladestelle:         readDim(row, "dimension_ladestelle"),
+      abw_mengeneinheit:  readDim(row, "dimension_abw_mengeneinheit"),
+      standard_packmittel:readDim(row, "dimension_standard_packmittel"),
+      processcode:        readCode(row, "dimension_processcode"),
+      processcode_bez:    readDim(row, "dimension_prozesscode_bez"),
+      kategorie_krit_art: readDim(row, "dimension_kategorie_krit_art"),
+      freitext_krit_art:  readDim(row, "dimension_freitext_krit_art"),
+      // Zeitstempel: IMMER den rohen Code (id) lesen, nie das Label.
+      // Das Label ist in SAC locale-abhängig formatiert und würde den
+      // Parser je nach Nutzer-Einstellung brechen; die id ist stabil SAP-Format.
+      ts_geplant:         readCode(row, "dimension_ts_geplant"),
+      // Kompatibilität: altes Zeitfenster-Paar weiterhin einlesen (Engine nutzt es für Termintreue, falls vorhanden)
+      ts_geplant_start:   readCode(row, "dimension_geplant_start"),
+      ts_geplant_ende:    readCode(row, "dimension_geplant_ende"),
+      ts_ankunft:         readCode(row, "dimension_ts_ankunft"),
+      ts_angedockt:       readCode(row, "dimension_ts_angedockt"),
+      ts_entladen_start:  readCode(row, "dimension_ts_entladen_start"),
+      ts_entladen_ende:   readCode(row, "dimension_ts_entladen_ende"),
+      ts_entladen_tat:    readCode(row, "dimension_ts_entladen_tat"),
+      ts_we_pos:          readCode(row, "dimension_ts_we_pos"),
+      ts_we_buchung:      readCode(row, "dimension_ts_we_buchung"),
+      ts_einlagerung:     readCode(row, "dimension_ts_einlagerung"),
+      ts_abfahrt:         readCode(row, "dimension_ts_abfahrt"),
+      ts_ist_start:       readCode(row, "dimension_ts_ist_start"),
+      ts_ist_ende:        readCode(row, "dimension_ts_ist_ende"),
+      // Schicht/KW je Prozessschritt (Code, kein Label)
+      sh_ankunft:         readCode(row, "dimension_schicht_ankunft"),
+      kw_ankunft:         readCode(row, "dimension_kw_ankunft"),
+      sh_andocken:        readCode(row, "dimension_schicht_andocken"),
+      kw_andocken:        readCode(row, "dimension_kw_andocken"),
+      sh_entl_start:      readCode(row, "dimension_schicht_entladen_start"),
+      kw_entl_start:      readCode(row, "dimension_kw_entladen_start"),
+      sh_entl_tat:        readCode(row, "dimension_schicht_entladen_tat"),
+      kw_entl_tat:        readCode(row, "dimension_kw_entladen_tat"),
+      sh_entl:            readCode(row, "dimension_schicht_entladen"),
+      kw_entl:            readCode(row, "dimension_kw_entladen"),
+      sh_we:              readCode(row, "dimension_schicht_we_buchung"),
+      kw_we:              readCode(row, "dimension_kw_we_buchung"),
+      sh_einl:            readCode(row, "dimension_schicht_einlagerung"),
+      kw_einl:            readCode(row, "dimension_kw_einlagerung"),
+      // Kennzahlen
+      menge_ist:          readVal(row, "value_menge_ist"),
+      menge_soll:         readVal(row, "value_menge_soll"),
+      pa1:                readVal(row, "value_pa1"),
+      anzahl_mitarbeiter: readVal(row, "value_anzahl_mitarbeiter"),
     }));
   }
 
@@ -897,9 +1060,13 @@
       const steps = order.map((k) => bn.find((b) => b.key === k)).filter(Boolean);
       const topKey = bn[0].key;
       const total = steps.reduce((a, s) => a + s.med, 0) || 1;
-      const W = 560, rowH = 40, padL = 130, padR = 56, H0 = steps.length * rowH + 30;
+      // Skala: die Streuung (P75) kann die Median-Summe deutlich überragen —
+      // deshalb an der tatsächlichen visuellen Ausdehnung ausrichten, nicht nur an der Summe.
+      let cumScan = 0, maxExtent = total;
+      for (const s of steps) { maxExtent = Math.max(maxExtent, cumScan + s.p75); cumScan += s.med; }
+      const W = 560, rowH = 40, padL = 130, padR = 48, H0 = steps.length * rowH + 30;
       const barW = W - padL - padR;
-      const X = (v) => (v / total) * barW;
+      const X = (v) => (v / maxExtent) * barW;
       let cum = 0;
       let svg = `<svg viewBox="0 0 ${W} ${H0}" width="100%" role="img" aria-label="Engpass-Wasserfall">`;
       steps.forEach((s, i) => {
@@ -909,13 +1076,14 @@
         // Verbindungslinie zum nächsten Balken (Wasserfall-Treppe)
         if (i > 0) svg += `<line x1="${padL + X(cum)}" x2="${padL + X(cum)}" y1="${y - 6}" y2="${y}" stroke="${C.border}" stroke-dasharray="2 2"/>`;
         svg += `<text x="0" y="${y + 17}" font-size="11.5" fill="${isTop ? C.accent : C.ink}" font-weight="${isTop ? 700 : 500}">${s.label}</text>`;
+        // Streuungsmarke (P75) zuerst zeichnen, damit das Label darüber lesbar bleibt
+        const wSpread = Math.max(0, X(s.p75) - X(s.med));
+        if (wSpread > 1) svg += `<rect x="${x + w}" y="${y + 10}" width="${wSpread}" height="8" rx="2" fill="${isTop ? C.accent : C.ink2}" opacity="0.18"><title>Streuung bis P75: ${fmtH(s.p75)}</title></rect>`;
         svg += `<rect x="${x}" y="${y + 4}" width="${w}" height="20" rx="3"
                   fill="${isTop ? C.accent : C.ink2}" opacity="${isTop ? 1 : 0.32}">
                   <title>${s.label}: Median ${fmtH(s.med)}, P75 ${fmtH(s.p75)}</title></rect>`;
-        // Streuungsmarke (P75) als schmale Verlängerung
-        const wSpread = Math.max(0, X(s.p75) - X(s.med));
-        if (wSpread > 1) svg += `<rect x="${x + w}" y="${y + 10}" width="${wSpread}" height="8" rx="2" fill="${isTop ? C.accent : C.ink2}" opacity="0.18"><title>Streuung bis P75: ${fmtH(s.p75)}</title></rect>`;
-        svg += `<text x="${x + w + wSpread + 6}" y="${y + 18}" font-size="10.5" fill="${C.muted}">${fmtH(s.med)}</text>`;
+        // Label direkt hinter dem Median-Balken (stabil, unabhängig von der Streuungslänge)
+        svg += `<text x="${x + w + 5}" y="${y + 18}" font-size="10.5" fill="${C.muted}">${fmtH(s.med)}</text>`;
         cum += s.med;
       });
       svg += `<line x1="${padL}" x2="${padL}" y1="4" y2="${H0 - 18}" stroke="${C.border}"/>`;
@@ -945,6 +1113,7 @@
       const M = this._model;
       const recs = mode.level === "delivery" ? M.deliveries : M.positions;
       const metric = mode.metric;
+      const hasDrivers = M.drivers && M.drivers[metric];
       const wrap = document.createElement("div");
       wrap.innerHTML = `
         <div class="legend">
@@ -958,11 +1127,58 @@
           ${mode.phases.length ? `<div class="card"><h3>Phasenband – wo steckt die Zeit? (Median je Segment)</h3><div id="ribbon"></div></div>` : ""}
           <div class="card" style="flex:2 1 460px"><h3>${esc(PHASES[metric] ? PHASES[metric].label : mode.label)} über Zeit · MAD-Grenze je Segment</h3><div id="scatter"></div></div>
         </div>
+        ${hasDrivers ? `<div class="card"><h3>Treiber nach Stammdaten-Dimension (Ausreißer-Anteil)</h3><div id="drv"></div></div>` : ""}
         <div class="card"><h3>Auffällige ${mode.level === "delivery" ? "Anlieferungen" : "Positionen"} (Top nach z-Score)</h3><div id="tbl"></div></div>`;
       main.appendChild(wrap);
       if (mode.phases.length) this._svgRibbon(wrap.querySelector("#ribbon"), recs, mode.phases);
       this._svgScatter(wrap.querySelector("#scatter"), recs, metric, mode);
+      if (hasDrivers) this._driverPanel(wrap.querySelector("#drv"), M.drivers[metric]);
       this._tblOutliers(wrap.querySelector("#tbl"), recs, metric, mode);
+    }
+
+    /** Kompakte Übersicht der restlichen Belegfelder (nur hier sichtbar). */
+    _belegdaten(el, d, pos) {
+      const distinct = (field) => [...new Set(pos.map((p) => p[field]).filter((v) => v != null && v !== ""))];
+      const fmtTs = (t) => t ? t.toLocaleString("de-DE", { dateStyle: "short", timeStyle: "short" }) : null;
+      const bestellungen = distinct("bestellung").map((b) => {
+        const posN = [...new Set(pos.filter((p) => p.bestellung === b).map((p) => p.bestellposition).filter(Boolean))];
+        return esc(b) + (posN.length ? ` / Pos. ${posN.map(esc).join(", ")}` : "");
+      });
+      // Ist-Start/Ende: nur hervorheben, wenn sie von Ankunft/Abfahrt abweichen (sonst Duplikat aus dem Quellsystem)
+      const istStart = d.ts_ist_start, istEnde = d.ts_ist_ende;
+      const dupStart = istStart && d.ts_ankunft && +istStart === +d.ts_ankunft;
+      const dupEnde = istEnde && d.ts_abfahrt && +istEnde === +d.ts_abfahrt;
+      const rows = [
+        ["Int. TE-Nummer", d.te_intern],
+        ["Ext. TE-Nummer", d.te_extern],
+        ["Bestellung", bestellungen.length ? bestellungen.join(" · ") : null],
+        ["Abw. Mengeneinheit", distinct("abw_mengeneinheit").map(esc).join(", ") || null],
+        ["Standard-Packmittel", distinct("standard_packmittel").map(esc).join(", ") || null],
+        ["Ist-Start", istStart ? fmtTs(istStart) + (dupStart ? " (= Ankunft)" : "") : null],
+        ["Ist-Ende", istEnde ? fmtTs(istEnde) + (dupEnde ? " (= Abfahrt)" : "") : null],
+      ].filter(([, v]) => v != null);
+      el.innerHTML = rows.length
+        ? `<div class="bdgrid">${rows.map(([k, v]) => `<div class="bditem"><span>${k}</span><b>${v}</b></div>`).join("")}</div>`
+        : `<div class="empty">Keine weiteren Belegdaten vorhanden.</div>`;
+    }
+
+    /** Kompakte Treiber-Rankings (Lieferant/Lagernummer/Land/HWG) nach Ausreißeranteil. */
+    _driverPanel(el, dims) {
+      const labels = { lieferant: "Lieferant", lagernummer: "Lagernummer", land: "Ursprungsland", hwg: "HWG" };
+      // Nur Werte mit tatsächlichen Ausreißern zeigen — 0er-Zeilen wären irreführend
+      const cols = Object.entries(dims)
+        .map(([key, rows]) => [key, rows.filter((r) => r.outN > 0)])
+        .filter(([, rows]) => rows.length);
+      if (!cols.length) { el.innerHTML = `<div class="empty">Keine Ausreißer-Häufung in den Stammdaten-Dimensionen.</div>`; return; }
+      el.innerHTML = `<div class="drvgrid">${cols.map(([key, rows]) => {
+        const maxOut = Math.max(...rows.map((r) => r.outN), 1);
+        return `<div class="drvcol"><h4>${esc(labels[key] || key)}</h4>` +
+          rows.slice(0, 5).map((r) => `<div class="drvrow">
+            <span class="drvlbl" title="${esc(r.val)}">${esc(String(r.val).slice(0, 20))}</span>
+            <span class="drvbar"><i style="width:${(r.outN / maxOut) * 100}%"></i></span>
+            <span class="drvn"><b>${r.outN}</b>/${r.n}</span>
+          </div>`).join("") + `</div>`;
+      }).join("")}</div>`;
     }
 
     /* ---- Signature-Element: Phasenband ---- */
@@ -1005,7 +1221,9 @@
       const tsField = metric === "putaway" || metric === "booking" ? "ts_we_pos" : "ts_ankunft";
       if (!pts.length) { el.innerHTML = `<div class="empty">Keine Werte für diese Metrik.</div>`; return; }
       const xs = pts.map((p) => +p[tsField]);
-      const x0 = Math.min(...xs), x1 = Math.max(...xs) || x0 + 1;
+      const x0 = Math.min(...xs);
+      const x1raw = Math.max(...xs);
+      const x1 = x1raw > x0 ? x1raw : x0 + 3600e3; // alle Punkte gleichzeitig -> künstliche 1h-Spanne statt Division durch 0
       const vals = pts.map((p) => p.phases[metric]);
       const yMaxData = quantileArr(vals, 0.99), yMin = Math.min(0, quantileArr(vals, 0.01));
       const yMax = yMaxData <= yMin ? yMin + 1 : yMaxData;
@@ -1088,8 +1306,12 @@
         if (d.outlier && d.outlier[k]) chips.push(`<span class="chip out">Ausreißer ${PHASES[k].label}</span>`);
       if (pos.some((p) => p.outlier && p.outlier.putaway)) chips.push(`<span class="chip out">Ausreißer Einlagerung</span>`);
       if (pos.some((p) => p.outlier && p.outlier.qty)) chips.push(`<span class="chip out">Mengenabweichung</span>`);
+      if (d.isDiffLieferung) chips.push(`<span class="chip err">Differenzlieferung (Processcode)</span>`);
+      if (pos.some((p) => p.isKritArt)) chips.push(`<span class="chip err">Kritischer Artikel</span>`);
       if (d.hasError || pos.some((p) => p.hasError)) chips.push(`<span class="chip err">Datenfehler</span>`);
       if (!chips.length) chips.push(`<span class="chip ok">Prozess im Rahmen</span>`);
+
+      const totalPaletten = pos.reduce((sum, p) => sum + (p.paletten || 0), 0);
 
       const wrap = document.createElement("div");
       wrap.innerHTML = `
@@ -1103,6 +1325,9 @@
           <span><span class="tag" style="background:${SEGC[d.segment] || C.sonst}">${esc(d.segment)}</span></span>
           <span>Ankunft: <b>${d.ts_ankunft ? d.ts_ankunft.toLocaleString("de-DE", { dateStyle: "medium", timeStyle: "short" }) : "–"}</b></span>
           <span>Positionen: <b>${d.nPos}</b></span>
+          ${totalPaletten > 0 ? `<span>Paletten gesamt: <b>${totalPaletten.toFixed(1)}</b></span>` : ""}
+          ${d.lagernummer ? `<span>Lager: <b>${esc(d.lagernummer)}</b></span>` : ""}
+          ${d.land ? `<span>Ursprungsland: <b>${esc(d.land)}</b></span>` : ""}
           ${d.sh_entl ? `<span>Schicht Entladen: <b>${d.sh_entl === "F" ? "Früh" : "Spät"}${d.kw_entl ? " · KW " + d.kw_entl.kw : ""}${d.team_entl ? " · " + esc(d.team_entl) : ""}</b></span>` : ""}
           <span>Termintreue: <b>${d.phases.delay == null ? "–" : d.phases.delay <= 0 ? "pünktlich" : "+" + fmtH(d.phases.delay)}</b></span>
         </div>
@@ -1110,9 +1335,11 @@
         <div class="row">
           <div class="card"><h3>Phasen vs. Median ${esc(d.segment)}</h3><div id="cmp"></div></div>
           <div class="card" style="flex:2 1 420px"><h3>Produkte dieser TE</h3><div id="ptbl"></div></div>
-        </div>`;
+        </div>
+        <div class="card"><h3>Weitere Belegdaten</h3><div id="bdat"></div></div>`;
       main.appendChild(wrap);
       wrap.querySelector("#back").addEventListener("click", () => { this._detail = null; this._render(); });
+      this._belegdaten(wrap.querySelector("#bdat"), d, pos);
       this._svgTimeline(wrap.querySelector("#tl"), d, pos);
       this._svgPhaseCompare(wrap.querySelector("#cmp"), d, M.phaseMed);
       this._tblProducts(wrap.querySelector("#ptbl"), pos, M.phaseMed);
@@ -1201,12 +1428,13 @@
           <td>${esc((p.produkt_name || p.hwg || "–")).slice(0, 28)}</td>
           <td>${p.menge_soll ?? "–"}</td>
           <td style="${qty ? "color:" + C.outlier : ""}">${p.menge_ist ?? "–"}${qty ? " ⚠" : ""}</td>
+          <td>${p.paletten != null ? p.paletten.toFixed(1) : "–"}</td>
           <td>${p.ts_einlagerung ? p.ts_einlagerung.toLocaleString("de-DE", { dateStyle: "short", timeStyle: "short" }) : "–"}</td>
           <td style="${out ? "color:" + C.outlier + ";font-weight:600" : ""}">${put != null ? fmtH(put) : "–"}${out ? " ⚠" : ""}</td>
           <td>${p.z && p.z.putaway != null ? p.z.putaway.toFixed(1) : "–"}</td></tr>`;
       }).join("");
       el.innerHTML = `<table><thead><tr>
-        <th>Produkt</th><th>Bezeichnung</th><th>SOLL</th><th>IST</th>
+        <th>Produkt</th><th>Bezeichnung</th><th>SOLL</th><th>IST</th><th>Paletten</th>
         <th>Einlagerung</th><th>WE→Einlag.</th><th>z</th>
         </tr></thead><tbody>${rows}</tbody></table>`;
     }
@@ -1228,7 +1456,8 @@
       const el = wrap.querySelector("#qsc");
       const tp = pts.filter((p) => p.ts_we_pos);
       if (tp.length) {
-        const xs = tp.map((p) => +p.ts_we_pos), x0 = Math.min(...xs), x1 = Math.max(...xs) || x0 + 1;
+        const xs = tp.map((p) => +p.ts_we_pos), x0 = Math.min(...xs);
+        const x1raw = Math.max(...xs), x1 = x1raw > x0 ? x1raw : x0 + 3600e3;
         const lim = Math.max(10, Math.min(100, quantileArr(tp.map((p) => Math.abs(p.qty_dev_pct)), 0.98)));
         const W = 640, Hh = 190, padL = 40;
         const X = (t) => padL + ((t - x0) / (x1 - x0)) * (W - padL - 8);
@@ -1261,9 +1490,12 @@
       const wrap = document.createElement("div");
       wrap.innerHTML = `<div class="row">
           <div class="card"><h3>Anlieferungen · Wochentag × Stunde</h3><div id="heat"></div></div>
-          <div class="card"><h3>Team-Vergleich (rotationsbereinigt) · Median</h3><div id="teams"></div></div>
+          <div class="card"><h3>Team-Vergleich (rotationsbereinigt) · Median je Phase</h3><div id="teams"></div></div>
         </div>
-        <div class="card"><h3>Datenfehler (negative Phasendauern u. ä.)</h3><div id="errs"></div></div>`;
+        <div class="row">
+          <div class="card"><h3>Datenfehler (negative Phasendauern u. ä.)</h3><div id="errs"></div></div>
+          <div class="card"><h3>Business-Sonderfälle (SAP-Kennzeichen, keine Statistik)</h3><div id="sonder"></div></div>
+        </div>`;
       main.appendChild(wrap);
       // Heatmap
       const days = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
@@ -1280,7 +1512,12 @@
       }
       for (let h = 0; h < 24; h += 4)
         svg += `<text x="${36 + h * cw}" y="${Hh - 4}" font-size="9" fill="${C.muted}">${h}h</text>`;
-      wrap.querySelector("#heat").innerHTML = svg + "</svg>";
+      const av = M.arrivalsByShift || {};
+      const avTotal = (av["Früh"] || 0) + (av["Spät"] || 0);
+      const avNote = avTotal
+        ? `<div class="sfnote">Anlieferungen je Schicht: Früh <b>${av["Früh"] || 0}</b> · Spät <b>${av["Spät"] || 0}</b> (${avTotal ? Math.round(100 * (av["Früh"] || 0) / avTotal) : 0} % Früh)</div>`
+        : "";
+      wrap.querySelector("#heat").innerHTML = svg + "</svg>" + avNote;
       // Teams
       wrap.querySelector("#teams").innerHTML = this._teamsSvg(M.teams);
       // Fehlerliste
@@ -1291,13 +1528,43 @@
         <td style="color:${C.error}">${fmtH(e.hours)}</td></tr>`).join("")}</tbody></table>
         ${M.dataErrors.length > 10 ? `<div class="legend">… ${M.dataErrors.length - 10} weitere</div>` : ""}`
         : `<div class="empty">Keine Datenfehler erkannt.</div>`;
+      // Sonderfälle (Processcode / kritische Artikel) - business-geflaggt, keine MAD-Ausreißer
+      this._tblSonderfaelle(wrap.querySelector("#sonder"), M.sonderfaelle);
+    }
+
+    _tblSonderfaelle(el, sf) {
+      if (!sf || (!sf.diffLieferung.length && !sf.kritArt.length)) {
+        el.innerHTML = `<div class="empty">Keine geflaggten Sonderfälle im Zeitraum.</div>`;
+        return;
+      }
+      let html = "";
+      if (sf.diffLieferung.length) {
+        html += `<div class="sfnote" style="margin-bottom:4px"><b>Differenzlieferungen</b> (Processcode gesetzt, z. B. Mengendifferenz):</div>
+          <table><thead><tr><th>TE</th><th>Lieferant</th><th>Segment</th></tr></thead><tbody>${
+          sf.diffLieferung.slice(0, 8).map((d) => `<tr data-drill="${esc(d.belegnr)}" title="Klicken für TE-Details">
+            <td><b>${esc(d.belegnr)}</b></td><td>${esc((d.lieferant || "–").slice(0, 24))}</td>
+            <td><span class="tag" style="background:${SEGC[d.segment] || C.sonst}">${esc(d.segment)}</span></td></tr>`).join("")
+          }</tbody></table>${sf.nDiff > 8 ? `<div class="legend">… ${sf.nDiff - 8} weitere</div>` : ""}`;
+      }
+      if (sf.kritArt.length) {
+        html += `<div class="sfnote" style="margin:10px 0 4px"><b>Kritische Artikel</b> (manuell markiert):</div>
+          <table><thead><tr><th>Beleg/Pos</th><th>Kategorie</th><th>Freitext</th></tr></thead><tbody>${
+          sf.kritArt.slice(0, 8).map((p) => `<tr data-drill="${esc(p.belegnr)}" title="Klicken für TE-Details">
+            <td><b>${esc(p.belegnr)}</b>${p.pos ? "/" + esc(p.pos) : ""}</td>
+            <td>${esc(p.kategorie_krit_art || "–")}</td><td>${esc((p.freitext_krit_art || "–")).slice(0, 30)}</td></tr>`).join("")
+          }</tbody></table>${sf.nKrit > 8 ? `<div class="legend">… ${sf.nKrit - 8} weitere</div>` : ""}`;
+      }
+      el.innerHTML = html;
     }
 
     _teamsSvg(teams) {
-      const blocks = [["unload", "Entladedauer (Hof)"], ["putaway", "Einlagerung (Lager)"]];
+      const blocks = [
+        ["wait_gate", "Wartezeit Tor"], ["reaction", "Reaktionszeit"], ["unload", "Entladedauer"],
+        ["booking", "Buchungsverzug"], ["putaway", "Einlagerung"],
+      ].filter(([k]) => teams[k] && Object.keys(teams[k]).length);
       const names = [...new Set(blocks.flatMap(([k]) => Object.keys(teams[k] || {})))].sort();
       if (!names.length) return `<div class="empty">Keine Schicht-/KW-Daten im Feed (Z.Sh./Z.KW-Spalten anbinden).</div>`;
-      const W = 420, bh = 16, gap = 44;
+      const W = 420, bh = 16, gap = 20;
       let y = 12, svg = "";
       for (const [key, label] of blocks) {
         const t = teams[key] || {};
@@ -1318,7 +1585,7 @@
           });
           y += 2 * (bh + 2) + 6;
         }
-        y += gap - 30;
+        y += gap;
       }
       return `<svg viewBox="0 0 ${W} ${y}" width="100%">${svg}</svg>`;
     }
