@@ -1,6 +1,7 @@
 /* =========================================================================
- * WE-Prozess-Cockpit – SAC Custom Widget (v0.8.3) · Entwickler: Benne
- * Dark Mode als Standard.
+ * WE-Prozess-Cockpit – SAC Custom Widget (v0.8.4) · Entwickler: Benne
+ * Dark Mode fuer bestehende Instanzen erklaert, Diagramm-Proportionen fuer
+ * schmale Einbettung korrigiert.
  * ========================================================================= */
 /* =========================================================================
  * WE Prozess-Cockpit  –  SAC Custom Widget (Grundgerüst v0.1)
@@ -1064,7 +1065,7 @@
       // deshalb an der tatsächlichen visuellen Ausdehnung ausrichten, nicht nur an der Summe.
       let cumScan = 0, maxExtent = total;
       for (const s of steps) { maxExtent = Math.max(maxExtent, cumScan + s.p75); cumScan += s.med; }
-      const W = 560, rowH = 40, padL = 130, padR = 48, H0 = steps.length * rowH + 30;
+      const W = 380, rowH = 40, padL = 96, padR = 34, H0 = steps.length * rowH + 30;
       const barW = W - padL - padR;
       const X = (v) => (v / maxExtent) * barW;
       let cum = 0;
@@ -1192,7 +1193,7 @@
         return { seg, meds, total: meds.reduce((a, b) => a + (b.med || 0), 0) };
       });
       const maxT = Math.max(...rows.map((r) => r.total), 0.1);
-      const W = 420, rowH = 34, H0 = rows.length * rowH + 22;
+      const W = 340, rowH = 34, H0 = rows.length * rowH + 22;
       const shade = [1, 0.72, 0.45];
       let svg = `<svg viewBox="0 0 ${W} ${H0}" width="100%" role="img" aria-label="Phasenband">`;
       rows.forEach((r, ri) => {
@@ -1227,7 +1228,7 @@
       const vals = pts.map((p) => p.phases[metric]);
       const yMaxData = quantileArr(vals, 0.99), yMin = Math.min(0, quantileArr(vals, 0.01));
       const yMax = yMaxData <= yMin ? yMin + 1 : yMaxData;
-      const W = 640, Hh = 220, padL = 44, padB = 20, padT = 8;
+      const W = 380, Hh = 210, padL = 40, padB = 20, padT = 8;
       const X = (t) => padL + ((t - x0) / (x1 - x0)) * (W - padL - 8);
       const Y = (v) => padT + (1 - (Math.min(v, yMax) - yMin) / (yMax - yMin)) * (Hh - padT - padB);
       let svg = `<svg viewBox="0 0 ${W} ${Hh}" width="100%" role="img" aria-label="Streudiagramm">`;
@@ -1356,7 +1357,7 @@
       const all = [...events.map((e) => e[1]), ...einl, ...weB];
       if (all.length < 2) { el.innerHTML = `<div class="empty">Zu wenige Zeitstempel für einen Zeitstrahl.</div>`; return; }
       const t0 = Math.min(...all.map(Number)), t1 = Math.max(...all.map(Number));
-      const W = 660, Hh = 96, padL = 14, padR = 14, yL = 52;
+      const W = 460, Hh = 96, padL = 14, padR = 14, yL = 52;
       const X = (t) => padL + ((+t - t0) / (t1 - t0 || 1)) * (W - padL - padR);
       const col = SEGC[d.segment] || C.sonst;
       let svg = `<svg viewBox="0 0 ${W} ${Hh}" width="100%" role="img" aria-label="Zeitstrahl TE ${esc(d.belegnr)}">`;
@@ -1400,19 +1401,19 @@
       })).filter((r) => r.val != null || r.med != null);
       if (!rows.length) { el.innerHTML = `<div class="empty">Keine Phasendaten.</div>`; return; }
       const maxV = Math.max(...rows.flatMap((r) => [r.val || 0, r.med || 0]), 0.1);
-      const W = 340, rh = 34;
+      const W = 280, rh = 34;
       let svg = `<svg viewBox="0 0 ${W} ${rows.length * rh + 4}" width="100%">`;
       rows.forEach((r, i) => {
         const y = i * rh;
-        const bw = (v) => Math.max(2, (v / maxV) * (W - 150));
+        const bw = (v) => Math.max(2, (v / maxV) * (W - 128));
         svg += `<text x="0" y="${y + 12}" font-size="10" fill="${C.ink}">${r.label}</text>`;
         if (r.val != null)
-          svg += `<rect x="96" y="${y + 3}" width="${bw(r.val)}" height="9" rx="2" fill="${r.out ? C.outlier : (SEGC[d.segment] || C.sonst)}"><title>Diese TE: ${fmtH(r.val)}</title></rect>
-                  <text x="${100 + bw(r.val)}" y="${y + 11}" font-size="9" fill="${r.out ? C.outlier : C.ink}">${fmtH(r.val)}${r.out ? " ⚠" : ""}</text>`;
-        else svg += `<text x="96" y="${y + 11}" font-size="9" fill="${C.muted}">–</text>`;
+          svg += `<rect x="78" y="${y + 3}" width="${bw(r.val)}" height="9" rx="2" fill="${r.out ? C.outlier : (SEGC[d.segment] || C.sonst)}"><title>Diese TE: ${fmtH(r.val)}</title></rect>
+                  <text x="${82 + bw(r.val)}" y="${y + 11}" font-size="9" fill="${r.out ? C.outlier : C.ink}">${fmtH(r.val)}${r.out ? " ⚠" : ""}</text>`;
+        else svg += `<text x="78" y="${y + 11}" font-size="9" fill="${C.muted}">–</text>`;
         if (r.med != null)
-          svg += `<rect x="96" y="${y + 15}" width="${bw(r.med)}" height="5" rx="2" fill="${C.muted}" opacity=".55"><title>Median ${d.segment}: ${fmtH(r.med)}</title></rect>
-                  <text x="${100 + bw(r.med)}" y="${y + 21}" font-size="8.5" fill="${C.muted}">Median ${fmtH(r.med)}</text>`;
+          svg += `<rect x="78" y="${y + 15}" width="${bw(r.med)}" height="5" rx="2" fill="${C.muted}" opacity=".55"><title>Median ${d.segment}: ${fmtH(r.med)}</title></rect>
+                  <text x="${82 + bw(r.med)}" y="${y + 21}" font-size="8.5" fill="${C.muted}">Median ${fmtH(r.med)}</text>`;
       });
       el.innerHTML = svg + "</svg>";
     }
@@ -1459,7 +1460,7 @@
         const xs = tp.map((p) => +p.ts_we_pos), x0 = Math.min(...xs);
         const x1raw = Math.max(...xs), x1 = x1raw > x0 ? x1raw : x0 + 3600e3;
         const lim = Math.max(10, Math.min(100, quantileArr(tp.map((p) => Math.abs(p.qty_dev_pct)), 0.98)));
-        const W = 640, Hh = 190, padL = 40;
+        const W = 380, Hh = 180, padL = 38;
         const X = (t) => padL + ((t - x0) / (x1 - x0)) * (W - padL - 8);
         const Y = (v) => 10 + (1 - (Math.max(-lim, Math.min(lim, v)) + lim) / (2 * lim)) * (Hh - 30);
         let svg = `<svg viewBox="0 0 ${W} ${Hh}" width="100%">`;
@@ -1500,18 +1501,18 @@
       // Heatmap
       const days = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
       const max = Math.max(...M.heat.flat(), 1);
-      const cw = 21, ch = 20, W = 24 * cw + 36, Hh = 7 * ch + 22;
+      const cw = 14, ch = 16, W = 24 * cw + 32, Hh = 7 * ch + 22;
       let svg = `<svg viewBox="0 0 ${W} ${Hh}" width="100%">`;
       for (let d = 0; d < 7; d++) {
         svg += `<text x="0" y="${d * ch + 14}" font-size="10" fill="${C.muted}">${days[d]}</text>`;
         for (let h = 0; h < 24; h++) {
           const v = M.heat[d][h], a = v / max;
-          svg += `<rect x="${36 + h * cw}" y="${d * ch + 2}" width="${cw - 2}" height="${ch - 3}" rx="2"
+          svg += `<rect x="${32 + h * cw}" y="${d * ch + 2}" width="${cw - 2}" height="${ch - 3}" rx="2"
             fill="${C.lkw}" opacity="${v ? 0.12 + 0.85 * a : 0.04}"><title>${days[d]} ${h}:00 – ${v} Ankünfte</title></rect>`;
         }
       }
       for (let h = 0; h < 24; h += 4)
-        svg += `<text x="${36 + h * cw}" y="${Hh - 4}" font-size="9" fill="${C.muted}">${h}h</text>`;
+        svg += `<text x="${32 + h * cw}" y="${Hh - 4}" font-size="9" fill="${C.muted}">${h}h</text>`;
       const av = M.arrivalsByShift || {};
       const avTotal = (av["Früh"] || 0) + (av["Spät"] || 0);
       const avNote = avTotal
@@ -1564,7 +1565,7 @@
       ].filter(([k]) => teams[k] && Object.keys(teams[k]).length);
       const names = [...new Set(blocks.flatMap(([k]) => Object.keys(teams[k] || {})))].sort();
       if (!names.length) return `<div class="empty">Keine Schicht-/KW-Daten im Feed (Z.Sh./Z.KW-Spalten anbinden).</div>`;
-      const W = 420, bh = 16, gap = 20;
+      const W = 340, bh = 16, gap = 20;
       let y = 12, svg = "";
       for (const [key, label] of blocks) {
         const t = teams[key] || {};
@@ -1575,13 +1576,13 @@
           svg += `<text x="0" y="${y + 12}" font-size="10.5" fill="${C.ink}">${esc(n)}</text>`;
           ["Früh", "Spät"].forEach((lage, i) => {
             const s = t[n]?.[lage];
-            const w = s ? Math.max(2, (s.med / maxV) * (W - 190)) : 0;
+            const w = s ? Math.max(2, (s.med / maxV) * (W - 150)) : 0;
             const yy = y + i * (bh + 2);
-            svg += `<text x="66" y="${yy + 12}" font-size="9" fill="${C.muted}">${lage}</text>`;
-            if (s) svg += `<rect x="96" y="${yy + 2}" width="${w}" height="${bh - 4}" rx="2"
+            svg += `<text x="54" y="${yy + 12}" font-size="9" fill="${C.muted}">${lage}</text>`;
+            if (s) svg += `<rect x="80" y="${yy + 2}" width="${w}" height="${bh - 4}" rx="2"
               fill="${i ? C.container : C.lkw}"><title>${esc(n)} · ${lage}-Wochen: ${fmtH(s.med)} (n=${s.n})</title></rect>
-              <text x="${100 + w}" y="${yy + 12}" font-size="9" fill="${C.muted}">${fmtH(s.med)} · n=${s.n}</text>`;
-            else svg += `<text x="96" y="${yy + 12}" font-size="9" fill="${C.muted}">–</text>`;
+              <text x="${84 + w}" y="${yy + 12}" font-size="9" fill="${C.muted}">${fmtH(s.med)} · n=${s.n}</text>`;
+            else svg += `<text x="80" y="${yy + 12}" font-size="9" fill="${C.muted}">–</text>`;
           });
           y += 2 * (bh + 2) + 6;
         }
