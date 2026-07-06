@@ -1,6 +1,6 @@
 /* =========================================================================
- * WE-Prozess-Cockpit – SAC Custom Widget (v0.8.2) · Entwickler: Benne
- * Visuelle Robustheit (schmale Einbettung, Wasserfall-Skala) + Bugfixes.
+ * WE-Prozess-Cockpit – SAC Custom Widget (v0.8.3) · Entwickler: Benne
+ * Dark Mode als Standard.
  * ========================================================================= */
 /* =========================================================================
  * WE Prozess-Cockpit  –  SAC Custom Widget (Grundgerüst v0.1)
@@ -859,7 +859,7 @@
       this._shadow.innerHTML = TPL;
       this._props = {
         madThreshold: 3.5, teamEvenFrueh: "Team A", teamOddFrueh: "Team B",
-        baselineMode: "segment", toleranzMin: 30, theme: "light", defaultView: "ueberblick",
+        baselineMode: "segment", toleranzMin: 30, theme: "dark", defaultView: "ueberblick",
       };
       this._rows = null; this._model = null; this._mode = "ueberblick"; this._detail = null;
       this._applyTheme();
