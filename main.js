@@ -186,6 +186,13 @@
     return d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
   };
 
+  // Formatiert ein Date-Objekt als "DD.MM. HH:MM" (kompakt für Popup)
+  const fmtDateTime = (d) => {
+    if (!d) return '–';
+    return d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }) + ' ' +
+           d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+  };
+
   // Berechnet Differenz zweier Date-Objekte in Minuten (kann negativ sein)
   const diffMin = (a, b) => {
     if (!a || !b) return null;
@@ -463,28 +470,28 @@
         --c-red-dim:    rgba(192, 57, 43, 0.14);
         --c-red-border: rgba(192, 57, 43, 0.35);
 
-        /* Status-Farben */
-        --c-green:      #27ae60;
-        --c-green-dim:  rgba(39, 174, 96, 0.14);
-        --c-yellow:     #f39c12;
-        --c-yellow-dim: rgba(243, 156, 18, 0.14);
-        --c-blue:       #2980b9;
-        --c-blue-dim:   rgba(41, 128, 185, 0.14);
+        /* Status-Farben (heller für besseren Kontrast im Dark-Mode) */
+        --c-green:      #2ecc71;
+        --c-green-dim:  rgba(46, 204, 113, 0.18);
+        --c-yellow:     #f5b041;
+        --c-yellow-dim: rgba(245, 176, 65, 0.18);
+        --c-blue:       #3d9ad6;
+        --c-blue-dim:   rgba(61, 154, 214, 0.18);
 
-        /* Dark-Theme Hintergründe */
-        --c-bg:         #0f1117;
-        --c-bg2:        #161a24;
-        --c-bg3:        #1e2335;
-        --c-bg4:        #252b3d;
+        /* Dark-Theme Hintergründe (etwas aufgehellt für mehr Tiefe) */
+        --c-bg:         #10131b;
+        --c-bg2:        #191e2b;
+        --c-bg3:        #232a3e;
+        --c-bg4:        #2e3650;
 
-        /* Dark-Theme Texte */
-        --c-text:       #e8eaf0;
-        --c-text2:      #8b90a0;
-        --c-text3:      #555b6e;
+        /* Dark-Theme Texte (deutlich höherer Kontrast) */
+        --c-text:       #f2f4f8;
+        --c-text2:      #b4bacc;
+        --c-text3:      #7e8598;
 
-        /* Dark-Theme Ränder */
-        --c-border:     rgba(255, 255, 255, 0.07);
-        --c-border2:    rgba(255, 255, 255, 0.13);
+        /* Dark-Theme Ränder (sichtbarer) */
+        --c-border:     rgba(255, 255, 255, 0.11);
+        --c-border2:    rgba(255, 255, 255, 0.18);
 
         /* Schatten */
         --shadow-sm:    0 2px 8px  rgba(0, 0, 0, 0.35);
@@ -1216,16 +1223,18 @@
         padding:       15px 15px 13px;
         cursor:        pointer;
         position:      relative;
-        overflow:      hidden;
         transition:    transform 0.18s var(--ease),
                        box-shadow 0.18s var(--ease),
                        border-color 0.18s;
       }
+      /* Akzentstreifen darf nicht rauslaufen, Popup aber schon */
+      .te-card::before { border-radius: var(--r-lg) 0 0 var(--r-lg); }
 
       .te-card:hover {
         transform:    translateY(-2px);
         box-shadow:   var(--shadow-md);
         border-color: var(--c-border2);
+        z-index:      50;
       }
 
       /* Status-Akzentstreifen links */
@@ -1317,20 +1326,50 @@
       .tc-step.active.late { background: var(--c-red);
                              animation: step-pulse 1.6s ease-in-out infinite; }
 
-      /* Optionaler Abfahrt-Schritt (abgesetzt, gestrichelt) */
-      .tc-step-sep { width: 3px; flex-shrink: 0; }
+      /* Überfällig: geplante Zeit erreicht, aber keine Ankunft → rot blinkend */
+      .tc-step.overdue {
+        background: var(--c-red);
+        animation:  step-blink 1s ease-in-out infinite;
+      }
+      @keyframes step-blink {
+        0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(231,76,60,0.5); }
+        50%      { opacity: 0.35; box-shadow: 0 0 6px 1px rgba(231,76,60,0.7); }
+      }
+
+      /* Optionaler Abfahrt-Schritt (abgesetzt durch Trennstrich, mit LKW-Symbol) */
+      .tc-step-sep {
+        width:       1px;
+        flex-shrink: 0;
+        align-self:  stretch;
+        background:  var(--c-border2);
+        margin:      -2px 4px;
+      }
       .tc-step-abfahrt {
-        width:         14px;
+        width:         18px;
         flex-shrink:   0;
         height:        4px;
         border-radius: 2px;
-        border:        1px dashed var(--c-border2);
+        border:        1px dashed var(--c-text3);
         background:    transparent;
+        position:      relative;
+      }
+      .tc-step-abfahrt::after {
+        content:    '🚛';
+        position:   absolute;
+        top:        -13px;
+        right:      0;
+        font-size:  9px;
+        opacity:    0.35;
+        filter:     grayscale(1);
       }
       .tc-step-abfahrt.done {
-        background:  var(--c-text3);
+        background:   var(--c-green);
         border-style: solid;
-        border-color: var(--c-text3);
+        border-color: var(--c-green);
+      }
+      .tc-step-abfahrt.done::after {
+        opacity: 0.9;
+        filter:  none;
       }
 
       @keyframes step-pulse {
@@ -1342,10 +1381,91 @@
       .tc-footer {
         display:       flex;
         align-items:   center;
-        gap:           10px;
+        gap:           8px;
         padding-left:  6px;
-        flex-wrap:     wrap;
+        flex-wrap:     nowrap;
+        white-space:   nowrap;
       }
+      .tc-footer-spacer { flex: 1; }
+      .tc-time {
+        font-size:   11px;
+        color:       var(--c-text2);
+        font-family: var(--font-mono);
+        flex-shrink: 0;
+      }
+      .tc-hint-badge {
+        font-family:   var(--font-mono);
+        font-size:     10px;
+        font-weight:   700;
+        padding:       2px 8px;
+        border-radius: var(--r-sm);
+        flex-shrink:   0;
+      }
+      .tc-hint-badge.ok   { color: var(--c-green); background: var(--c-green-dim); }
+      .tc-hint-badge.warn { color: var(--c-yellow); background: var(--c-yellow-dim); }
+
+      /* ── Hover-Popup mit allen Details ── */
+      .tc-popup {
+        position:      absolute;
+        top:           calc(100% + 8px);
+        left:          50%;
+        transform:     translateX(-50%) translateY(-6px);
+        width:         290px;
+        max-width:     92vw;
+        background:    var(--c-bg3);
+        border:        1px solid var(--c-border2);
+        border-radius: var(--r-md);
+        box-shadow:    var(--shadow-lg);
+        padding:       13px 15px;
+        opacity:       0;
+        visibility:    hidden;
+        pointer-events: none;
+        transition:    opacity 0.16s var(--ease), transform 0.16s var(--ease);
+        z-index:       100;
+      }
+      .te-card:hover .tc-popup {
+        opacity:    1;
+        visibility: visible;
+        transform:  translateX(-50%) translateY(0);
+      }
+      /* kleiner Pfeil nach oben */
+      .tc-popup::before {
+        content:      '';
+        position:     absolute;
+        top:          -6px;
+        left:         50%;
+        transform:    translateX(-50%) rotate(45deg);
+        width:        11px; height: 11px;
+        background:   var(--c-bg3);
+        border-left:  1px solid var(--c-border2);
+        border-top:   1px solid var(--c-border2);
+      }
+      .tc-pop-head {
+        display:       flex;
+        align-items:   center;
+        justify-content: space-between;
+        gap:           8px;
+        margin-bottom: 10px;
+        padding-bottom: 8px;
+        border-bottom: 1px solid var(--c-border);
+      }
+      .tc-pop-te {
+        font-family:   var(--font-mono);
+        font-size:     14px;
+        font-weight:   700;
+        color:         var(--c-text);
+      }
+      .tc-pop-row {
+        display:         flex;
+        justify-content: space-between;
+        gap:             12px;
+        font-size:       11px;
+        line-height:     1.9;
+      }
+      .tc-pop-label { color: var(--c-text2); }
+      .tc-pop-val   { color: var(--c-text); font-family: var(--font-mono); text-align: right; }
+      .tc-pop-sep   { height: 1px; background: var(--c-border); margin: 8px 0; }
+      .tc-pop-hint  { font-size: 11px; color: var(--c-yellow); line-height: 1.5; }
 
       .tc-info {
         display:       flex;
@@ -1715,142 +1835,117 @@
       .d-info-val.dim { color: var(--c-text3); }
 
       /* ── Zeitstrahl ── */
-      .tl-wrap {
+      .zs-wrap {
         overflow-x: auto;
-        padding-bottom: 4px;
+        padding: 8px 0 4px;
         margin-bottom: 6px;
       }
-
-      .tl-track {
-        position:   relative;
-        min-width:  580px;
-        height:     88px;
-        padding:    0 24px;
+      .zs-track {
+        position:  relative;
+        min-width: 480px;
+        height:    104px;
+        padding:   0 30px;
+        margin:    0 auto;
       }
-
-      /* Basis-Linie */
-      .tl-base {
+      /* Mittellinie */
+      .zs-baseline {
         position:   absolute;
-        top:        30px;
-        left:       24px; right: 24px;
+        top:        50px;
+        left:       30px; right: 30px;
         height:     2px;
         background: var(--c-border2);
       }
-
-      /* Soll-Balken (gestrichelt) */
-      .tl-soll-bar {
-        position:   absolute;
-        top:        29px;
-        height:     4px;
+      /* Soll-Balken (grau, dezent) */
+      .zs-soll {
+        position:      absolute;
+        top:           48px;
+        height:        6px;
+        border-radius: 3px;
+        background:    repeating-linear-gradient(90deg,
+          var(--c-text3) 0, var(--c-text3) 5px,
+          transparent 5px, transparent 10px);
+        opacity:       0.5;
+      }
+      /* Ist-Verbindungslinie */
+      .zs-ist-linie {
+        position:      absolute;
+        top:           50px;
+        height:        3px;
         border-radius: 2px;
-        background: repeating-linear-gradient(
-          90deg,
-          var(--c-text3) 0px, var(--c-text3) 5px,
-          transparent    5px, transparent   10px
-        );
-        opacity: 0.45;
+        z-index:       1;
       }
-
-      /* Ist-Strecke zwischen zwei Punkten */
-      .tl-segment {
-        position:   absolute;
-        top:        30px;
-        height:     2px;
-        border-radius: 1px;
+      /* Punkt-Container */
+      .zs-point {
+        position:  absolute;
+        top:       44px;
+        transform: translateX(-50%);
+        z-index:   2;
       }
-
-      .tl-segment.ok   { background: var(--c-green); }
-      .tl-segment.warn { background: var(--c-yellow); }
-      .tl-segment.bad  { background: var(--c-red); }
-      .tl-segment.dim  { background: var(--c-text3); opacity: 0.4; }
-
-      /* Punkt auf dem Zeitstrahl */
-      .tl-point {
-        position:   absolute;
-        top:        22px;
-        transform:  translateX(-50%);
-        display:    flex;
-        flex-direction: column;
-        align-items: center;
-        gap:         0;
-      }
-
-      .tl-dot {
-        width:         16px; height: 16px;
+      .zs-dot {
+        width:  15px; height: 15px;
         border-radius: 50%;
-        border:        2px solid var(--c-bg2);
-        position:      relative;
-        z-index:       2;
-        transition:    transform 0.15s;
+        border: 3px solid var(--c-bg);
+        margin: 0 auto;
+        position: relative;
+        z-index:  3;
       }
-
-            .tl-dot.optional {
-        background:   transparent;
-        border:       2px dashed var(--c-text3);
-        opacity:      0.7;
+      .zs-dot.done { background: var(--c-green); box-shadow: 0 0 0 2px var(--c-green); }
+      .zs-dot.late { background: var(--c-red);   box-shadow: 0 0 0 2px var(--c-red); }
+      .zs-dot.optional {
+        background: transparent;
+        border: 2px dashed var(--c-text2);
       }
-      .tl-point-optional .tl-label { color: var(--c-text3); font-style: italic; }
-      .tl-point-optional .tl-time  { color: var(--c-text3); }
-      .tl-dot.ok   { background: var(--c-green);  box-shadow: 0 0 0 2px var(--c-green); }
-      .tl-dot.warn { background: var(--c-yellow); box-shadow: 0 0 0 2px var(--c-yellow); }
-      .tl-dot.bad  { background: var(--c-red);    box-shadow: 0 0 0 2px var(--c-red); }
-      .tl-dot.open { background: var(--c-bg3);    box-shadow: 0 0 0 2px var(--c-border2); }
-
-      .tl-time {
-        font-family:  var(--font-mono);
-        font-size:    9px;
-        color:        var(--c-text2);
-        margin-top:   5px;
-        white-space:  nowrap;
-        text-align:   center;
+      /* Labels abwechselnd oben/unten */
+      .zs-label {
+        position:   absolute;
+        left:       50%;
+        transform:  translateX(-50%);
+        text-align: center;
+        white-space: nowrap;
       }
-
-      .tl-label {
-        font-family:    var(--font-mono);
-        font-size:      8px;
-        letter-spacing: 0.05em;
-        text-transform: uppercase;
-        color:          var(--c-text3);
-        margin-top:     3px;
-        white-space:    nowrap;
-        text-align:     center;
-        line-height:    1.3;
+      .zs-point.oben  .zs-label { bottom: 22px; }
+      .zs-point.unten .zs-label { top: 22px; }
+      .zs-label-name {
+        font-size:   9px;
+        font-weight: 600;
+        color:       var(--c-text);
+        line-height: 1.2;
       }
-
-      /* Δ-Chip über einem Punkt */
-      .tl-delta-chip {
-        position:       absolute;
-        top:            -20px;
-        left:           50%;
-        transform:      translateX(-50%);
-        font-family:    var(--font-mono);
-        font-size:      8px;
-        font-weight:    700;
-        padding:        1px 5px;
-        border-radius:  3px;
-        white-space:    nowrap;
-        z-index:        3;
+      .zs-label-time {
+        font-family: var(--font-mono);
+        font-size:   9px;
+        color:       var(--c-text2);
       }
+      .zs-opt { color: var(--c-text3); font-weight: 400; }
+      /* Nur-geplant-Hinweis */
+      .zs-geplant {
+        display:     flex;
+        align-items: center;
+        gap:         8px;
+        padding:     16px;
+        font-size:   12px;
+        color:       var(--c-text2);
+        background:   var(--c-bg2);
+        border-radius: var(--r-md);
+        border:      1px dashed var(--c-border2);
+      }
+      .zs-geplant-icon { font-size: 15px; }
+      .zs-geplant-hint { color: var(--c-text3); font-style: italic; }
 
-      .tl-delta-chip.pos { background: var(--c-red-dim);   color: #e74c3c; }
-      .tl-delta-chip.neg { background: var(--c-green-dim); color: #58d68d; }
-
-      /* Legende unter dem Zeitstrahl */
+      /* Zeitstrahl-Legende */
       .tl-legend {
-        display:    flex;
-        gap:        14px;
-        flex-wrap:  wrap;
-        margin-top: 8px;
+        display:     flex;
+        flex-wrap:   wrap;
+        gap:         14px;
+        margin-bottom: 4px;
       }
-
       .tl-legend-item {
         display:     flex;
         align-items: center;
-        gap:         5px;
+        gap:         6px;
         font-size:   10px;
-        color:       var(--c-text3);
+        color:       var(--c-text2);
       }
-
       .tl-legend-swatch {
         width: 18px; height: 3px;
         border-radius: 2px;
@@ -3103,11 +3198,10 @@
       return `<span class="ls-badge ${style.cls}">${style.icon} ${esc(kurz)}</span>`;
     }
 
-    // Baut das HTML für eine einzelne TE-Kachel
+    // Baut das HTML für eine einzelne TE-Kachel (schlank + Hover-Popup)
     _teKachelHTML(te) {
       const status = te.status;
 
-      // ── Status-Badge Label ──
       const badgeLabel = {
         erwartet:    'Erwartet',
         ankunft:     'Eingetroffen',
@@ -3117,92 +3211,127 @@
         'verzögert': 'Verzögert',
       }[status] ?? status;
 
-      // ── Fortschrittsbalken ──
-      // 6 PFLICHT-Schritte: Ankunft, Angedockt, Entladen▶, Entladen■, WE-Buchung, Fertigstellung
-      // Abfahrt ist OPTIONAL und wird als abgesetzter 7. Schritt (gestrichelt) gezeigt.
-      const tsFelder = [
-        te.tsAnkunft, te.tsAngedockt, te.tsEntladenStart,
-        te.tsEntladenEnde, te.tsWeBuchung, te.tsEinlagerung,
-      ];
-      const isVerspaetet = status === 'verzögert';
+      // ── Fortschrittsbalken (6 Pflicht-Schritte + optionale Abfahrt) ──
+      const schritte = this._fortschrittHTML(te);
 
-      let schritte = tsFelder.map((ts, i) => {
-        const isDone   = ts !== null;
-        const isActive = !isDone && i === te.fortschritt;
-        let cls = 'tc-step';
-        if (isDone)    cls += isVerspaetet ? ' late' : ' done';
-        if (isActive)  cls += isVerspaetet ? ' active late' : ' active';
-        return `<div class="${cls}"></div>`;
-      }).join('');
-
-      // Optionaler Abfahrt-Schritt: gestrichelt, abgesetzt durch kleinen Spalt
-      const abfahrtCls = te.abgefahren ? 'tc-step-abfahrt done' : 'tc-step-abfahrt';
-      schritte += `<div class="tc-step-sep"></div><div class="${abfahrtCls}" title="${te.abgefahren ? 'Abgefahren' : 'Noch nicht abgefahren'}"></div>`;
-
-      // ── Δ-Zeit Badge ──
-      let deltaHTML = '';
-      if (te.verzoegerungMin != null && te.verzoegerungMin > 0) {
-        deltaHTML = `<span class="tc-delta pos">${fmtDauer(te.verzoegerungMin)}</span>`;
-      } else if (status === 'eingelagert') {
-        deltaHTML = `<span class="tc-delta neg">pünktlich</span>`;
-      }
-
-      // ── Meta-Infos ──
+      // ── Meta fürs Popup ──
       const anzahlProdukte = te.produkte.length;
       const hallen = [...new Set(te.produkte.map(p => p.halle).filter(Boolean))];
       const halleText = hallen.length > 0 ? hallen.join('/') : (te.halle ?? '–');
+      const lsKurz = ladestelleKurz(te.ladestelle);
 
+      // ── Δ-Zeit / Planabweichung (nur EIN Indikator, priorisiert) ──
+      let statusHint = '';
+      if (te.planabweichung) {
+        const txt = te.abweichungGrund === 'überfällig'
+          ? `+${fmtDauer(te.ueberfaelligMin)}`
+          : 'verzögert';
+        statusHint = `<span class="tc-hint-badge warn">⚠ ${esc(txt)}</span>`;
+      } else if (te.verzoegerungMin != null && te.verzoegerungMin > 0) {
+        statusHint = `<span class="tc-hint-badge warn">+${fmtDauer(te.verzoegerungMin)}</span>`;
+      } else if (status === 'eingelagert') {
+        statusHint = `<span class="tc-hint-badge ok">pünktlich</span>`;
+      }
+
+      // ── Zeit-Anker (kompakt) ──
       const zeitText = te.tsAnkunft
         ? `ab ${fmtTime(te.tsAnkunft)}`
         : te.geplantStart
           ? `geplant ${fmtTime(te.geplantStart)}`
           : '';
 
-      // ── Hinweis-Flag ──
-      const hintFlag = te.teHinweis
-        ? `<div class="tc-hint-flag" title="${esc(te.teHinweis)}">⚠</div>`
-        : '';
-
-      // Planabweichungs-Markierung
       const abwKlasse = te.planabweichung ? ' abweichung' : '';
-      let abwBadge = '';
-      if (te.planabweichung) {
-        const txt = te.abweichungGrund === 'überfällig'
-          ? `⚠ Überfällig (+${fmtDauer(te.ueberfaelligMin)})`
-          : '⚠ Verzögert';
-        abwBadge = `<span class="tc-abw-badge" title="Weicht von der Planung ab">${esc(txt)}</span>`;
-      }
+
+      // ── Hover-Popup mit ALLEN Details ──
+      const popRow = (label, value) => value && value !== '–'
+        ? `<div class="tc-pop-row"><span class="tc-pop-label">${esc(label)}</span><span class="tc-pop-val">${esc(value)}</span></div>`
+        : '';
+      const popTime = (label, ts) => `<div class="tc-pop-row"><span class="tc-pop-label">${esc(label)}</span><span class="tc-pop-val">${ts ? fmtDateTime(ts) : '–'}</span></div>`;
+
+      const popup = `
+        <div class="tc-popup">
+          <div class="tc-pop-head">
+            <span class="tc-pop-te">${esc(te.te)}</span>
+            <span class="tc-badge badge-${esc(status)}">${esc(badgeLabel)}</span>
+          </div>
+          ${popRow('Lieferant', te.lieferantName)}
+          ${popRow('Ladestelle', lsKurz)}
+          ${popRow('Tor', te.tor ?? 'noch nicht zugewiesen')}
+          ${popRow('Halle', halleText !== '–' ? 'H ' + halleText : '')}
+          ${popRow('Produkte', String(anzahlProdukte))}
+          <div class="tc-pop-sep"></div>
+          ${popTime('Geplanter Start', te.geplantStart)}
+          ${popTime('Ankunft', te.tsAnkunft)}
+          ${popTime('Angedockt', te.tsAngedockt)}
+          ${popTime('Entladen ab', te.tsEntladenStart)}
+          ${popTime('Entladen bis', te.tsEntladenEnde)}
+          ${popTime('WE gebucht', te.tsWeBuchung)}
+          ${popTime('Fertigstellung', te.tsEinlagerung)}
+          ${popTime('Abfahrt', te.tsAbfahrt)}
+          ${te.teHinweis ? `<div class="tc-pop-sep"></div><div class="tc-pop-hint">⚠ ${esc(te.teHinweis)}</div>` : ''}
+        </div>`;
 
       return /* html */`
         <div class="te-card s-${esc(status)}${abwKlasse}" data-te="${esc(te.te)}" role="button" tabindex="0"
              aria-label="TE ${esc(te.te)}, Status: ${esc(badgeLabel)}${te.planabweichung ? ', Planabweichung' : ''}">
-          ${hintFlag}
           <div class="tc-header">
             <div class="tc-meta">
               <div class="tc-te-nr">${esc(te.te)}</div>
               <div class="tc-supplier">${esc(te.lieferantName ?? '–')}</div>
             </div>
             <span class="tc-badge badge-${esc(status)}">${esc(badgeLabel)}</span>
-            ${abwBadge}
-            ${te.abgefahren ? `<span class="tc-abfahrt-tag" title="LKW hat das Gelände verlassen">✓ abgefahren</span>` : ''}
-            ${te.tor ? `<span class="tor-badge-card">${esc(te.tor)}</span>` : ''}
           </div>
           <div class="tc-progress">${schritte}</div>
           <div class="tc-footer">
             ${this._lsBadgeHTML(te.ladestelle ?? 'Landverkehr')}
-            ${anzahlProdukte > 0
-              ? `<span class="tc-info"><span class="tc-info-icon">📦</span>${anzahlProdukte} Produkt${anzahlProdukte !== 1 ? 'e' : ''}</span>`
-              : ''}
-            ${halleText !== '–'
-              ? `<span class="tc-info"><span class="tc-info-icon">🏭</span>H ${esc(halleText)}</span>`
-              : ''}
-            ${zeitText
-              ? `<span class="tc-info"><span class="tc-info-icon">🕐</span>${esc(zeitText)}</span>`
-              : ''}
-            ${deltaHTML}
+            ${te.tor ? `<span class="tor-badge-card">${esc(te.tor)}</span>` : ''}
+            <div class="tc-footer-spacer"></div>
+            ${zeitText ? `<span class="tc-time">${esc(zeitText)}</span>` : ''}
+            ${statusHint}
           </div>
+          ${popup}
         </div>
       `;
+    }
+
+    // Baut den Fortschrittsbalken (6 Pflicht-Schritte + optionale Abfahrt)
+    // Bei geplanten TEs deren Zeit noch nicht erreicht ist: alle grau.
+    // Ist die geplante Zeit erreicht aber keine Ankunft: rot blinkend.
+    _fortschrittHTML(te) {
+      const jetzt = new Date();
+      const tsFelder = [
+        te.tsAnkunft, te.tsAngedockt, te.tsEntladenStart,
+        te.tsEntladenEnde, te.tsWeBuchung, te.tsEinlagerung,
+      ];
+      const isVerspaetet = te.status === 'verzögert';
+
+      // Geplante TE (noch keine Ankunft)
+      const nochNichtDa = !te.tsAnkunft;
+      const planErreicht = te.geplantStart && jetzt >= te.geplantStart;
+      // Überfällig: geplante Zeit erreicht, aber keine Ankunft → rot blinkend
+      const ueberfaellig = nochNichtDa && planErreicht;
+
+      let schritte = tsFelder.map((ts, i) => {
+        const isDone   = ts !== null;
+        const isActive = !isDone && i === te.fortschritt;
+        let cls = 'tc-step';
+        if (isDone) {
+          cls += isVerspaetet ? ' late' : ' done';
+        } else if (ueberfaellig && i === 0) {
+          // Erster Schritt (Ankunft) blinkt rot wenn überfällig
+          cls += ' overdue';
+        } else if (isActive && !nochNichtDa) {
+          cls += isVerspaetet ? ' active late' : ' active';
+        }
+        // sonst: bleibt grau (Default)
+        return `<div class="${cls}"></div>`;
+      }).join('');
+
+      // Optionaler Abfahrt-Schritt (gestrichelt, abgesetzt)
+      const abfahrtCls = te.abgefahren ? 'tc-step-abfahrt done' : 'tc-step-abfahrt';
+      schritte += `<div class="tc-step-sep"></div><div class="${abfahrtCls}" title="${te.abgefahren ? 'Abgefahren' : 'Noch nicht abgefahren'}"></div>`;
+
+      return schritte;
     }
 
     // ── Render: Detail ───────────────────────────────────────────────────
@@ -3304,22 +3433,20 @@
               <div class="d-section-title">Prozess-Zeitstrahl</div>
               <div class="tl-legend">
                 <div class="tl-legend-item">
-                  <div class="tl-legend-swatch" style="background:var(--c-border2);
-                    background: repeating-linear-gradient(90deg,var(--c-text3) 0,var(--c-text3) 5px,transparent 5px,transparent 10px);
-                    opacity:0.45"></div>
+                  <div class="tl-legend-swatch" style="background: repeating-linear-gradient(90deg,var(--c-text3) 0,var(--c-text3) 5px,transparent 5px,transparent 10px);opacity:0.5"></div>
                   Soll-Zeitfenster
                 </div>
                 <div class="tl-legend-item">
                   <div class="tl-legend-swatch" style="background:var(--c-green)"></div>
-                  Pünktlich
-                </div>
-                <div class="tl-legend-item">
-                  <div class="tl-legend-swatch" style="background:var(--c-yellow)"></div>
-                  Leichte Verzögerung
+                  Ist-Verlauf (pünktlich)
                 </div>
                 <div class="tl-legend-item">
                   <div class="tl-legend-swatch" style="background:var(--c-red)"></div>
                   Verzögert
+                </div>
+                <div class="tl-legend-item">
+                  <div class="tl-legend-swatch" style="border:1px dashed var(--c-text2);height:9px;width:9px;border-radius:50%"></div>
+                  Abfahrt (optional)
                 </div>
               </div>
               ${tlHTML}
@@ -3366,100 +3493,101 @@
 
     // Baut den SVG-freien CSS-Zeitstrahl
     _zeitstrahlHTML(te, isVerspaetet) {
-      // Punkte: 6 Pflicht-Schritte + Abfahrt (optional, separat gekennzeichnet)
-      const punkte = [
-        { ts: te.tsAnkunft,        label: 'Ankunft\nPförtner',   soll: te.geplantStart, optional: false },
-        { ts: te.tsAngedockt,      label: 'Tor\nangedockt',      soll: null,            optional: false },
-        { ts: te.tsEntladenStart,  label: 'Entladen\ngestartet', soll: te.geplantStart, optional: false },
+      // Punkte: 6 Pflicht-Schritte + Abfahrt (optional)
+      const punkteRaw = [
+        { ts: te.tsAnkunft,       label: 'Ankunft',       kurz: 'AN',  optional: false },
+        { ts: te.tsAngedockt,     label: 'Angedockt',     kurz: 'AD',  optional: false },
+        { ts: te.tsEntladenStart, label: 'Entladen ab',   kurz: 'E▶', optional: false },
         { ts: te.tsEntladenEnde ?? te.tsEntladenTat,
-                                   label: 'Entladen\nbeendet',   soll: te.geplantEnde,  optional: false },
-        { ts: te.tsWeBuchung,      label: 'WE\ngebucht',         soll: null,            optional: false },
-        { ts: te.tsEinlagerung,    label: 'Fertig-\nstellung',   soll: null,            optional: false },
-        { ts: te.tsAbfahrt,        label: 'Abfahrt\n(optional)', soll: null,            optional: true  },
+                                  label: 'Entladen bis',  kurz: 'E■', optional: false },
+        { ts: te.tsWeBuchung,     label: 'WE gebucht',    kurz: 'WE',  optional: false },
+        { ts: te.tsEinlagerung,   label: 'Fertigstellung',kurz: 'FS',  optional: false },
+        { ts: te.tsAbfahrt,       label: 'Abfahrt',       kurz: 'AB',  optional: true  },
       ];
 
-      // Zeitbereich für Positionierung bestimmen
-      // Alle vorhandenen Timestamps + Soll-Zeiten sammeln
-      const alleDaten = [
-        ...punkte.map(p => p.ts).filter(Boolean),
-        te.geplantStart, te.geplantEnde,
-      ].filter(Boolean);
+      // Nur Punkte mit Timestamp
+      const punkte = punkteRaw.filter(p => p.ts);
 
-      if (alleDaten.length === 0) {
-        return `<div class="view-placeholder" style="min-height:80px;">Keine Zeitstempel vorhanden</div>`;
+      if (punkte.length === 0) {
+        // Nur geplant: zeige Soll-Fenster als Hinweis
+        if (te.geplantStart) {
+          return `<div class="zs-geplant">
+            <span class="zs-geplant-icon">🕐</span>
+            Geplant: ${fmtDateTime(te.geplantStart)}${te.geplantEnde ? ' – ' + fmtTime(te.geplantEnde) : ''}
+            <span class="zs-geplant-hint">— noch keine Ist-Zeiten erfasst</span>
+          </div>`;
+        }
+        return `<div class="zs-geplant">Keine Zeitstempel vorhanden</div>`;
       }
 
+      // Zeitbereich
+      const alleDaten = [...punkte.map(p => p.ts), te.geplantStart, te.geplantEnde].filter(Boolean);
       const minTs = new Date(Math.min(...alleDaten.map(d => d.getTime())));
       const maxTs = new Date(Math.max(...alleDaten.map(d => d.getTime())));
-
-      // Etwas Puffer links und rechts
       const pufferMs = Math.max((maxTs - minTs) * 0.08, 5 * 60000);
-      const startMs  = minTs.getTime() - pufferMs;
-      const endMs    = maxTs.getTime() + pufferMs;
-      const spanMs   = endMs - startMs;
+      const startMs = minTs.getTime() - pufferMs;
+      const endMs   = maxTs.getTime() + pufferMs;
+      const spanMs  = endMs - startMs || 1;
+      const pctRaw = (d) => ((d.getTime() - startMs) / spanMs * 100);
 
-      // Prozent-Position eines Timestamps auf der Achse (0–100%)
-      const pct = (d) => d ? ((d.getTime() - startMs) / spanMs * 100).toFixed(2) : null;
-
-      // Soll-Balken
-      const sollHTML = (te.geplantStart && te.geplantEnde)
-        ? `<div class="tl-soll-bar" style="left:${pct(te.geplantStart)}%; width:${(pct(te.geplantEnde) - pct(te.geplantStart)).toFixed(2)}%"></div>`
-        : '';
-
-      // Segmente zwischen aufeinanderfolgenden vorhandenen Punkten
-      let segHTML = '';
-      const vorhandene = punkte.filter(p => p.ts !== null);
-      for (let i = 0; i < vorhandene.length - 1; i++) {
-        const a = vorhandene[i].ts;
-        const b = vorhandene[i + 1].ts;
-        const l = pct(a);
-        const w = (pct(b) - pct(a)).toFixed(2);
-        // Segment-Farbe: rot wenn Verzögerung > Schwelle zwischen Andocken und Entladestart
-        const isKritisch = isVerspaetet && i === 1; // Andocken → Entladestart
-        const cls = isKritisch ? 'bad' : 'ok';
-        segHTML += `<div class="tl-segment ${cls}" style="left:${l}%; width:${w}%"></div>`;
-      }
-
-      // Punkte mit Labels und optionalem Δ-Chip
-      let punkteHTML = '';
-      for (const p of punkte) {
-        if (!p.ts) continue;
-        const pos = pct(p.ts);
-        const dotCls = isVerspaetet && p.soll && diffMin(p.soll, p.ts) > VERZOEGERUNG_SCHWELLE_MIN
-          ? 'bad' : 'ok';
-
-        // Δ-Chip nur wenn Soll vorhanden und Abweichung > 5min
-        let chipHTML = '';
-        if (p.soll) {
-          const delta = diffMin(p.soll, p.ts);
-          if (delta != null && Math.abs(delta) > 5) {
-            const chipCls = delta > 0 ? 'pos' : 'neg';
-            chipHTML = `<div class="tl-delta-chip ${chipCls}">${fmtDauer(delta)}</div>`;
-          }
+      // ── Kollisions-Vermeidung ──
+      // Rohe Positionen berechnen, dann Punkte die zu nah sind auseinanderziehen.
+      const MIN_ABSTAND = 13; // Prozent Mindestabstand zwischen Punkten
+      let positionen = punkte.map(p => ({ ...p, pos: pctRaw(p.ts) }));
+      positionen.sort((a, b) => a.pos - b.pos);
+      for (let i = 1; i < positionen.length; i++) {
+        const delta = positionen[i].pos - positionen[i - 1].pos;
+        if (delta < MIN_ABSTAND) {
+          positionen[i].pos = positionen[i - 1].pos + MIN_ABSTAND;
         }
-
-        // Label mit Zeilenumbruch über \n
-        const labelLines = p.label.split('\n').map(l => `<span>${esc(l)}</span>`).join('<br>');
-
-        // Optionaler Schritt (Abfahrt): gestrichelter, blasser Punkt
-        const pointCls = p.optional ? 'tl-point tl-point-optional' : 'tl-point';
-        const dotClsFull = p.optional ? 'tl-dot optional' : `tl-dot ${dotCls}`;
-
-        punkteHTML += `
-          <div class="${pointCls}" style="left:${pos}%">
-            ${chipHTML}
-            <div class="${dotClsFull}"></div>
-            <div class="tl-time">${fmtTime(p.ts)}</div>
-            <div class="tl-label">${labelLines}</div>
-          </div>`;
       }
+      // Falls rechts rausgelaufen: alles zurückskalieren
+      const maxPos = positionen[positionen.length - 1].pos;
+      if (maxPos > 96) {
+        const faktor = 96 / maxPos;
+        positionen.forEach(p => p.pos = p.pos * faktor);
+      }
+
+      // Soll-Balken (grau)
+      let sollHTML = '';
+      if (te.geplantStart && te.geplantEnde) {
+        const l = Math.max(0, Math.min(100, pctRaw(te.geplantStart)));
+        const r = Math.max(0, Math.min(100, pctRaw(te.geplantEnde)));
+        const w = Math.max(1, r - l);
+        sollHTML = `<div class="zs-soll" style="left:${l.toFixed(2)}%;width:${w.toFixed(2)}%"></div>`;
+      }
+
+      // Ist-Verbindungslinie (vom ersten zum letzten Ist-Punkt)
+      let istLinieHTML = '';
+      if (positionen.length >= 2) {
+        const first = positionen[0].pos;
+        const last  = positionen[positionen.length - 1].pos;
+        const farbe = isVerspaetet ? 'var(--c-red)' : 'var(--c-green)';
+        istLinieHTML = `<div class="zs-ist-linie" style="left:${first.toFixed(2)}%;width:${(last - first).toFixed(2)}%;background:${farbe}"></div>`;
+      }
+
+      // Punkte + Labels (abwechselnd oben/unten gegen Überlappung)
+      const punkteHTML = positionen.map((p, i) => {
+        const oben = i % 2 === 0;
+        const dotCls = p.optional
+          ? 'zs-dot optional'
+          : (isVerspaetet ? 'zs-dot late' : 'zs-dot done');
+        return `
+          <div class="zs-point ${oben ? 'oben' : 'unten'}" style="left:${p.pos.toFixed(2)}%">
+            <div class="${dotCls}" title="${esc(p.label)}: ${fmtDateTime(p.ts)}"></div>
+            <div class="zs-label">
+              <div class="zs-label-name">${esc(p.label)}${p.optional ? ' <span class="zs-opt">(opt.)</span>' : ''}</div>
+              <div class="zs-label-time">${fmtTime(p.ts)}</div>
+            </div>
+          </div>`;
+      }).join('');
 
       return `
-        <div class="tl-wrap">
-          <div class="tl-track">
-            <div class="tl-base"></div>
+        <div class="zs-wrap">
+          <div class="zs-track">
+            <div class="zs-baseline"></div>
             ${sollHTML}
-            ${segHTML}
+            ${istLinieHTML}
             ${punkteHTML}
           </div>
         </div>`;
