@@ -30,6 +30,11 @@
   // kurze Kategorie, für Gruppierung + Zeitstrahl die volle Bezeichnung.
   // LADESTELLE_KURZ ordnet jede lange Bezeichnung einer der 4 Kategorien zu.
   const LADESTELLE_KURZ = {
+    // BW-Schlüssel (Key) — so kommen die Werte real an
+    'ILW KREFELD BSL':                     'BSL',
+    'ILW KREFELD CONTAINE':                'Container',
+    'ILW KREFELD LANDVERK':                'Landverkehr',
+    // Lange Texte (falls doch der Text ankommt)
     'ILW Krefeld Container':               'Container',
     'ILW Krefeld BSL':                     'BSL',
     'ILW Krefeld BSL / Eigendisposition':  'BSL',
@@ -37,16 +42,17 @@
     'Eigendisposition':                    'Eigendisposition',
   };
 
-  // Gibt die kurze Kategorie zu einer (langen oder bereits kurzen) Bezeichnung.
-  function ladestelleKurz(lang) {
-    if (!lang) return 'Eigendisposition';
-    if (LADESTELLE_KURZ[lang]) return LADESTELLE_KURZ[lang];
-    // Fallback: bereits kurze Werte durchreichen, sonst per Schlüsselwort raten
-    if (/container/i.test(lang)) return 'Container';
-    if (/bsl/i.test(lang))       return 'BSL';
-    if (/frei haus|ddp|landverkehr/i.test(lang)) return 'Landverkehr';
-    if (/eigendispo/i.test(lang)) return 'Eigendisposition';
-    return lang;
+  // Gibt die kurze Kategorie zu einer (Schlüssel-, langen oder kurzen) Bezeichnung.
+  function ladestelleKurz(wert) {
+    if (!wert) return 'Eigendisposition';
+    const w = String(wert).trim();
+    if (LADESTELLE_KURZ[w]) return LADESTELLE_KURZ[w];
+    // Fallback: per Schlüsselwort raten (case-insensitive)
+    if (/container|containe/i.test(w)) return 'Container';
+    if (/bsl/i.test(w))                return 'BSL';
+    if (/frei haus|ddp|landverk/i.test(w)) return 'Landverkehr';
+    if (/eigendispo/i.test(w))         return 'Eigendisposition';
+    return w;
   }
 
   // Die 4 Kategorien in fester Reihenfolge (für Filter + Gruppierung)
@@ -130,10 +136,21 @@
   // Parst einen Timestamp aus BW – gibt ein Date-Objekt zurück oder null
   const parseTs = (raw) => {
     if (isNull(raw)) return null;
-    const s = String(raw).trim();
+    let s = String(raw).trim();
+    if (!s || s === '#') return null;
+
+    // Deutsches Format: "07.07.2026  06:00:00" (auch mit Doppel-Leerzeichen)
+    //                   oder "07.07.2026 06:00" oder nur "07.07.2026"
+    const de = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
+    if (de) {
+      const [, dd, mm, yyyy, hh, mi, ss] = de;
+      return new Date(+yyyy, +mm - 1, +dd, +(hh||0), +(mi||0), +(ss||0));
+    }
+
     // ISO 8601: "2025-05-20T07:37:00" oder "2025-05-20 07:37:00"
-    const iso = new Date(s.replace(' ', 'T'));
+    const iso = new Date(s.replace(/\s+/, 'T'));
     if (!isNaN(iso.getTime())) return iso;
+
     // SAP-Format: "20250520073700" (YYYYMMDDHHmmss)
     if (/^\d{14}$/.test(s)) {
       return new Date(
@@ -260,14 +277,17 @@
 
     for (const row of rows) {
       // ── TE-Stammdaten ──
-      const teNr = readDim(row,
+      const teNrRaw = readDim(row,
         'dimension_te', 'TE', 'VBELN', 'te_nr'
       );
-      if (!teNr) continue;
+      if (!teNrRaw) continue;
+      // Führende Nullen entfernen und als einheitlichen Schlüssel verwenden,
+      // damit Map-Key, te.te und data-te im DOM identisch sind (Klick funktioniert).
+      const teNr = String(teNrRaw).replace(/^0+/, '') || String(teNrRaw);
 
       if (!teMap.has(teNr)) {
         teMap.set(teNr, {
-          te:              String(teNr).replace(/^0+/, '') || teNr,  // führende Nullen weg
+          te:              teNr,
           teHinweis:       readDim(row, 'dimension_te_hinweis', 'TE_HINWEIS'),
           // Ladestelle: BW liefert lange Bezeichnung (z.B. "ILW Krefeld Container")
           ladestelle:      readDim(row, 'dimension_ladestelle', 'LADESTELLE') ?? 'Eigendisposition',
@@ -335,6 +355,20 @@
   function berechneTE(te) {
     const jetzt = new Date();
 
+    // ── Fertigstellung pro Produkt aggregieren ──
+    // Eine TE gilt erst als fertiggestellt, wenn ALLE Produkte ein
+    // Fertigstellungs-Datum haben. Das TE-Level tsEinlagerung wird aus den
+    // Produktzeilen abgeleitet (spätestes Datum, wenn alle vorhanden).
+    const prodEinlag = te.produkte.map(p => p.tsEinlagerung);
+    const alleFertig = te.produkte.length > 0 && prodEinlag.every(ts => ts !== null);
+    te.alleFertiggestellt = alleFertig;
+    // TE-Level tsEinlagerung = spätestes Produkt-Fertigstellungsdatum (nur wenn alle fertig)
+    if (alleFertig) {
+      te.tsEinlagerung = prodEinlag.reduce((a, b) => (b > a ? b : a));
+    } else {
+      te.tsEinlagerung = null; // noch nicht vollständig fertiggestellt
+    }
+
     // ── Fortschritt: Anzahl abgeschlossener PFLICHT-Prozessschritte ──
     // Abfahrt ist OPTIONAL und zählt NICHT zum Fortschritt (max. 6 Pflicht-Schritte):
     // 1 Ankunft · 2 Angedockt · 3 Entladen-Start · 4 Entladen-Ende · 5 WE-Buchung · 6 Fertigstellung
@@ -361,7 +395,7 @@
     // WICHTIG: Abfahrt bestimmt NICHT mehr den Status. Eine TE ist "eingelagert"
     // (fertig) sobald Fertigstellung ODER WE-Buchung vorliegt. Ob der LKW schon
     // abgefahren ist, wird über das separate Flag te.abgefahren dargestellt.
-    if (te.tsEinlagerung || te.tsWeBuchung) {
+    if (te.alleFertiggestellt) {
       te.status = 'eingelagert';
     } else if (te.tsEntladenStart) {
       te.status = te.verzoegerungMin >= VERZOEGERUNG_SCHWELLE_MIN
@@ -2484,7 +2518,8 @@
             <div class="zeitraum-chips">
               <button class="zeitraum-chip active" data-zeitraum="heute">Heute</button>
               <button class="zeitraum-chip" data-zeitraum="woche">Diese Woche</button>
-              <button class="zeitraum-chip" data-zeitraum="7tage">Letzte 7 Tage</button>
+              <button class="zeitraum-chip" data-zeitraum="geplant">Geplant</button>
+              <button class="zeitraum-chip" data-zeitraum="7tage">±7 Tage</button>
               <button class="zeitraum-chip" data-zeitraum="monat">Monat</button>
             </div>
             <span class="filter-label" style="margin-left:6px">Status</span>
@@ -2872,8 +2907,12 @@
           const mo = new Date(heute.getTime() + diff * 86400000);
           return { von: mo, bis: new Date(mo.getTime() + 7 * 86400000) };
         }
+        case 'geplant':
+          // Kommende 14 Tage ab heute (Vorschau geplanter Anlieferungen)
+          return { von: heute, bis: new Date(heute.getTime() + 14 * 86400000) };
         case '7tage':
-          return { von: new Date(heute.getTime() - 6 * 86400000), bis: new Date(heute.getTime() + 86400000) };
+          // Symmetrisch: 7 Tage zurück bis 7 Tage voraus
+          return { von: new Date(heute.getTime() - 7 * 86400000), bis: new Date(heute.getTime() + 8 * 86400000) };
         case 'monat': {
           const von = new Date(heute.getFullYear(), heute.getMonth(), 1);
           return { von, bis: new Date(heute.getFullYear(), heute.getMonth() + 1, 1) };
@@ -2905,7 +2944,8 @@
       const labels = {
         heute:  'Heute · ' + new Date().toLocaleDateString('de-DE',{day:'2-digit',month:'2-digit',year:'numeric'}),
         woche:  'Diese Woche',
-        '7tage':'Letzte 7 Tage',
+        geplant:'Geplant · kommende 14 Tage',
+        '7tage':'±7 Tage',
         monat:  new Date().toLocaleDateString('de-DE',{month:'long',year:'numeric'}),
       };
       this._$('header-date').textContent = 'Wareneingang · ' + (labels[this._activeZeitraum] ?? '');
@@ -3899,9 +3939,34 @@
         return;
       }
 
+      // Gantt-Datum EINMALIG auf den Tag mit den meisten TEs setzen, damit
+      // der Zeitstrahl nicht leer ist wenn die Daten nicht "heute" liegen.
+      if (!this._ganttDatumGesetzt) {
+        this._ganttDatum = this._besterGanttTag();
+        this._ganttDatumGesetzt = true;
+      }
+
       this._updateKPIs();
       this._renderKacheln();
       this._renderGantt();
+    }
+
+    // Ermittelt den Tag mit den meisten geplanten TEs (für initialen Gantt-Fokus)
+    _besterGanttTag() {
+      const proTag = new Map();
+      for (const te of this._teMap.values()) {
+        const anker = te.geplantStart ?? te.tsAnkunft;
+        if (!anker) continue;
+        const key = new Date(anker.getFullYear(), anker.getMonth(), anker.getDate()).getTime();
+        proTag.set(key, (proTag.get(key) ?? 0) + 1);
+      }
+      if (proTag.size === 0) return new Date();
+      // Tag mit den meisten TEs, bei Gleichstand der früheste
+      let bestKey = null, bestN = -1;
+      for (const [key, n] of proTag) {
+        if (n > bestN || (n === bestN && key < bestKey)) { bestN = n; bestKey = key; }
+      }
+      return new Date(bestKey);
     }
 
     // ── SAC DataSource-Setter ─────────────────────────────────────────────
