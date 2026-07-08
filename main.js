@@ -2677,10 +2677,9 @@
 
     connectedCallback() {
       this._bindEvents();
-      this._hideLoading();
+      this._showLoading();   // Ladeanimation initial sichtbar bis Daten da sind
       this._startCountdown();
       this._startClock();
-      this._startLoaderSteps(); // Ladeanimation läuft bis Daten da sind
     }
 
     disconnectedCallback() {
