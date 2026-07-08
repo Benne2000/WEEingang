@@ -131,7 +131,16 @@
       .replace(/'/g, '&#39;');
   };
 
-  const isNull = (v) => v == null || NULL_TOKENS.has(String(v).trim());
+  const isNull = (v) => {
+    if (v == null) return true;
+    const s = String(v).trim();
+    if (NULL_TOKENS.has(s)) return true;
+    // Reine Nullen-Folge beliebiger Länge (SAP/BW füllt leere Felder mit Nullen)
+    if (/^0+$/.test(s)) return true;
+    // Reine #-Folge (BW-Platzhalter für leere Merkmale)
+    if (/^#+$/.test(s)) return true;
+    return false;
+  };
 
   // Parst einen Timestamp aus BW – gibt ein Date-Objekt zurück oder null
   const parseTs = (raw) => {
@@ -201,8 +210,13 @@
   // Diese Funktion normalisiert einen Rohwert auf einen primitiven String.
   const extractVal = (v) => {
     if (v == null) return null;
-    // SAC-Objekt: { id, label } → id bevorzugen (technischer Wert)
-    if (typeof v === 'object' && 'id' in v) return String(v.id).trim();
+    // SAC-Objekt: { id, label } → id bevorzugen, sonst label (technischer Wert)
+    if (typeof v === 'object') {
+      const raw = ('id' in v && v.id != null) ? v.id
+                : ('label' in v && v.label != null) ? v.label
+                : null;
+      return raw == null ? null : String(raw).trim();
+    }
     return String(v).trim();
   };
 
@@ -410,6 +424,26 @@
       }
     } else {
       te.status = 'erwartet';
+    }
+
+    // ── Planabweichung ──────────────────────────────────────────────────
+    // Eine TE weicht von der Planung ab wenn:
+    //  a) sie überfällig ist: geplanter Start liegt >Schwelle in der
+    //     Vergangenheit, aber sie ist noch gar nicht angekommen, ODER
+    //  b) sie bereits als verzögert erkannt wurde (Wartezeit am Tor).
+    te.planabweichung = false;
+    te.abweichungGrund = null;
+    te.ueberfaelligMin = null;
+    if (te.status === 'verzögert') {
+      te.planabweichung = true;
+      te.abweichungGrund = 'verzögert';
+    } else if (te.status === 'erwartet' && te.geplantStart) {
+      const ueberfaellig = diffMin(te.geplantStart, jetzt);
+      if (ueberfaellig >= VERZOEGERUNG_SCHWELLE_MIN) {
+        te.planabweichung = true;
+        te.abweichungGrund = 'überfällig';
+        te.ueberfaelligMin = ueberfaellig;
+      }
     }
   }
 
@@ -1469,6 +1503,29 @@
       .tc-delta.zero { background: var(--c-bg4);        color: var(--c-text3); }
 
       /* Hinweis-Flag */
+      /* Planabweichungs-Markierung */
+      .te-card.abweichung {
+        border-color: rgba(230,126,34,0.5);
+        box-shadow:   inset 3px 0 0 var(--c-yellow), 0 0 0 1px rgba(230,126,34,0.2);
+      }
+      .te-card.abweichung::before {
+        background: var(--c-yellow) !important;
+      }
+      .tc-abw-badge {
+        font-family:   var(--font-mono);
+        font-size:     8px;
+        font-weight:   700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color:         #f0a500;
+        background:    rgba(230,126,34,0.15);
+        border:        1px solid rgba(230,126,34,0.4);
+        border-radius: var(--r-sm);
+        padding:       2px 7px;
+        white-space:   nowrap;
+        flex-shrink:   0;
+      }
+
       .tc-hint-flag {
         position: absolute;
         top:      10px;
@@ -1959,6 +2016,11 @@
         font-weight:    600;
         color:          var(--c-text);
         letter-spacing: 0.03em;
+      }
+      .gantt-abw-icon { color: var(--c-yellow); }
+      .gantt-row-abweichung {
+        background: rgba(230,126,34,0.06);
+        box-shadow: inset 3px 0 0 var(--c-yellow);
       }
 
       .gantt-row-supplier {
@@ -3102,9 +3164,19 @@
         ? `<div class="tc-hint-flag" title="${esc(te.teHinweis)}">⚠</div>`
         : '';
 
+      // Planabweichungs-Markierung
+      const abwKlasse = te.planabweichung ? ' abweichung' : '';
+      let abwBadge = '';
+      if (te.planabweichung) {
+        const txt = te.abweichungGrund === 'überfällig'
+          ? `⚠ Überfällig (+${fmtDauer(te.ueberfaelligMin)})`
+          : '⚠ Verzögert';
+        abwBadge = `<span class="tc-abw-badge" title="Weicht von der Planung ab">${esc(txt)}</span>`;
+      }
+
       return /* html */`
-        <div class="te-card s-${esc(status)}" data-te="${esc(te.te)}" role="button" tabindex="0"
-             aria-label="TE ${esc(te.te)}, Status: ${esc(badgeLabel)}">
+        <div class="te-card s-${esc(status)}${abwKlasse}" data-te="${esc(te.te)}" role="button" tabindex="0"
+             aria-label="TE ${esc(te.te)}, Status: ${esc(badgeLabel)}${te.planabweichung ? ', Planabweichung' : ''}">
           ${hintFlag}
           <div class="tc-header">
             <div class="tc-meta">
@@ -3112,6 +3184,7 @@
               <div class="tc-supplier">${esc(te.lieferantName ?? '–')}</div>
             </div>
             <span class="tc-badge badge-${esc(status)}">${esc(badgeLabel)}</span>
+            ${abwBadge}
             ${te.abgefahren ? `<span class="tc-abfahrt-tag" title="LKW hat das Gelände verlassen">✓ abgefahren</span>` : ''}
             ${te.tor ? `<span class="tor-badge-card">${esc(te.tor)}</span>` : ''}
           </div>
@@ -3731,11 +3804,11 @@
       }
 
       return `
-        <div class="gantt-row" data-te="${esc(te.te)}"
+        <div class="gantt-row${te.planabweichung ? ' gantt-row-abweichung' : ''}" data-te="${esc(te.te)}"
              role="button" tabindex="0"
-             aria-label="TE ${esc(te.te)}, ${esc(te.lieferantName ?? '')}">
+             aria-label="TE ${esc(te.te)}, ${esc(te.lieferantName ?? '')}${te.planabweichung ? ', Planabweichung' : ''}">
           <div class="gantt-row-label">
-            <div class="gantt-row-te">${esc(te.te)}</div>
+            <div class="gantt-row-te">${te.planabweichung ? '<span class="gantt-abw-icon" title="Planabweichung">⚠</span> ' : ''}${esc(te.te)}</div>
             <div class="gantt-row-supplier">
               ${te.tor ? `<span style="font-family:var(--font-mono);font-size:9px;font-weight:700;color:var(--c-text3);background:var(--c-bg4);border:1px solid var(--c-border2);border-radius:3px;padding:1px 4px">${esc(te.tor)}</span>` : ''}
               ${esc(te.lieferantName ?? '–')}
@@ -3939,34 +4012,9 @@
         return;
       }
 
-      // Gantt-Datum EINMALIG auf den Tag mit den meisten TEs setzen, damit
-      // der Zeitstrahl nicht leer ist wenn die Daten nicht "heute" liegen.
-      if (!this._ganttDatumGesetzt) {
-        this._ganttDatum = this._besterGanttTag();
-        this._ganttDatumGesetzt = true;
-      }
-
       this._updateKPIs();
       this._renderKacheln();
       this._renderGantt();
-    }
-
-    // Ermittelt den Tag mit den meisten geplanten TEs (für initialen Gantt-Fokus)
-    _besterGanttTag() {
-      const proTag = new Map();
-      for (const te of this._teMap.values()) {
-        const anker = te.geplantStart ?? te.tsAnkunft;
-        if (!anker) continue;
-        const key = new Date(anker.getFullYear(), anker.getMonth(), anker.getDate()).getTime();
-        proTag.set(key, (proTag.get(key) ?? 0) + 1);
-      }
-      if (proTag.size === 0) return new Date();
-      // Tag mit den meisten TEs, bei Gleichstand der früheste
-      let bestKey = null, bestN = -1;
-      for (const [key, n] of proTag) {
-        if (n > bestN || (n === bestN && key < bestKey)) { bestN = n; bestKey = key; }
-      }
-      return new Date(bestKey);
     }
 
     // ── SAC DataSource-Setter ─────────────────────────────────────────────
