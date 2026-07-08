@@ -153,44 +153,66 @@
     const de = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
     if (de) {
       const [, dd, mm, yyyy, hh, mi, ss] = de;
-      return new Date(+yyyy, +mm - 1, +dd, +(hh||0), +(mi||0), +(ss||0));
+      // Als UTC konstruieren → die Ziffern bleiben "Wanduhrzeit", keine TZ-Umrechnung
+      return new Date(Date.UTC(+yyyy, +mm - 1, +dd, +(hh||0), +(mi||0), +(ss||0)));
     }
 
-    // ISO 8601: "2025-05-20T07:37:00" oder "2025-05-20 07:37:00"
-    const iso = new Date(s.replace(/\s+/, 'T'));
-    if (!isNaN(iso.getTime())) return iso;
+    // ISO 8601: "2025-05-20T07:37:00" — ohne TZ-Angabe als UTC interpretieren
+    const isoMatch = s.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?/);
+    if (isoMatch) {
+      const [, yyyy, mm, dd, hh, mi, ss] = isoMatch;
+      return new Date(Date.UTC(+yyyy, +mm - 1, +dd, +hh, +mi, +(ss||0)));
+    }
+    // ISO nur Datum
+    const isoDate = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (isoDate) {
+      const [, yyyy, mm, dd] = isoDate;
+      return new Date(Date.UTC(+yyyy, +mm - 1, +dd));
+    }
 
     // SAP-Format: "20250520073700" (YYYYMMDDHHmmss)
     if (/^\d{14}$/.test(s)) {
-      return new Date(
+      return new Date(Date.UTC(
         +s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8),
         +s.slice(8, 10), +s.slice(10, 12), +s.slice(12, 14)
-      );
+      ));
     }
     // SAP-Datum ohne Zeit: "20250520" → Mitternacht
     if (/^\d{8}$/.test(s)) {
-      return new Date(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8));
+      return new Date(Date.UTC(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8)));
     }
     return null;
+  };
+
+  // Aktuelle Zeit als UTC-"Wanduhrzeit": nimmt die lokale Uhrzeit des Nutzers
+  // und legt dieselben Ziffern als UTC ab. So sind Vergleiche mit den ebenfalls
+  // als UTC-Wanduhrzeit geparsten BW-Zeiten konsistent — unabhängig von der
+  // Zeitzone in der SAC oder der Browser läuft.
+  const jetztWanduhr = () => {
+    const n = new Date();
+    return new Date(Date.UTC(
+      n.getFullYear(), n.getMonth(), n.getDate(),
+      n.getHours(), n.getMinutes(), n.getSeconds()
+    ));
   };
 
   // Formatiert ein Date-Objekt als "HH:MM" Uhrzeit
   const fmtTime = (d) => {
     if (!d) return '–';
-    return d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+    return d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' });
   };
 
   // Formatiert ein Date-Objekt als "DD.MM.YYYY"
   const fmtDate = (d) => {
     if (!d) return '–';
-    return d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    return d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'UTC' });
   };
 
   // Formatiert ein Date-Objekt als "DD.MM. HH:MM" (kompakt für Popup)
   const fmtDateTime = (d) => {
     if (!d) return '–';
-    return d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }) + ' ' +
-           d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+    return d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', timeZone: 'UTC' }) + ' ' +
+           d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' });
   };
 
   // Berechnet Differenz zweier Date-Objekte in Minuten (kann negativ sein)
@@ -233,6 +255,29 @@
     for (const key of keys) {
       for (const k of [`${key}_0`, key]) {
         const raw = extractVal(row[k]);
+        if (!isNull(raw)) return raw;
+      }
+    }
+    return null;
+  };
+
+  // Liest gezielt das LABEL (Text) eines BW-Merkmals, nicht den Key.
+  // Für Felder wie Produkt (Key=Nummer, Text=Bezeichnung) oder Warensender.
+  // Fällt auf die id zurück, falls kein Label vorhanden ist.
+  const extractLabel = (v) => {
+    if (v == null) return null;
+    if (typeof v === 'object') {
+      const raw = ('label' in v && v.label != null) ? v.label
+                : ('id' in v && v.id != null) ? v.id
+                : null;
+      return raw == null ? null : String(raw).trim();
+    }
+    return String(v).trim();
+  };
+  const readLabel = (row, ...keys) => {
+    for (const key of keys) {
+      for (const k of [`${key}_0`, key]) {
+        const raw = extractLabel(row[k]);
         if (!isNull(raw)) return raw;
       }
     }
@@ -355,7 +400,7 @@
       if (prodNr) {
         te.produkte.push({
           nr:           prodNr,
-          name:         readDim(row, 'dimension_produkt_name', 'MAKTX') ?? '–',
+          name:         readLabel(row, 'dimension_produkt_name', 'dimension_produkt_nr', 'MAKTX') ?? '–',
           menge:        readVal(row, 'value_menge', 'MENGE') ?? 0,
           einheit:      readDim(row, 'dimension_einheit', 'MEINS') ?? '',
           halle:        readDim(row, 'dimension_halle', 'LGNUM') ?? '',
@@ -374,7 +419,7 @@
 
   // Berechnet Status, Fortschritt und Verzögerung für eine TE
   function berechneTE(te) {
-    const jetzt = new Date();
+    const jetzt = jetztWanduhr();
 
     // ── Fertigstellung pro Produkt aggregieren ──
     // Eine TE gilt erst als fertiggestellt, wenn ALLE Produkte ein
@@ -1500,7 +1545,35 @@
       .ls-chip-land.active { background: var(--c-green-dim);   border-color: rgba(39,174,96,.4);  color: #58d68d; }
       .ls-chip-eigen.active { background: rgba(93,109,126,.2); border-color: rgba(93,109,126,.5); color: #aab7b8; }
 
-      /* Gruppierungs-Toggle */
+      /* Gruppierungs-Umschalter (3-Wege) */
+      .group-mode-switch {
+        display:       inline-flex;
+        gap:           2px;
+        padding:       2px;
+        background:    var(--c-bg3);
+        border:        1px solid var(--c-border2);
+        border-radius: var(--r-sm);
+      }
+      .group-mode-btn {
+        padding:        4px 10px;
+        border:         none;
+        background:     transparent;
+        border-radius:  calc(var(--r-sm) - 1px);
+        font-family:    var(--font-mono);
+        font-size:      10px;
+        font-weight:    600;
+        letter-spacing: 0.04em;
+        color:          var(--c-text2);
+        cursor:         pointer;
+        transition:     background 0.15s, color 0.15s;
+      }
+      .group-mode-btn:hover { color: var(--c-text); }
+      .group-mode-btn.active {
+        background: var(--c-red);
+        color:      #fff;
+      }
+
+      /* Gruppierungs-Toggle (alt) */
       .group-toggle-btn {
         display:        inline-flex;
         align-items:    center;
@@ -2695,9 +2768,11 @@
               <button class="ls-filter-chip ls-chip-land" data-ls="Landverkehr">🚚 Landverkehr</button>
               <button class="ls-filter-chip ls-chip-eigen" data-ls="Eigendisposition">🏭 Eigendisp.</button>
             </div>
-            <button class="group-toggle-btn" id="group-toggle-btn" title="Nach Ladestelle gruppieren">
-              <span id="group-toggle-icon">⊟</span> Gruppieren
-            </button>
+            <div class="group-mode-switch" role="group" aria-label="Gruppierung">
+              <button class="group-mode-btn active" data-gruppe="status" title="Nach Status gruppieren">Status</button>
+              <button class="group-mode-btn" data-gruppe="ladestelle" title="Nach Ladestelle gruppieren">Ladestelle</button>
+              <button class="group-mode-btn" data-gruppe="keine" title="Nicht gruppieren">Keine</button>
+            </div>
           </div>
           <div class="te-grid" id="te-grid">
           </div>
@@ -2757,7 +2832,7 @@
       this._theme         = 'dark';     // 'dark' | 'light'
       this._ac            = new AbortController();
       this._activeZeitraum = 'heute';   // 'heute'|'woche'|'7tage'|'monat'
-      this._ganttDatum    = new Date(); // Anker-Datum Gantt
+      this._ganttDatum    = jetztWanduhr(); // Anker-Datum Gantt (UTC-Wanduhr)
       this._ganttFenster  = 'tag';      // 'tag'|'3tage'|'woche'
       // Live-Refresh
       this._countdownDauer = 30;        // Sekunden bis Aktualisierung möglich
@@ -2767,7 +2842,7 @@
       this._loaderTimer    = null;      // Ladeanimation-Timer
       this._autoRefresh    = false;     // Auto-Aktualisierung aktiv?
       this._lsFilter       = 'alle';    // Ladestellen-Filter: 'alle'|'BSL'|'Container'|'Landverkehr'
-      this._gruppiertLS    = false;     // Kacheln nach Ladestelle gruppieren
+      this._gruppierModus  = 'status';  // 'status'|'ladestelle'|'keine' — Default: nach Status (Live/Abgeschlossen/Geplant)
     }
 
     connectedCallback() {
@@ -2850,21 +2925,21 @@
         }, opts);
       });
 
-      // Gruppierungs-Toggle
-      this._$('group-toggle-btn')?.addEventListener('click', () => {
-        this._gruppiertLS = !this._gruppiertLS;
-        const btn  = this._$('group-toggle-btn');
-        const icon = this._$('group-toggle-icon');
-        btn?.classList.toggle('active', this._gruppiertLS);
-        if (icon) icon.textContent = this._gruppiertLS ? '⊞' : '⊟';
-        this._renderKacheln();
-      }, opts);
+      // Gruppierungs-Umschalter (Status / Ladestelle / Keine)
+      this._shadow.querySelectorAll('.group-mode-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          this._gruppierModus = btn.dataset.gruppe;
+          this._shadow.querySelectorAll('.group-mode-btn').forEach(b =>
+            b.classList.toggle('active', b === btn));
+          this._renderKacheln();
+        }, opts);
+      });
 
       // Gantt-Navigation
       this._$('gantt-prev')?.addEventListener('click', () => this._ganttNavigiere(-1), opts);
       this._$('gantt-next')?.addEventListener('click', () => this._ganttNavigiere(+1), opts);
       this._$('gantt-heute')?.addEventListener('click', () => {
-        this._ganttDatum = new Date();
+        this._ganttDatum = jetztWanduhr();
         this._renderGantt();
       }, opts);
 
@@ -2913,8 +2988,8 @@
     _tickClock() {
       const el = this._$('clock-text');
       if (!el) return;
-      el.textContent = new Date().toLocaleTimeString('de-DE', {
-        hour: '2-digit', minute: '2-digit', second: '2-digit'
+      el.textContent = jetztWanduhr().toLocaleTimeString('de-DE', {
+        hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'UTC'
       });
     }
 
@@ -3052,13 +3127,13 @@
     // ── KPI-Leiste aktualisieren ─────────────────────────────────────────
 
     _zeitraumBereich() {
-      const jetzt = new Date();
-      const heute = new Date(jetzt.getFullYear(), jetzt.getMonth(), jetzt.getDate());
+      const jetzt = jetztWanduhr();
+      const heute = new Date(Date.UTC(jetzt.getUTCFullYear(), jetzt.getUTCMonth(), jetzt.getUTCDate()));
       switch (this._activeZeitraum) {
         case 'heute':
           return { von: heute, bis: new Date(heute.getTime() + 86400000) };
         case 'woche': {
-          const tag = heute.getDay();
+          const tag = heute.getUTCDay();
           const diff = (tag === 0 ? -6 : 1 - tag);
           const mo = new Date(heute.getTime() + diff * 86400000);
           return { von: mo, bis: new Date(mo.getTime() + 7 * 86400000) };
@@ -3070,8 +3145,8 @@
           // Symmetrisch: 7 Tage zurück bis 7 Tage voraus
           return { von: new Date(heute.getTime() - 7 * 86400000), bis: new Date(heute.getTime() + 8 * 86400000) };
         case 'monat': {
-          const von = new Date(heute.getFullYear(), heute.getMonth(), 1);
-          return { von, bis: new Date(heute.getFullYear(), heute.getMonth() + 1, 1) };
+          const von = new Date(Date.UTC(heute.getUTCFullYear(), heute.getUTCMonth(), 1));
+          return { von, bis: new Date(Date.UTC(heute.getUTCFullYear(), heute.getUTCMonth() + 1, 1)) };
         }
         default:
           return { von: new Date(0), bis: new Date(9999, 0) };
@@ -3145,16 +3220,45 @@
         return;
       }
 
-      if (this._gruppiertLS) {
+      const modus = this._gruppierModus ?? 'status';
+
+      if (modus === 'status') {
+        // ── Gruppiert nach Status: Live / Abgeschlossen / Geplant ──
+        const gruppen = {
+          live:         { titel: 'Live', icon: '🔴', col: 'var(--c-red-light)',
+                          hint: 'in Bearbeitung', tes: [] },
+          abgeschlossen:{ titel: 'Abgeschlossen', icon: '✅', col: 'var(--c-green)',
+                          hint: 'eingelagert', tes: [] },
+          geplant:      { titel: 'Geplant', icon: '🗓️', col: 'var(--c-text2)',
+                          hint: 'noch nicht eingetroffen', tes: [] },
+        };
+        for (const te of tes) {
+          if (te.status === 'eingelagert')      gruppen.abgeschlossen.tes.push(te);
+          else if (te.status === 'erwartet')    gruppen.geplant.tes.push(te);
+          else                                  gruppen.live.tes.push(te); // ankunft/entladen/verzögert
+        }
+        grid.innerHTML = ['live', 'abgeschlossen', 'geplant']
+          .filter(k => gruppen[k].tes.length > 0)
+          .map(k => {
+            const g = gruppen[k];
+            const vz = g.tes.filter(t => t.planabweichung).length;
+            const header = `<div class="ls-gruppe-header">
+              <span class="ls-gruppe-title" style="color:${g.col}">${g.icon} ${esc(g.titel)}</span>
+              <span class="ls-gruppe-count">${g.tes.length} TE${g.tes.length !== 1 ? 's' : ''}</span>
+              ${vz ? `<span class="ls-gruppe-count" style="background:var(--c-yellow-dim);color:var(--c-yellow)">${vz} ⚠</span>` : ''}
+              <div class="ls-gruppe-line"></div>
+            </div>`;
+            return header + g.tes.map(te => this._teKachelHTML(te)).join('');
+          }).join('');
+
+      } else if (modus === 'ladestelle') {
         // ── Gruppiert nach Ladestelle ──
-        // Volle Bezeichnung je Kategorie (für den Gruppen-Header)
         const LS_LANG = {
           BSL:              'ILW Krefeld BSL',
           Container:        'ILW Krefeld Container',
           Landverkehr:      'ILW Krefeld Frei Haus / DDP',
           Eigendisposition: 'Eigendisposition',
         };
-        // Nach kurzer Kategorie gruppieren
         const byLS = {};
         for (const te of tes) {
           const ls = ladestelleKurz(te.ladestelle);
@@ -3175,8 +3279,9 @@
             </div>`;
             return header + gr.map(te => this._teKachelHTML(te)).join('');
           }).join('');
+
       } else {
-        // ── Ungroupiert ──
+        // ── Ungruppiert ──
         grid.innerHTML = tes.map(te => this._teKachelHTML(te)).join('');
       }
 
@@ -3298,7 +3403,7 @@
     // Bei geplanten TEs deren Zeit noch nicht erreicht ist: alle grau.
     // Ist die geplante Zeit erreicht aber keine Ankunft: rot blinkend.
     _fortschrittHTML(te) {
-      const jetzt = new Date();
+      const jetzt = jetztWanduhr();
       const tsFelder = [
         te.tsAnkunft, te.tsAngedockt, te.tsEntladenStart,
         te.tsEntladenEnde, te.tsWeBuchung, te.tsEinlagerung,
@@ -3633,12 +3738,12 @@
 
     _ganttFensterBereich() {
       const anker = new Date(this._ganttDatum);
-      anker.setHours(0, 0, 0, 0);
+      anker.setUTCHours(0, 0, 0, 0);
       switch (this._ganttFenster) {
         case '3tage':
           return { start: anker, ende: new Date(anker.getTime() + 3 * 86400000) };
         case 'woche': {
-          const tag = anker.getDay();
+          const tag = anker.getUTCDay();
           const diff = (tag === 0 ? -6 : 1 - tag);
           const mo = new Date(anker.getTime() + diff * 86400000);
           return { start: mo, ende: new Date(mo.getTime() + 7 * 86400000) };
@@ -3663,9 +3768,9 @@
       // Datum-Label in Steuerleiste
       const navDate = this._$('gantt-nav-date');
       if (navDate) {
-        const fmt = (d) => d.toLocaleDateString('de-DE', { day:'2-digit', month:'2-digit' });
+        const fmt = (d) => d.toLocaleDateString('de-DE', { day:'2-digit', month:'2-digit', timeZone:'UTC' });
         navDate.textContent = this._ganttFenster === 'tag'
-          ? this._ganttDatum.toLocaleDateString('de-DE', { weekday:'short', day:'2-digit', month:'2-digit', year:'2-digit' })
+          ? this._ganttDatum.toLocaleDateString('de-DE', { weekday:'short', day:'2-digit', month:'2-digit', year:'2-digit', timeZone:'UTC' })
           : fmt(start) + ' – ' + fmt(new Date(ende.getTime() - 86400000));
       }
 
@@ -3690,11 +3795,11 @@
     }
 
     _ganttHTML(tes, fensterStart, fensterEnde) {
-      const jetzt = new Date();
+      const jetzt = jetztWanduhr();
 
       // ── Achse = exakt das gewählte Fenster ──
       // Fallback falls Parameter fehlen (z.B. beim ersten Render)
-      const achseStart   = fensterStart instanceof Date ? fensterStart : new Date(jetzt.getFullYear(), jetzt.getMonth(), jetzt.getDate());
+      const achseStart   = fensterStart instanceof Date ? fensterStart : new Date(Date.UTC(jetzt.getUTCFullYear(), jetzt.getUTCMonth(), jetzt.getUTCDate()));
       const achseEnde    = fensterEnde   instanceof Date ? fensterEnde  : new Date(achseStart.getTime() + 86400000);
       const spanMs       = achseEnde.getTime() - achseStart.getTime();
       const spanStunden  = spanMs / 3600000;
@@ -3717,9 +3822,9 @@
       } else {
         tickIntervallH = 6;
         tickFormat = (d) => {
-          const tag  = d.toLocaleDateString('de-DE', { day:'2-digit', month:'2-digit' });
+          const tag  = d.toLocaleDateString('de-DE', { day:'2-digit', month:'2-digit', timeZone:'UTC' });
           const zeit = fmtTime(d);
-          return d.getHours() === 0 ? tag : zeit;
+          return d.getUTCHours() === 0 ? tag : zeit;
         };
       }
 
@@ -3727,7 +3832,7 @@
       const tickStart = new Date(achseStart);
       while (tickStart <= achseEnde) {
         // Nur Ticks die auf das Intervall passen
-        if (tickStart.getHours() % tickIntervallH === 0) {
+        if (tickStart.getUTCHours() % tickIntervallH === 0) {
           ticks.push(new Date(tickStart));
         }
         tickStart.setTime(tickStart.getTime() + 3600000); // +1h
@@ -3883,7 +3988,7 @@
       // Falls noch aktiv (kein Ende): laufende Phase bis Jetzt
       const letzterTs = nachEnde ?? entladenEnde ?? te.tsEntladenStart ?? te.tsAngedockt ?? te.tsAnkunft;
       if (letzterTs && !nachEnde && te.status !== 'abgefahren' && te.status !== 'eingelagert') {
-        const jetzt = new Date();
+        const jetzt = jetztWanduhr();
         if (jetzt > letzterTs && jetzt <= achseEnde) {
           phasen.push({ von: letzterTs, bis: jetzt, cls: 'phase-laufend',
             name: 'Läuft aktuell', dauer: segDauer(letzterTs, jetzt) });
