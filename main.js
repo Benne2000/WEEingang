@@ -23,7 +23,42 @@
 
   // BW liefert Timestamps als ISO-String oder SAP-internes Format.
   // Null-Werte die BW zurückgeben kann:
-  const NULL_TOKENS = new Set(['', '00000000', '000000000000', '@NullMember', '@TotalMembers', 'null', 'undefined']);
+  const NULL_TOKENS = new Set(['', '#', '00000000', '000000000000', '@NullMember', '@TotalMembers', 'null', 'undefined']);
+
+  // ── Ladestellen-Mapping ──────────────────────────────────────────────
+  // BW liefert die lange Bezeichnung. Für Filter + Badges brauchen wir eine
+  // kurze Kategorie, für Gruppierung + Zeitstrahl die volle Bezeichnung.
+  // LADESTELLE_KURZ ordnet jede lange Bezeichnung einer der 4 Kategorien zu.
+  const LADESTELLE_KURZ = {
+    'ILW Krefeld Container':               'Container',
+    'ILW Krefeld BSL':                     'BSL',
+    'ILW Krefeld BSL / Eigendisposition':  'BSL',
+    'ILW Krefeld Frei Haus / DDP':         'Landverkehr',
+    'Eigendisposition':                    'Eigendisposition',
+  };
+
+  // Gibt die kurze Kategorie zu einer (langen oder bereits kurzen) Bezeichnung.
+  function ladestelleKurz(lang) {
+    if (!lang) return 'Eigendisposition';
+    if (LADESTELLE_KURZ[lang]) return LADESTELLE_KURZ[lang];
+    // Fallback: bereits kurze Werte durchreichen, sonst per Schlüsselwort raten
+    if (/container/i.test(lang)) return 'Container';
+    if (/bsl/i.test(lang))       return 'BSL';
+    if (/frei haus|ddp|landverkehr/i.test(lang)) return 'Landverkehr';
+    if (/eigendispo/i.test(lang)) return 'Eigendisposition';
+    return lang;
+  }
+
+  // Die 4 Kategorien in fester Reihenfolge (für Filter + Gruppierung)
+  const LADESTELLE_KATEGORIEN = ['BSL', 'Container', 'Landverkehr', 'Eigendisposition'];
+
+  // Icon + Farbe je Kategorie
+  const LADESTELLE_STYLE = {
+    BSL:             { icon: '🚛', cls: 'ls-bsl',  col: 'rgba(142,68,173,0.85)' },
+    Container:       { icon: '🏗', cls: 'ls-cont', col: 'rgba(230,126,34,0.85)' },
+    Landverkehr:     { icon: '🚚', cls: 'ls-land', col: 'rgba(39,174,96,0.85)'  },
+    Eigendisposition:{ icon: '🏭', cls: 'ls-eigen',col: 'rgba(93,109,126,0.85)' },
+  };
 
   // Echte Tor→Hallen-Zuordnung (T001–T999, nicht fortlaufend)
   // T001 = Sondertor (Pförtner/Büro), kein HA-Präfix
@@ -166,6 +201,26 @@
     return null;
   };
 
+  // Normalisiert einen Tor-Wert: '#' oder leer → null (kein Tor zugewiesen).
+  const normTor = (raw) => {
+    if (isNull(raw)) return null;
+    const s = String(raw).trim();
+    return (s === '#' || s === '') ? null : s;
+  };
+
+  // Normalisiert eine Halle: extrahiert die reine Nummer (4, 6, 8) und
+  // baut daraus den internen Hallen-Key HA04/HA06/HA08.
+  const normHalle = (raw) => {
+    if (isNull(raw)) return null;
+    const s = String(raw).trim();
+    // Falls schon "HA04" → durchreichen
+    if (/^HA\d+$/i.test(s)) return s.toUpperCase();
+    // Reine Zahl "4" → "HA04"
+    const num = s.match(/\d+/);
+    if (num) return 'HA' + String(num[0]).padStart(2, '0');
+    return s;
+  };
+
   // Liest einen Measure-Wert aus einer BW-Datenzeile.
   // SAC liefert Measures als { raw: 144, formatted: "144" }.
   const readVal = (row, ...keys) => {
@@ -212,29 +267,36 @@
 
       if (!teMap.has(teNr)) {
         teMap.set(teNr, {
-          te:              teNr,
+          te:              String(teNr).replace(/^0+/, '') || teNr,  // führende Nullen weg
           teHinweis:       readDim(row, 'dimension_te_hinweis', 'TE_HINWEIS'),
-          ladestelle:      readDim(row, 'dimension_ladestelle') ?? 'Landverkehr',
-          tor:             readDim(row, 'dimension_tor'),
+          // Ladestelle: BW liefert lange Bezeichnung (z.B. "ILW Krefeld Container")
+          ladestelle:      readDim(row, 'dimension_ladestelle', 'LADESTELLE') ?? 'Eigendisposition',
+          // Tor: "#" bedeutet noch kein Tor zugewiesen
+          tor:             normTor(readDim(row, 'dimension_tor', 'TOR')),
           liefernummer:    readDim(row, 'dimension_liefernummer', 'LIFNR'),
           bestellnummer:   readDim(row, 'dimension_bestellnummer', 'EBELN'),
-          lieferantNr:     readDim(row, 'dimension_lieferant_nr', 'LIFNR_NR'),
-          lieferantName:   readDim(row, 'dimension_lieferant_name', 'LIFNR_NAME'),
+          // Lieferant = Warensender (Text des BW-Merkmals)
+          lieferantNr:     readDim(row, 'dimension_lieferant_nr', 'WARENSENDER_NR', 'WARENSENDER'),
+          lieferantName:   readDim(row, 'dimension_lieferant_name', 'WARENSENDER_TEXT', 'WARENSENDER') ?? '–',
           transportmittel: readDim(row, 'dimension_transportmittel', 'TRMIT'),
-          halle:           readDim(row, 'dimension_halle', 'LGNUM'),
+          // Halle = "Einlagerung in Halle" (Werte 4, 6, 8 ...)
+          halle:           normHalle(readDim(row, 'dimension_halle', 'HALLE', 'LGNUM')),
 
           // Zeitfenster (Soll)
-          geplantStart:    parseTs(readDim(row, 'dimension_geplant_start')),
-          geplantEnde:     parseTs(readDim(row, 'dimension_geplant_ende')),
+          geplantStart:    parseTs(readDim(row, 'dimension_geplant_start', 'GEPLANT_START')),
+          geplantEnde:     parseTs(readDim(row, 'dimension_geplant_ende', 'GEPLANT_ENDE')),
 
-          // Prozess-Timestamps (Ist)
-          tsAnkunft:        parseTs(readDim(row, 'dimension_ts_ankunft')),
-          tsAngedockt:      parseTs(readDim(row, 'dimension_ts_angedockt')),
-          tsEntladenStart:  parseTs(readDim(row, 'dimension_ts_entladen_start')),
-          tsEntladenEnde:   parseTs(readDim(row, 'dimension_ts_entladen_ende')),
-          tsEntladenTat:    parseTs(readDim(row, 'dimension_ts_entladen_tat')),
-          tsWeBuchung:      parseTs(readDim(row, 'dimension_ts_we_buchung')),
-          tsAbfahrt:        parseTs(readDim(row, 'dimension_ts_abfahrt')),
+          // Prozess-Timestamps (Ist) — Reihenfolge des WE-Prozesses
+          tsAnkunft:        parseTs(readDim(row, 'dimension_ts_ankunft', 'ANKUNFT')),
+          tsAngedockt:      parseTs(readDim(row, 'dimension_ts_angedockt', 'ANGEDOCKT')),
+          tsEntladenStart:  parseTs(readDim(row, 'dimension_ts_entladen_start', 'ENTLADEN_START')),
+          tsEntladenEnde:   parseTs(readDim(row, 'dimension_ts_entladen_ende', 'ENTLADEN_ENDE')),
+          tsEntladenTat:    parseTs(readDim(row, 'dimension_ts_entladen_tat', 'ENTLADEN_TAT')),
+          tsWeBuchung:      parseTs(readDim(row, 'dimension_ts_we_buchung', 'WE_BUCHUNG')),
+          // Fertigstellung = Einlagerung abgeschlossen
+          tsEinlagerung:    parseTs(readDim(row, 'dimension_ts_einlagerung', 'FERTIGSTELLUNG')),
+          // Abfahrt = OPTIONAL, zählt nicht als Pflicht-Prozessschritt
+          tsAbfahrt:        parseTs(readDim(row, 'dimension_ts_abfahrt', 'ABFAHRT')),
 
           produkte:         [],
 
@@ -242,6 +304,7 @@
           status:           'erwartet',
           verzoegerungMin:  null,
           fortschritt:      0,
+          abgefahren:       false,
         });
       }
 
@@ -272,36 +335,40 @@
   function berechneTE(te) {
     const jetzt = new Date();
 
-    // ── Fortschritt: Anzahl abgeschlossener Prozessschritte ──
-    const tsFelder = [
+    // ── Fortschritt: Anzahl abgeschlossener PFLICHT-Prozessschritte ──
+    // Abfahrt ist OPTIONAL und zählt NICHT zum Fortschritt (max. 6 Pflicht-Schritte):
+    // 1 Ankunft · 2 Angedockt · 3 Entladen-Start · 4 Entladen-Ende · 5 WE-Buchung · 6 Fertigstellung
+    const pflichtSchritte = [
       te.tsAnkunft, te.tsAngedockt, te.tsEntladenStart,
-      te.tsEntladenEnde, te.tsWeBuchung, te.tsAbfahrt,
+      te.tsEntladenEnde, te.tsWeBuchung, te.tsEinlagerung,
     ];
-    te.fortschritt = tsFelder.filter(ts => ts !== null).length;
+    te.fortschritt = pflichtSchritte.filter(ts => ts !== null).length;
+
+    // Abfahrt separat als Flag (optionaler Schritt hinter "fertig")
+    te.abgefahren = te.tsAbfahrt !== null;
 
     // ── Verzögerung: Differenz Soll-Start zu Ist-Entladen-Start ──
     // Kernfrage: Wie lange stand der LKW am Tor bevor entladen wurde?
     if (te.geplantStart && te.tsEntladenStart) {
       te.verzoegerungMin = diffMin(te.geplantStart, te.tsEntladenStart);
-      // Negative Werte = früher als geplant → keine Verzögerung
       if (te.verzoegerungMin < 0) te.verzoegerungMin = 0;
     } else if (te.geplantStart && !te.tsEntladenStart && te.tsAngedockt) {
-      // LKW ist angedockt aber Entladen hat noch nicht begonnen
       te.verzoegerungMin = diffMin(te.geplantStart, jetzt);
       if (te.verzoegerungMin < 0) te.verzoegerungMin = 0;
     }
 
-    // ── Status ──
-    if (te.tsAbfahrt) {
-      te.status = 'abgefahren';
-    } else if (te.tsWeBuchung) {
+    // ── Status ── (von "am weitesten" nach "am frühesten")
+    // WICHTIG: Abfahrt bestimmt NICHT mehr den Status. Eine TE ist "eingelagert"
+    // (fertig) sobald Fertigstellung ODER WE-Buchung vorliegt. Ob der LKW schon
+    // abgefahren ist, wird über das separate Flag te.abgefahren dargestellt.
+    if (te.tsEinlagerung || te.tsWeBuchung) {
       te.status = 'eingelagert';
     } else if (te.tsEntladenStart) {
       te.status = te.verzoegerungMin >= VERZOEGERUNG_SCHWELLE_MIN
         ? 'verzögert'
         : 'entladen';
-    } else if (te.tsAnkunft) {
-      // Angedockt aber kein Entladen gestartet – prüfe ob Verzögerung
+    } else if (te.tsAnkunft || te.tsAngedockt) {
+      // Am Tor aber Entladen noch nicht gestartet – prüfe Verzögerung
       if (te.verzoegerungMin != null && te.verzoegerungMin >= VERZOEGERUNG_SCHWELLE_MIN) {
         te.status = 'verzögert';
       } else {
@@ -811,6 +878,185 @@
 
       @keyframes spin { to { transform: rotate(360deg); } }
 
+      /* ═══ Coole WE-Ladeanimation ═══ */
+      .we-loader {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 26px;
+      }
+
+      .we-loader-scene {
+        position: relative;
+        width: 280px;
+        height: 90px;
+      }
+
+      /* Fahrbahn */
+      .we-road {
+        position: absolute;
+        bottom: 18px;
+        left: 0;
+        width: 220px;
+        height: 3px;
+        background: var(--c-border2);
+        border-radius: 2px;
+        overflow: hidden;
+      }
+      .we-road-line {
+        position: absolute;
+        top: 1px;
+        left: 0;
+        width: 100%;
+        height: 1px;
+        background: repeating-linear-gradient(90deg,
+          var(--c-text3) 0, var(--c-text3) 8px,
+          transparent 8px, transparent 16px);
+        animation: we-road-move 0.6s linear infinite;
+      }
+      @keyframes we-road-move { to { transform: translateX(-16px); } }
+
+      /* LKW */
+      .we-truck {
+        position: absolute;
+        bottom: 20px;
+        left: 0;
+        animation: we-truck-drive 3s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+      }
+      @keyframes we-truck-drive {
+        0%        { left: 0; }
+        45%       { left: 150px; }
+        55%       { left: 150px; }
+        100%      { left: 0; }
+      }
+
+      .we-truck-body { position: relative; display: flex; align-items: flex-end; gap: 2px; }
+      .we-truck-trailer {
+        width: 34px; height: 22px;
+        background: var(--c-red);
+        border-radius: 2px;
+        order: 1;
+      }
+      .we-truck-cabin {
+        width: 14px; height: 15px;
+        background: var(--c-red-light);
+        border-radius: 3px 3px 2px 2px;
+        order: 2;
+        position: relative;
+      }
+      .we-truck-cabin::after {
+        content: '';
+        position: absolute;
+        top: 2px; right: 2px;
+        width: 6px; height: 5px;
+        background: var(--c-bg);
+        border-radius: 1px;
+        opacity: 0.6;
+      }
+      .we-truck-wheel {
+        position: absolute;
+        bottom: -4px;
+        width: 7px; height: 7px;
+        background: var(--c-text2);
+        border: 1.5px solid var(--c-text3);
+        border-radius: 50%;
+        animation: spin 0.4s linear infinite;
+      }
+      .we-wheel-1 { left: 3px; }
+      .we-wheel-2 { left: 22px; }
+      .we-wheel-3 { left: 38px; }
+
+      /* Tor / Halle */
+      .we-gate {
+        position: absolute;
+        bottom: 20px;
+        right: 6px;
+        width: 44px;
+        height: 52px;
+      }
+      .we-gate-roof {
+        width: 0; height: 0;
+        border-left: 24px solid transparent;
+        border-right: 24px solid transparent;
+        border-bottom: 14px solid var(--c-bg4);
+        margin: 0 -2px;
+      }
+      .we-gate-door {
+        width: 44px;
+        height: 38px;
+        background: var(--c-bg3);
+        border: 2px solid var(--c-bg4);
+        border-top: none;
+        border-radius: 0 0 2px 2px;
+        position: relative;
+        overflow: hidden;
+      }
+      .we-gate-door::before {
+        content: '';
+        position: absolute;
+        top: 0; left: 0; right: 0;
+        height: 100%;
+        background: repeating-linear-gradient(0deg,
+          var(--c-bg4) 0, var(--c-bg4) 4px,
+          transparent 4px, transparent 8px);
+        animation: we-door-open 3s ease-in-out infinite;
+      }
+      @keyframes we-door-open {
+        0%, 40%   { transform: translateY(0); }
+        50%, 90%  { transform: translateY(-100%); }
+        100%      { transform: translateY(0); }
+      }
+
+      /* Prozess-Schritte */
+      .we-steps {
+        display: flex;
+        gap: 14px;
+        flex-wrap: wrap;
+        justify-content: center;
+      }
+      .we-step {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        font-family: var(--font-mono);
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        color: var(--c-text3);
+        opacity: 0.4;
+        transition: opacity 0.3s, color 0.3s;
+      }
+      .we-step-dot {
+        width: 7px; height: 7px;
+        border-radius: 50%;
+        background: var(--c-border2);
+        transition: background 0.3s, box-shadow 0.3s;
+      }
+      .we-step.we-step-active {
+        opacity: 1;
+        color: var(--c-text);
+      }
+      .we-step.we-step-active .we-step-dot {
+        background: var(--c-red);
+        box-shadow: 0 0 8px var(--c-red);
+      }
+
+      .we-loader-text {
+        font-family: var(--font-mono);
+        font-size: 12px;
+        color: var(--c-text2);
+        letter-spacing: 0.03em;
+      }
+      .we-dots span {
+        animation: we-dot-blink 1.4s infinite;
+      }
+      .we-dots span:nth-child(2) { animation-delay: 0.2s; }
+      .we-dots span:nth-child(3) { animation-delay: 0.4s; }
+      @keyframes we-dot-blink {
+        0%, 60%, 100% { opacity: 0.2; }
+        30%           { opacity: 1; }
+      }
+
       /* ── Sektion-Titel ── */
       .section-title {
         font-family:    var(--font-mono);
@@ -1003,6 +1249,22 @@
       .tc-step.active.late { background: var(--c-red);
                              animation: step-pulse 1.6s ease-in-out infinite; }
 
+      /* Optionaler Abfahrt-Schritt (abgesetzt, gestrichelt) */
+      .tc-step-sep { width: 3px; flex-shrink: 0; }
+      .tc-step-abfahrt {
+        width:         14px;
+        flex-shrink:   0;
+        height:        4px;
+        border-radius: 2px;
+        border:        1px dashed var(--c-border2);
+        background:    transparent;
+      }
+      .tc-step-abfahrt.done {
+        background:  var(--c-text3);
+        border-style: solid;
+        border-color: var(--c-text3);
+      }
+
       @keyframes step-pulse {
         0%, 100% { opacity: 1; }
         50%       { opacity: 0.45; }
@@ -1048,6 +1310,7 @@
       .ls-chip-bsl.active  { background: rgba(142,68,173,.2);  border-color: rgba(142,68,173,.5); color: #c39bd3; }
       .ls-chip-cont.active { background: rgba(230,126,34,.2);  border-color: rgba(230,126,34,.5); color: #f0a500; }
       .ls-chip-land.active { background: var(--c-green-dim);   border-color: rgba(39,174,96,.4);  color: #58d68d; }
+      .ls-chip-eigen.active { background: rgba(93,109,126,.2); border-color: rgba(93,109,126,.5); color: #aab7b8; }
 
       /* Gruppierungs-Toggle */
       .group-toggle-btn {
@@ -1127,8 +1390,24 @@
       .ls-bsl  { background: rgba(142,68,173,.15); color: #c39bd3; }
       .ls-cont { background: rgba(230,126,34,.15);  color: #f0a500; }
       .ls-land { background: var(--c-green-dim);    color: #58d68d; }
+      .ls-eigen { background: rgba(93,109,126,.18); color: #aab7b8; }
 
       /* Tor-Badge auf Kachel */
+      .tc-abfahrt-tag {
+        font-family:    var(--font-mono);
+        font-size:      8px;
+        font-weight:    600;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color:          var(--c-text3);
+        background:     var(--c-bg3);
+        border:         1px solid var(--c-border);
+        border-radius:  var(--r-sm);
+        padding:        2px 6px;
+        white-space:    nowrap;
+        flex-shrink:    0;
+      }
+
       .tor-badge-card {
         font-family:    var(--font-mono);
         font-size:      10px;
@@ -1414,6 +1693,13 @@
         transition:    transform 0.15s;
       }
 
+            .tl-dot.optional {
+        background:   transparent;
+        border:       2px dashed var(--c-text3);
+        opacity:      0.7;
+      }
+      .tl-point-optional .tl-label { color: var(--c-text3); font-style: italic; }
+      .tl-point-optional .tl-time  { color: var(--c-text3); }
       .tl-dot.ok   { background: var(--c-green);  box-shadow: 0 0 0 2px var(--c-green); }
       .tl-dot.warn { background: var(--c-yellow); box-shadow: 0 0 0 2px var(--c-yellow); }
       .tl-dot.bad  { background: var(--c-red);    box-shadow: 0 0 0 2px var(--c-red); }
@@ -1726,6 +2012,32 @@
         background: var(--c-text3);
         opacity:    0.4;
       }
+
+      /* Phasen-Segmente im Gantt-Ist-Balken */
+      .gantt-bar-ist.phase-anfahrt        { background: #5dade2; border-radius: 2px 0 0 2px; }
+      .gantt-bar-ist.phase-warten         { background: #48c9b0; }
+      .gantt-bar-ist.phase-warten-lang    { background: var(--c-red); }
+      .gantt-bar-ist.phase-entladen       { background: var(--c-blue); }
+      .gantt-bar-ist.phase-nachbearbeitung{ background: var(--c-green); border-radius: 0 2px 2px 0; }
+      .gantt-bar-ist.phase-laufend {
+        background: repeating-linear-gradient(45deg,
+          var(--c-blue) 0, var(--c-blue) 6px,
+          rgba(41,128,185,0.5) 6px, rgba(41,128,185,0.5) 12px);
+      }
+
+      /* Abfahrt-Marker (optionaler Punkt am Balkenende) */
+      .gantt-abfahrt-marker {
+        position:      absolute;
+        top:           28px;
+        width:         0; height: 0;
+        border-left:   4px solid transparent;
+        border-right:  4px solid transparent;
+        border-top:    7px solid var(--c-text3);
+        transform:     translateX(-4px);
+        cursor:        pointer;
+        transition:    border-top-color 0.15s;
+      }
+      .gantt-abfahrt-marker:hover { border-top-color: var(--c-text); }
 
       /* Label auf dem Ist-Balken */
       .gantt-bar-label {
@@ -2123,10 +2435,40 @@
       <!-- Body -->
       <div class="body">
 
-        <!-- Loading State -->
+        <!-- Loading State — animierter WE-Prozess -->
         <div class="state-overlay" id="state-loading">
-          <div class="loader-ring"></div>
-          <div class="state-text">Daten werden geladen…</div>
+          <div class="we-loader">
+            <div class="we-loader-scene">
+              <!-- Fahrbahn -->
+              <div class="we-road">
+                <div class="we-road-line"></div>
+              </div>
+              <!-- LKW fährt zum Tor -->
+              <div class="we-truck">
+                <div class="we-truck-body">
+                  <div class="we-truck-cabin"></div>
+                  <div class="we-truck-trailer"></div>
+                </div>
+                <div class="we-truck-wheel we-wheel-1"></div>
+                <div class="we-truck-wheel we-wheel-2"></div>
+                <div class="we-truck-wheel we-wheel-3"></div>
+              </div>
+              <!-- Tor / Halle -->
+              <div class="we-gate">
+                <div class="we-gate-roof"></div>
+                <div class="we-gate-door"></div>
+              </div>
+            </div>
+            <!-- Prozess-Schritte die nacheinander aufleuchten -->
+            <div class="we-steps">
+              <div class="we-step" data-i="0"><span class="we-step-dot"></span>Ankunft</div>
+              <div class="we-step" data-i="1"><span class="we-step-dot"></span>Andocken</div>
+              <div class="we-step" data-i="2"><span class="we-step-dot"></span>Entladen</div>
+              <div class="we-step" data-i="3"><span class="we-step-dot"></span>Buchen</div>
+              <div class="we-step" data-i="4"><span class="we-step-dot"></span>Einlagern</div>
+            </div>
+            <div class="we-loader-text">Wareneingang wird geladen<span class="we-dots"><span>.</span><span>.</span><span>.</span></span></div>
+          </div>
         </div>
 
         <!-- Empty State -->
@@ -2159,6 +2501,7 @@
               <button class="ls-filter-chip ls-chip-bsl" data-ls="BSL">🚛 BSL</button>
               <button class="ls-filter-chip ls-chip-cont" data-ls="Container">🏗 Container</button>
               <button class="ls-filter-chip ls-chip-land" data-ls="Landverkehr">🚚 Landverkehr</button>
+              <button class="ls-filter-chip ls-chip-eigen" data-ls="Eigendisposition">🏭 Eigendisp.</button>
             </div>
             <button class="group-toggle-btn" id="group-toggle-btn" title="Nach Ladestelle gruppieren">
               <span id="group-toggle-icon">⊟</span> Gruppieren
@@ -2229,6 +2572,7 @@
       this._countdownVal   = 30;        // aktueller Countdown-Wert
       this._countdownTimer = null;      // setInterval-Handle
       this._clockTimer     = null;      // Uhr-Timer-Handle
+      this._loaderTimer    = null;      // Ladeanimation-Timer
       this._autoRefresh    = false;     // Auto-Aktualisierung aktiv?
       this._lsFilter       = 'alle';    // Ladestellen-Filter: 'alle'|'BSL'|'Container'|'Landverkehr'
       this._gruppiertLS    = false;     // Kacheln nach Ladestelle gruppieren
@@ -2239,6 +2583,7 @@
       this._hideLoading();
       this._startCountdown();
       this._startClock();
+      this._startLoaderSteps(); // Ladeanimation läuft bis Daten da sind
     }
 
     disconnectedCallback() {
@@ -2246,6 +2591,7 @@
       this._ac.abort();
       this._stopCountdown();
       this._stopClock();
+      this._stopLoaderSteps();
     }
 
     // ── Hilfsmethode: Element im Shadow DOM finden ───────────────────────
@@ -2478,10 +2824,33 @@
     _showLoading() {
       this._$('state-loading')?.classList.remove('hidden');
       this._$('state-empty')?.classList.add('hidden');
+      this._startLoaderSteps();
     }
 
     _hideLoading() {
       this._$('state-loading')?.classList.add('hidden');
+      this._stopLoaderSteps();
+    }
+
+    // Lässt die Prozess-Schritte in der Ladeanimation nacheinander aufleuchten
+    _startLoaderSteps() {
+      this._stopLoaderSteps();
+      const steps = this._shadow.querySelectorAll('.we-step');
+      if (!steps.length) return;
+      let i = 0;
+      const tick = () => {
+        steps.forEach((s, idx) => s.classList.toggle('we-step-active', idx === i));
+        i = (i + 1) % steps.length;
+      };
+      tick();
+      this._loaderTimer = setInterval(tick, 600);
+    }
+
+    _stopLoaderSteps() {
+      if (this._loaderTimer) {
+        clearInterval(this._loaderTimer);
+        this._loaderTimer = null;
+      }
     }
 
     _showEmpty() {
@@ -2526,7 +2895,7 @@
       const tes        = this._tesFuerZeitraum();
       const aktiv      = tes.filter(t => ['ankunft', 'entladen'].includes(t.status)).length;
       const verzoegert = tes.filter(t => t.status === 'verzögert').length;
-      const abgefahren = tes.filter(t => t.status === 'abgefahren').length;
+      const abgefahren = tes.filter(t => t.abgefahren).length;
 
       this._$('kpi-gesamt').textContent     = tes.length;
       this._$('kpi-aktiv').textContent      = aktiv;
@@ -2553,7 +2922,7 @@
         switch (this._activeFilter) {
           case 'aktiv':      return ['ankunft', 'entladen'].includes(te.status);
           case 'verzögert':  return te.status === 'verzögert';
-          case 'abgefahren': return te.status === 'abgefahren';
+          case 'abgefahren': return te.abgefahren === true;
           case 'erwartet':   return te.status === 'erwartet';
           default:           return true; // 'alle'
         }
@@ -2569,7 +2938,7 @@
       // Ladestellen-Filter
       const lsMatch = (te) => {
         if (this._lsFilter === 'alle') return true;
-        return (te.ladestelle ?? 'Landverkehr') === this._lsFilter;
+        return ladestelleKurz(te.ladestelle) === this._lsFilter;
       };
 
       const tes = this._tesFuerZeitraum()
@@ -2582,30 +2951,31 @@
 
       if (this._gruppiertLS) {
         // ── Gruppiert nach Ladestelle ──
-        const LS_ORDER = ['BSL', 'Container', 'Landverkehr'];
-        const LS_META  = {
-          BSL:         { icon: '🚛', col: 'rgba(142,68,173,0.85)', dauer: 'Ø 4–8h'     },
-          Container:   { icon: '🏗', col: 'rgba(230,126,34,0.85)', dauer: 'Ø 2–4h'     },
-          Landverkehr: { icon: '🚚', col: 'rgba(39,174,96,0.85)',  dauer: 'Ø 30–90min' },
+        // Volle Bezeichnung je Kategorie (für den Gruppen-Header)
+        const LS_LANG = {
+          BSL:              'ILW Krefeld BSL',
+          Container:        'ILW Krefeld Container',
+          Landverkehr:      'ILW Krefeld Frei Haus / DDP',
+          Eigendisposition: 'Eigendisposition',
         };
+        // Nach kurzer Kategorie gruppieren
         const byLS = {};
         for (const te of tes) {
-          const ls = te.ladestelle ?? 'Landverkehr';
+          const ls = ladestelleKurz(te.ladestelle);
           if (!byLS[ls]) byLS[ls] = [];
           byLS[ls].push(te);
         }
-        grid.innerHTML = LS_ORDER
+        grid.innerHTML = LADESTELLE_KATEGORIEN
           .filter(ls => byLS[ls]?.length > 0)
           .map(ls => {
-            const m  = LS_META[ls];
+            const style = LADESTELLE_STYLE[ls] ?? LADESTELLE_STYLE.Eigendisposition;
             const gr = byLS[ls];
             const vz = gr.filter(t => t.status === 'verzögert').length;
             const header = `<div class="ls-gruppe-header">
-              <span class="ls-gruppe-title" style="color:${m.col}">${m.icon} ${ls}</span>
+              <span class="ls-gruppe-title" style="color:${style.col}">${style.icon} ${esc(LS_LANG[ls] ?? ls)}</span>
               <span class="ls-gruppe-count">${gr.length} TE${gr.length !== 1 ? 's' : ''}</span>
               ${vz ? `<span class="ls-gruppe-count" style="background:var(--c-red-dim);color:#e74c3c">${vz} verzögert</span>` : ''}
               <div class="ls-gruppe-line"></div>
-              <span class="ls-gruppe-dauer">${m.dauer}</span>
             </div>`;
             return header + gr.map(te => this._teKachelHTML(te)).join('');
           }).join('');
@@ -2624,12 +2994,12 @@
     }
 
     // Ladestellen-Badge HTML
+    // Badge zeigt die KURZE Kategorie (BSL / Container / Landverkehr / Eigendisposition).
+    // Nimmt entweder die lange BW-Bezeichnung oder eine bereits kurze entgegen.
     _lsBadgeHTML(ladestelle) {
-      const map  = { BSL: 'ls-bsl', Container: 'ls-cont', Landverkehr: 'ls-land' };
-      const icon = { BSL: '🚛', Container: '🏗', Landverkehr: '🚚' };
-      const cls  = map[ladestelle] ?? 'ls-land';
-      const ico  = icon[ladestelle] ?? '🚛';
-      return `<span class="ls-badge ${cls}">${ico} ${esc(ladestelle)}</span>`;
+      const kurz  = ladestelleKurz(ladestelle);
+      const style = LADESTELLE_STYLE[kurz] ?? LADESTELLE_STYLE.Eigendisposition;
+      return `<span class="ls-badge ${style.cls}">${style.icon} ${esc(kurz)}</span>`;
     }
 
     // Baut das HTML für eine einzelne TE-Kachel
@@ -2647,27 +3017,32 @@
       }[status] ?? status;
 
       // ── Fortschrittsbalken ──
-      // 6 Schritte: Ankunft, Angedockt, Entladen▶, Entladen■, WE-Buchung, Abfahrt
+      // 6 PFLICHT-Schritte: Ankunft, Angedockt, Entladen▶, Entladen■, WE-Buchung, Fertigstellung
+      // Abfahrt ist OPTIONAL und wird als abgesetzter 7. Schritt (gestrichelt) gezeigt.
       const tsFelder = [
         te.tsAnkunft, te.tsAngedockt, te.tsEntladenStart,
-        te.tsEntladenEnde, te.tsWeBuchung, te.tsAbfahrt,
+        te.tsEntladenEnde, te.tsWeBuchung, te.tsEinlagerung,
       ];
       const isVerspaetet = status === 'verzögert';
 
-      const schritte = tsFelder.map((ts, i) => {
+      let schritte = tsFelder.map((ts, i) => {
         const isDone   = ts !== null;
-        const isActive = !isDone && i === te.fortschritt; // erster offener Schritt
+        const isActive = !isDone && i === te.fortschritt;
         let cls = 'tc-step';
         if (isDone)    cls += isVerspaetet ? ' late' : ' done';
         if (isActive)  cls += isVerspaetet ? ' active late' : ' active';
         return `<div class="${cls}"></div>`;
       }).join('');
 
+      // Optionaler Abfahrt-Schritt: gestrichelt, abgesetzt durch kleinen Spalt
+      const abfahrtCls = te.abgefahren ? 'tc-step-abfahrt done' : 'tc-step-abfahrt';
+      schritte += `<div class="tc-step-sep"></div><div class="${abfahrtCls}" title="${te.abgefahren ? 'Abgefahren' : 'Noch nicht abgefahren'}"></div>`;
+
       // ── Δ-Zeit Badge ──
       let deltaHTML = '';
       if (te.verzoegerungMin != null && te.verzoegerungMin > 0) {
         deltaHTML = `<span class="tc-delta pos">${fmtDauer(te.verzoegerungMin)}</span>`;
-      } else if (status === 'abgefahren' || status === 'eingelagert') {
+      } else if (status === 'eingelagert') {
         deltaHTML = `<span class="tc-delta neg">pünktlich</span>`;
       }
 
@@ -2697,6 +3072,7 @@
               <div class="tc-supplier">${esc(te.lieferantName ?? '–')}</div>
             </div>
             <span class="tc-badge badge-${esc(status)}">${esc(badgeLabel)}</span>
+            ${te.abgefahren ? `<span class="tc-abfahrt-tag" title="LKW hat das Gelände verlassen">✓ abgefahren</span>` : ''}
             ${te.tor ? `<span class="tor-badge-card">${esc(te.tor)}</span>` : ''}
           </div>
           <div class="tc-progress">${schritte}</div>
@@ -2738,7 +3114,7 @@
       let deltaHTML = '';
       if (te.verzoegerungMin != null && te.verzoegerungMin > 0) {
         deltaHTML = `<span class="dh-delta pos">${fmtDauer(te.verzoegerungMin)} Verzögerung</span>`;
-      } else if (status === 'abgefahren' || status === 'eingelagert') {
+      } else if (status === 'eingelagert') {
         deltaHTML = `<span class="dh-delta neg">Pünktlich abgewickelt</span>`;
       }
 
@@ -2878,15 +3254,16 @@
 
     // Baut den SVG-freien CSS-Zeitstrahl
     _zeitstrahlHTML(te, isVerspaetet) {
-      // Alle Punkte mit Timestamp, Label und Soll-Referenz
+      // Punkte: 6 Pflicht-Schritte + Abfahrt (optional, separat gekennzeichnet)
       const punkte = [
-        { ts: te.tsAnkunft,        label: 'Ankunft\nPförtner',  soll: te.geplantStart },
-        { ts: te.tsAngedockt,      label: 'Tor\nangedockt',     soll: null },
-        { ts: te.tsEntladenStart,  label: 'Entladen\ngestartet',soll: te.geplantStart },
+        { ts: te.tsAnkunft,        label: 'Ankunft\nPförtner',   soll: te.geplantStart, optional: false },
+        { ts: te.tsAngedockt,      label: 'Tor\nangedockt',      soll: null,            optional: false },
+        { ts: te.tsEntladenStart,  label: 'Entladen\ngestartet', soll: te.geplantStart, optional: false },
         { ts: te.tsEntladenEnde ?? te.tsEntladenTat,
-                                   label: 'Entladen\nbeendet',  soll: te.geplantEnde },
-        { ts: te.tsWeBuchung,      label: 'WE\ngebucht',        soll: null },
-        { ts: te.tsAbfahrt,        label: 'Abfahrt',            soll: null },
+                                   label: 'Entladen\nbeendet',   soll: te.geplantEnde,  optional: false },
+        { ts: te.tsWeBuchung,      label: 'WE\ngebucht',         soll: null,            optional: false },
+        { ts: te.tsEinlagerung,    label: 'Fertig-\nstellung',   soll: null,            optional: false },
+        { ts: te.tsAbfahrt,        label: 'Abfahrt\n(optional)', soll: null,            optional: true  },
       ];
 
       // Zeitbereich für Positionierung bestimmen
@@ -2952,10 +3329,14 @@
         // Label mit Zeilenumbruch über \n
         const labelLines = p.label.split('\n').map(l => `<span>${esc(l)}</span>`).join('<br>');
 
+        // Optionaler Schritt (Abfahrt): gestrichelter, blasser Punkt
+        const pointCls = p.optional ? 'tl-point tl-point-optional' : 'tl-point';
+        const dotClsFull = p.optional ? 'tl-dot optional' : `tl-dot ${dotCls}`;
+
         punkteHTML += `
-          <div class="tl-point" style="left:${pos}%">
+          <div class="${pointCls}" style="left:${pos}%">
             ${chipHTML}
-            <div class="tl-dot ${dotCls}"></div>
+            <div class="${dotClsFull}"></div>
             <div class="tl-time">${fmtTime(p.ts)}</div>
             <div class="tl-label">${labelLines}</div>
           </div>`;
@@ -3133,31 +3514,30 @@
         : '';
 
       // ── Zeilen nach Ladestelle gruppiert ──
-      const LS_ORDER = ['BSL', 'Container', 'Landverkehr'];
-      const LS_META  = {
-        BSL:         { icon: '🚛', col: 'rgba(142,68,173,0.85)', dauer: '4–8h'     },
-        Container:   { icon: '🏗', col: 'rgba(230,126,34,0.85)', dauer: '2–4h'     },
-        Landverkehr: { icon: '🚚', col: 'rgba(39,174,96,0.85)',  dauer: '30–90min' },
+      const LS_LANG = {
+        BSL:              'ILW Krefeld BSL',
+        Container:        'ILW Krefeld Container',
+        Landverkehr:      'ILW Krefeld Frei Haus / DDP',
+        Eigendisposition: 'Eigendisposition',
       };
       const byLS = {};
       for (const te of tesFuerGantt) {
-        const ls = te.ladestelle ?? 'Landverkehr';
+        const ls = ladestelleKurz(te.ladestelle);
         if (!byLS[ls]) byLS[ls] = [];
         byLS[ls].push(te);
       }
-      const zeilenHTML = LS_ORDER
+      const zeilenHTML = LADESTELLE_KATEGORIEN
         .filter(ls => byLS[ls]?.length > 0)
         .map(ls => {
-          const m  = LS_META[ls];
+          const m  = LADESTELLE_STYLE[ls] ?? LADESTELLE_STYLE.Eigendisposition;
           const gr = byLS[ls];
           const vz = gr.filter(t => t.status === 'verzögert').length;
           const gh = `<div class="gantt-group-header">
             <div class="gantt-group-accent" style="background:${m.col}"></div>
-            <span class="gantt-group-title" style="color:${m.col}">${m.icon} ${ls}</span>
+            <span class="gantt-group-title" style="color:${m.col}">${m.icon} ${esc(LS_LANG[ls] ?? ls)}</span>
             <span class="gantt-group-count">${gr.length} TE${gr.length !== 1 ? 's' : ''}</span>
             ${vz ? `<span class="gantt-group-count" style="background:var(--c-red-dim);color:#e74c3c">${vz} verzögert</span>` : ''}
             <div style="flex:1"></div>
-            <span style="font-family:var(--font-mono);font-size:9px;color:var(--c-text3)">Ø ${m.dauer}</span>
           </div>`;
           return gh + gr.map(te => this._ganttZeileHTML(te, pct, achseStart, achseEnde, gridLines, nowLineHTML)).join('');
         }).join('');
@@ -3175,24 +3555,36 @@
             <!-- Datenzeilen (nach Ladestelle gruppiert) -->
             ${zeilenHTML}
 
-            <!-- Legende -->
+            <!-- Legende: Prozess-Phasen -->
             <div class="gantt-legend">
               <div class="gantt-legend-item">
                 <div class="gantt-legend-swatch"
                   style="background:var(--c-bg4);border:1px solid var(--c-border2)"></div>
-                Geplantes Zeitfenster
+                Geplantes Fenster
+              </div>
+              <div class="gantt-legend-item">
+                <div class="gantt-legend-swatch" style="background:#5dade2"></div>
+                Anfahrt
+              </div>
+              <div class="gantt-legend-item">
+                <div class="gantt-legend-swatch" style="background:#48c9b0"></div>
+                Wartezeit
+              </div>
+              <div class="gantt-legend-item">
+                <div class="gantt-legend-swatch" style="background:var(--c-blue)"></div>
+                Entladen
               </div>
               <div class="gantt-legend-item">
                 <div class="gantt-legend-swatch" style="background:var(--c-green)"></div>
-                Pünktlich
-              </div>
-              <div class="gantt-legend-item">
-                <div class="gantt-legend-swatch" style="background:var(--c-yellow)"></div>
-                Leichte Verzögerung
+                WE & Einlagerung
               </div>
               <div class="gantt-legend-item">
                 <div class="gantt-legend-swatch" style="background:var(--c-red)"></div>
-                Stark verzögert
+                Lange Wartezeit
+              </div>
+              <div class="gantt-legend-item">
+                <div style="width:0;height:0;border-left:4px solid transparent;border-right:4px solid transparent;border-top:7px solid var(--c-text3)"></div>
+                Abfahrt (optional)
               </div>
             </div>
 
@@ -3214,52 +3606,87 @@
         }
       }
 
-      // ── Ist-Balken ──
-      // Startpunkt: frühester vorhandener Timestamp
-      // Endpunkt: Abfahrt → WE-Buchung → Entladen-Ende → Jetzt (wenn noch aktiv)
-      let istStart = te.tsAnkunft ?? te.tsAngedockt ?? te.tsEntladenStart;
-      let istEnde  = te.tsAbfahrt ?? te.tsWeBuchung ??
-                     (te.tsEntladenEnde ?? te.tsEntladenTat) ?? null;
+      // ── Ist-Balken in PHASEN-SEGMENTE aufteilen ──
+      // Jede Phase (Anfahrt/Warten/Entladen/Nachbearbeitung) wird als eigenes
+      // Segment mit eigenem Hover-Tooltip gerendert.
+      const clamp = (d) => new Date(Math.min(Math.max(d.getTime(), achseStart.getTime()), achseEnde.getTime()));
+      const segDauer = (a, b) => fmtDauer(diffMin(a, b));
 
-      // Wenn TE noch aktiv und kein Ende: bis Jetzt darstellen (gestrichelt wäre schöner,
-      // aber CSS-only — stattdessen leicht transparent machen via dim-Klasse)
-      const istLaufend = istStart && !te.tsAbfahrt;
-      if (istLaufend && !istEnde) istEnde = new Date();
+      // Phasen-Definition: [von, bis, label, cssKlasse]
+      const phasen = [];
+      const entladenEnde = te.tsEntladenEnde ?? te.tsEntladenTat;
+
+      // Phase 1: Ankunft → Angedockt (Anfahrt zum Tor)
+      if (te.tsAnkunft && te.tsAngedockt) {
+        phasen.push({ von: te.tsAnkunft, bis: te.tsAngedockt, cls: 'phase-anfahrt',
+          name: 'Anfahrt zum Tor', dauer: segDauer(te.tsAnkunft, te.tsAngedockt) });
+      }
+      // Phase 2: Angedockt → Entladen-Start (Wartezeit — der kritische Engpass)
+      if (te.tsAngedockt && te.tsEntladenStart) {
+        const wartMin = diffMin(te.tsAngedockt, te.tsEntladenStart);
+        phasen.push({ von: te.tsAngedockt, bis: te.tsEntladenStart,
+          cls: wartMin >= VERZOEGERUNG_SCHWELLE_MIN ? 'phase-warten-lang' : 'phase-warten',
+          name: 'Wartezeit am Tor', dauer: segDauer(te.tsAngedockt, te.tsEntladenStart) });
+      }
+      // Phase 3: Entladen-Start → Entladen-Ende (eigentliches Entladen)
+      if (te.tsEntladenStart && entladenEnde) {
+        phasen.push({ von: te.tsEntladenStart, bis: entladenEnde, cls: 'phase-entladen',
+          name: 'Entladen', dauer: segDauer(te.tsEntladenStart, entladenEnde) });
+      }
+      // Phase 4: Entladen-Ende → Fertigstellung (WE-Buchung + Einlagerung)
+      const nachEnde = te.tsEinlagerung ?? te.tsWeBuchung;
+      if (entladenEnde && nachEnde) {
+        phasen.push({ von: entladenEnde, bis: nachEnde, cls: 'phase-nachbearbeitung',
+          name: 'WE-Buchung & Einlagerung', dauer: segDauer(entladenEnde, nachEnde) });
+      }
+
+      // Falls noch aktiv (kein Ende): laufende Phase bis Jetzt
+      const letzterTs = nachEnde ?? entladenEnde ?? te.tsEntladenStart ?? te.tsAngedockt ?? te.tsAnkunft;
+      if (letzterTs && !nachEnde && te.status !== 'abgefahren' && te.status !== 'eingelagert') {
+        const jetzt = new Date();
+        if (jetzt > letzterTs && jetzt <= achseEnde) {
+          phasen.push({ von: letzterTs, bis: jetzt, cls: 'phase-laufend',
+            name: 'Läuft aktuell', dauer: segDauer(letzterTs, jetzt) });
+        }
+      }
 
       let istHTML = '';
       let labelHTML = '';
-      if (istStart && istEnde) {
-        // Abschneiden wenn außerhalb der Achse
-        const clampedStart = new Date(Math.max(istStart.getTime(), achseStart.getTime()));
-        const clampedEnde  = new Date(Math.min(istEnde.getTime(),  achseEnde.getTime()));
-        const l = pct(clampedStart);
-        const w = (pct(clampedEnde) - parseFloat(l)).toFixed(3);
+      let gesamtStart = null, gesamtEnde = null;
 
-        if (parseFloat(w) > 0) {
-          // Farbe basierend auf Verzögerung
-          let cls = 'ok';
-          if (te.verzoegerungMin != null) {
-            if (te.verzoegerungMin >= VERZOEGERUNG_SCHWELLE_MIN * 2) cls = 'bad';
-            else if (te.verzoegerungMin >= VERZOEGERUNG_SCHWELLE_MIN) cls = 'mild';
-          }
-          if (te.status === 'abgefahren') cls = 'dim';
+      for (const ph of phasen) {
+        const cs = clamp(ph.von), ce = clamp(ph.bis);
+        const l = pct(cs);
+        const w = (pct(ce) - parseFloat(l)).toFixed(3);
+        if (parseFloat(w) <= 0) continue;
+        if (!gesamtStart) gesamtStart = ph.von;
+        gesamtEnde = ph.bis;
 
-          const tooltip = `${esc(te.te)}: ${fmtTime(istStart)}–${fmtTime(istEnde)}` +
-            (te.verzoegerungMin ? ` · ${fmtDauer(te.verzoegerungMin)} Verzögerung` : '');
+        // Tooltip pro Phase: Name, Zeitspanne, Dauer
+        const tip = `${ph.name}  ·  ${fmtTime(ph.von)}–${fmtTime(ph.bis)}  ·  ${ph.dauer}`;
+        istHTML += `<div class="gantt-bar-ist ${ph.cls}" data-te="${esc(te.te)}"
+          style="left:${l}%;width:${w}%"
+          title="${esc(tip)}"></div>`;
+      }
 
-          istHTML = `<div class="gantt-bar-ist ${cls}" data-te="${esc(te.te)}"
-            style="left:${l}%;width:${w}%"
-            title="${tooltip}"></div>`;
+      // Abfahrt als kleiner optionaler Marker (falls vorhanden und im Fenster)
+      if (te.tsAbfahrt && te.tsAbfahrt >= achseStart && te.tsAbfahrt <= achseEnde) {
+        const la = pct(clamp(te.tsAbfahrt));
+        istHTML += `<div class="gantt-abfahrt-marker" data-te="${esc(te.te)}"
+          style="left:${la}%"
+          title="${esc('Abfahrt vom Kontrollpunkt · ' + fmtTime(te.tsAbfahrt))}"></div>`;
+      }
 
-          // Balken-Label: TE-Nummer + Zeiten wenn breit genug
-          const breiteProzent = parseFloat(w);
-          if (breiteProzent > 4) {
-            const labelText = breiteProzent > 8
-              ? `${fmtTime(istStart)}–${fmtTime(istEnde)}`
-              : fmtTime(istStart);
-            labelHTML = `<div class="gantt-bar-label"
-              style="left:${l}%;width:${w}%">${esc(labelText)}</div>`;
-          }
+      // Balken-Label: Startzeit wenn Gesamtbalken breit genug
+      if (gesamtStart && gesamtEnde) {
+        const lStart = pct(clamp(gesamtStart));
+        const wGesamt = parseFloat(pct(clamp(gesamtEnde))) - parseFloat(lStart);
+        if (wGesamt > 4) {
+          const labelText = wGesamt > 8
+            ? `${fmtTime(gesamtStart)}–${fmtTime(gesamtEnde)}`
+            : fmtTime(gesamtStart);
+          labelHTML = `<div class="gantt-bar-label"
+            style="left:${lStart}%;width:${wGesamt.toFixed(3)}%">${esc(labelText)}</div>`;
         }
       }
 
