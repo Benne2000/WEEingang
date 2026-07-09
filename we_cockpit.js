@@ -1,6 +1,6 @@
 /* =========================================================================
- * WE-Prozess-Cockpit – SAC Custom Widget (v0.8.5) · Entwickler: Benne
- * Diagramme skalieren nicht mehr ueber ihre native Groesse hinaus.
+ * WE-Prozess-Cockpit – SAC Custom Widget (v0.9.0) · Entwickler: Benne
+ * Stil und Ladeanimation vom Wareneingang-Tracker uebernommen.
  * ========================================================================= */
 /* =========================================================================
  * WE Prozess-Cockpit  –  SAC Custom Widget (Grundgerüst v0.1)
@@ -545,21 +545,46 @@
     ink: "var(--ink)", ink2: "var(--ink2)", muted: "var(--muted)", border: "var(--border)",
     panel: "var(--panel)", card: "var(--card)", bg: "var(--bg)", band: "var(--band)",
     grid: "var(--grid)",
-    // Semantische Farben (theme-abhängig)
+    // Semantische Farben (theme-abhängig) — Markenrot des WE-Trackers als Akzent
     accent: "var(--accent)", good: "var(--good)", bad: "var(--bad)",
-    outlier: "var(--accent)", error: "#8A5CF6", ok: "var(--good)",
+    outlier: "var(--accent)", error: "var(--warn)", ok: "var(--good)",
     // Segmentfarben (fest, theme-unabhängig für Wiedererkennung)
-    lkw: "#3B7BB5", container: "#2AA084", sonst: "#9BA6B2",
+    lkw: "#2980b9", container: "#27ae60", sonst: "#8b90a0",
   };
-  const SEGC = { LKW: C.lkw, Container: C.container, BSL: "#C79A3A", Sonstige: C.sonst };
+  const SEGC = { LKW: C.lkw, Container: C.container, BSL: "#f39c12", Sonstige: C.sonst };
 
+  /* Design-Tokens übernommen aus dem Wareneingang-Tracker (main.js):
+     Markenrot als Akzent, Consolas-Mono für Labels, dunkles Standard-Theme. */
   const THEME_VARS = `
-    :host{ --bg:#FFFFFF; --panel:#F7F9FB; --card:#FFFFFF; --ink:#1B2733; --ink2:#48586A;
-           --muted:#8A97A5; --border:#E6EBF0; --band:rgba(224,122,63,.10);
-           --good:#2C9A6B; --bad:#D8624A; --grid:#EEF2F6; --accent:#E07A3F; }
-    :host([data-theme="dark"]){ --bg:#161D24; --panel:#1E2831; --card:#202B35; --ink:#EAF1F7;
-           --ink2:#B4C2CF; --muted:#7E8D9C; --border:#2E3B47; --band:rgba(224,122,63,.20);
-           --good:#3FB483; --bad:#E87760; --grid:#28333D; --accent:#E68A4E; }`;
+    :host{
+      /* Dark Theme (Standard) */
+      --bg:#0f1117; --panel:#161a24; --card:#1e2335; --card2:#252b3d;
+      --ink:#e8eaf0; --ink2:#8b90a0; --muted:#555b6e;
+      --border:rgba(255,255,255,.07); --border2:rgba(255,255,255,.13);
+      --grid:rgba(255,255,255,.07);
+      --accent:#e74c3c; --accent-strong:#c0392b;
+      --accent-dim:rgba(192,57,43,.14); --accent-border:rgba(192,57,43,.35);
+      --good:#58d68d; --good-dim:rgba(39,174,96,.14);
+      --bad:#e74c3c; --warn:#f39c12; --warn-dim:rgba(243,156,18,.14);
+      --band:rgba(192,57,43,.18);
+      --shadow-sm:0 2px 8px rgba(0,0,0,.35); --shadow-md:0 4px 16px rgba(0,0,0,.45);
+      --shadow-lg:0 8px 40px rgba(0,0,0,.55);
+      --font:'Segoe UI',system-ui,-apple-system,sans-serif;
+      --font-mono:'Consolas','Cascadia Code','Courier New',monospace;
+      --r-sm:4px; --r-md:8px; --r-lg:12px;
+      --ease:cubic-bezier(.16,1,.3,1);
+    }
+    :host([data-theme="light"]){
+      --bg:#f5f6f8; --panel:#ffffff; --card:#ffffff; --card2:#f0f2f5;
+      --ink:#1a1d23; --ink2:#4a5060; --muted:#8b90a0;
+      --border:rgba(0,0,0,.08); --border2:rgba(0,0,0,.14);
+      --grid:rgba(0,0,0,.08);
+      --accent:#c0392b; --accent-strong:#c0392b;
+      --good:#27ae60; --bad:#c0392b; --warn:#d68910;
+      --band:rgba(192,57,43,.10);
+      --shadow-sm:0 2px 8px rgba(0,0,0,.07); --shadow-md:0 4px 16px rgba(0,0,0,.10);
+      --shadow-lg:0 8px 40px rgba(0,0,0,.14);
+    }`;
 
   const MODES = [
     { id: "ueberblick", label: "Überblick", metric: null, level: null, phases: [], unit: "", desc: "Engpass, Trends und Kurzbefund" },
@@ -574,20 +599,30 @@
   <style>
     ${THEME_VARS}
     :host { display:block; width:100%; height:100%;
-      font-family:"72","72full","Segoe UI",system-ui,sans-serif; color:${C.ink}; }
+      font-family:var(--font); font-size:13px; color:${C.ink}; background:${C.bg}; }
     *,*::before,*::after{ box-sizing:border-box; }
     .root{ display:flex; flex-direction:column; height:100%; background:${C.bg};
-      border:1px solid ${C.border}; border-radius:8px; overflow:hidden; }
+      border:1px solid ${C.border}; border-radius:var(--r-md); overflow:hidden; position:relative; }
     /* Kopf: Titel + Steuerung + KPI-Leiste */
-    header{ padding:10px 14px 0; position:relative;}
+    header{ padding:10px 14px 0; position:relative; background:${C.panel};
+      border-bottom:1px solid ${C.border}; }
+    /* roter Akzentstreifen (Tracker-Signatur) */
+    header::before{ content:''; position:absolute; top:0; left:0; right:0; height:3px;
+      background:linear-gradient(90deg, var(--accent-strong), var(--accent)); }
     .titlebar{ display:flex; align-items:center; gap:8px;}
-    .title{ font-size:13px; font-weight:700; letter-spacing:.4px; text-transform:uppercase;}
-    .title small{ color:${C.muted}; font-weight:400; text-transform:none; letter-spacing:0; margin-left:8px;}
+    .brand-dot{ width:7px; height:7px; border-radius:50%; background:var(--accent);
+      flex-shrink:0; animation:dot-pulse 2.2s ease-in-out infinite;}
+    @keyframes dot-pulse{ 0%,100%{ opacity:1; transform:scale(1);} 50%{ opacity:.35; transform:scale(.65);} }
+    .title{ font-family:var(--font-mono); font-size:11px; font-weight:600;
+      letter-spacing:.12em; text-transform:uppercase; color:var(--accent);}
+    .title small{ font-family:var(--font); color:${C.ink2}; font-weight:400;
+      text-transform:none; letter-spacing:0; margin-left:10px; font-size:12px;}
     .ctrl{ margin-left:auto; display:flex; gap:6px;}
     .ctrl button{ font:inherit; font-size:13px; line-height:1; padding:5px 8px; border:1px solid ${C.border};
-      border-radius:5px; background:${C.panel}; color:${C.ink}; cursor:pointer;}
-    .ctrl button:hover{ border-color:${C.outlier};}
-    .ctrl button.on{ border-color:${C.outlier}; color:${C.outlier};}
+      border-radius:var(--r-sm); background:${C.card}; color:${C.ink2}; cursor:pointer;
+      transition:color .15s, border-color .15s;}
+    .ctrl button:hover{ border-color:var(--accent); color:${C.ink};}
+    .ctrl button.on{ border-color:var(--accent); color:var(--accent);}
     /* Kalibrierungs-Panel */
     .cfg{ position:absolute; right:14px; top:38px; z-index:20; width:250px; padding:12px;
       background:${C.bg}; border:1px solid ${C.border}; border-radius:8px;
@@ -600,30 +635,46 @@
       font:inherit; font-size:12px; background:${C.panel}; color:${C.ink}; box-sizing:border-box;}
     .cfg input[type=range]{ padding:0; accent-color:${C.outlier};}
     .cfg .hint{ color:${C.muted}; font-size:10px; margin-top:2px;}
-    .kpis{ display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin:10px 0 0;}
-    .kpi{ padding:11px 13px; border:1px solid ${C.border}; border-radius:9px; background:${C.card};
-      cursor:pointer; min-width:0; transition:border-color .15s, transform .1s;}
-    .kpi:hover{ border-color:${C.accent};}
+    .kpis{ display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin:10px 0 10px;}
+    .kpi{ padding:11px 13px; border:1px solid ${C.border}; border-radius:var(--r-md); background:${C.card};
+      cursor:pointer; min-width:0; transition:border-color .15s var(--ease), transform .1s;}
+    .kpi:hover{ border-color:var(--accent-border, var(--accent));}
     .kpi:active{ transform:translateY(1px);}
-    .kpi .lbl{ font-size:10.5px; color:${C.muted}; text-transform:uppercase; letter-spacing:.4px; display:block;}
-    .kpi .val{ display:flex; align-items:baseline; gap:7px; margin:3px 0 5px;}
+    .kpi .lbl{ font-family:var(--font-mono); font-size:9px; font-weight:600; color:${C.muted};
+      text-transform:uppercase; letter-spacing:.15em; display:block;}
+    .kpi .val{ display:flex; align-items:baseline; gap:7px; margin:4px 0 5px;}
     .kpi .val b{ font-size:22px; font-weight:700; font-variant-numeric:tabular-nums; line-height:1;}
-    .kpi .d{ font-size:11px; font-weight:600; font-style:normal; font-variant-numeric:tabular-nums;}
+    .kpi .d{ font-family:var(--font-mono); font-size:10px; font-weight:600; font-style:normal;
+      font-variant-numeric:tabular-nums;}
     .kpi .d.up{ color:${C.good};} .kpi .d.down{ color:${C.bad};}
     .kpi .sub{ font-size:10px; color:${C.muted}; display:block;}
     .kpi svg.spark{ display:block; width:100%; height:26px;}
     .kpi.err .val b{ color:${C.error};}
     /* Tabs */
-    nav{ display:flex; gap:2px; padding:8px 14px 0; overflow-x:auto; scrollbar-width:none;}
+    nav{ display:flex; gap:2px; padding:0 14px; height:44px; background:${C.panel};
+      border-bottom:1px solid ${C.border}; overflow-x:auto; scrollbar-width:none; flex:none;}
     nav::-webkit-scrollbar{ display:none;}
-    nav button{ font:inherit; font-size:12px; padding:6px 12px; border:0; background:transparent;
-      color:${C.muted}; cursor:pointer; border-bottom:2px solid transparent; flex:none; white-space:nowrap;}
-    nav button.on{ color:${C.ink}; font-weight:600; border-bottom-color:${C.outlier};}
+    nav button{ font:inherit; font-size:13px; font-weight:500; padding:0 16px; height:100%;
+      border:0; background:transparent; color:${C.muted}; cursor:pointer;
+      border-bottom:2px solid transparent; flex:none; white-space:nowrap;
+      transition:color .15s, background .15s;}
+    nav button:hover{ color:${C.ink2}; background:var(--card2, ${C.card});}
+    nav button.on{ color:${C.ink}; border-bottom-color:var(--accent-strong, var(--accent));}
     nav button:focus-visible{ outline:2px solid ${C.lkw}; outline-offset:-2px;}
-    main{ flex:1; overflow:auto; padding:12px 14px;}
+    main{ flex:1; overflow:auto; padding:12px 14px; position:relative;}
+    /* Lade-/Leer-Overlay (aus dem Wareneingang-Tracker übernommen) */
+    .state-overlay{ position:absolute; inset:0; display:flex; flex-direction:column;
+      align-items:center; justify-content:center; gap:12px; background:${C.bg}; z-index:20;}
+    .state-overlay[hidden]{ display:none;}
+    .state-icon{ font-size:32px; opacity:.4;}
+    .state-text{ font-family:var(--font-mono); font-size:11px; letter-spacing:.1em;
+      text-transform:uppercase; color:${C.muted};}
+    .loader-ring{ width:32px; height:32px; border:3px solid var(--border2, ${C.border});
+      border-top-color:var(--accent); border-radius:50%; animation:spin .8s linear infinite;}
+    @keyframes spin{ to{ transform:rotate(360deg);} }
     .row{ display:flex; gap:14px; flex-wrap:wrap;}
     .card{ flex:1 1 340px; min-width:280px; background:${C.card}; border:1px solid ${C.border};
-      border-radius:10px; padding:12px 14px;}
+      border-radius:var(--r-md); padding:12px 14px;}
     /* Tabellen & Grafiken scrollen bei schmaler Einbettung innerhalb der Karte,
        statt das Widget-Layout horizontal zu sprengen */
     .card > div{ overflow-x:auto; }
@@ -637,7 +688,10 @@
     #teams svg{ max-width:400px; }
     #tl svg{ max-width:560px; }
     .card.grow{ flex:2 1 460px;}
-    .card h3{ font-size:11px; font-weight:600; color:${C.muted}; margin:0 0 8px; text-transform:uppercase; letter-spacing:.5px;}
+    .card h3{ font-family:var(--font-mono); font-size:9px; font-weight:600; color:${C.muted};
+      margin:0 0 12px; text-transform:uppercase; letter-spacing:.15em;
+      display:flex; align-items:center; gap:8px;}
+    .card h3::after{ content:''; flex:1; height:1px; background:${C.border};}
     /* Klartext-Befunde */
     .findings{ display:flex; flex-direction:column; gap:7px; margin-bottom:14px;}
     .finding{ display:flex; align-items:flex-start; gap:9px; padding:10px 13px; border-radius:9px;
@@ -704,6 +758,7 @@
   <div class="root">
     <header>
       <div class="titlebar">
+        <span class="brand-dot"></span>
         <div class="title">WE Prozess-Cockpit <small id="sub"></small></div>
         <div class="ctrl">
           <button id="btnTheme" title="Dark-/Light-Mode umschalten">◐</button>
@@ -730,7 +785,17 @@
       <div class="kpis" id="kpis"></div>
     </header>
     <nav id="tabs"></nav>
-    <main id="main"><div class="empty">Keine Daten. Data Binding zuweisen oder Testdaten laden.</div></main>
+    <main id="main">
+      <div class="state-overlay" id="state-loading">
+        <div class="loader-ring"></div>
+        <div class="state-text">Daten werden geladen…</div>
+      </div>
+      <div class="state-overlay" id="state-empty" hidden>
+        <div class="state-icon">📦</div>
+        <div class="state-text">Keine Daten — Data Binding zuweisen</div>
+      </div>
+      <div id="views"></div>
+    </main>
   </div>`;
 
   const fmtH = (h) => (h == null || isNaN(h)) ? "–" :
@@ -983,8 +1048,15 @@
       S.getElementById("tabs").innerHTML = MODES.map((m) =>
         `<button data-id="${m.id}" class="${m.id === this._mode ? "on" : ""}">${m.label}</button>`).join("");
       this._renderKpis();
-      const main = S.getElementById("main");
-      if (!M) { main.innerHTML = `<div class="empty">Keine Daten. Data Binding zuweisen oder Testdaten laden.</div>`; return; }
+      // Zustands-Overlays (Tracker-Konvention): laden -> leer -> Inhalt
+      const loading = S.getElementById("state-loading");
+      const empty = S.getElementById("state-empty");
+      const main = S.getElementById("views");
+      const hasData = !!M && M.kpis.nPositions > 0;
+      const sourceAnswered = Array.isArray(this._rows); // Binding/Testdaten haben geliefert (ggf. leer)
+      loading.hidden = hasData || sourceAnswered;
+      empty.hidden = hasData || !sourceAnswered;
+      if (!hasData) { main.innerHTML = ""; return; }
       main.innerHTML = "";
       if (this._detail) { this._renderDetail(main); return; }
       const mode = MODES.find((m) => m.id === this._mode);
