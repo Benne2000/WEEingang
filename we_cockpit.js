@@ -1,6 +1,6 @@
 /* =========================================================================
- * WE-Prozess-Cockpit – SAC Custom Widget (v0.9.0) · Entwickler: Benne
- * Stil und Ladeanimation vom Wareneingang-Tracker uebernommen.
+ * WE-Prozess-Cockpit – SAC Custom Widget (v0.9.1) · Entwickler: Benne
+ * Tracker-Stil + LKW-Ladeanimation (aus dem Wareneingang-Tracker).
  * ========================================================================= */
 /* =========================================================================
  * WE Prozess-Cockpit  –  SAC Custom Widget (Grundgerüst v0.1)
@@ -579,7 +579,9 @@
       --ink:#1a1d23; --ink2:#4a5060; --muted:#8b90a0;
       --border:rgba(0,0,0,.08); --border2:rgba(0,0,0,.14);
       --grid:rgba(0,0,0,.08);
-      --accent:#c0392b; --accent-strong:#c0392b;
+      /* accent-strong bewusst dunkler als accent: der LKW-Auflieger (strong)
+         muss sich von der Fahrerkabine (accent) absetzen, wie im Tracker */
+      --accent:#c0392b; --accent-strong:#96281b;
       --good:#27ae60; --bad:#c0392b; --warn:#d68910;
       --band:rgba(192,57,43,.10);
       --shadow-sm:0 2px 8px rgba(0,0,0,.07); --shadow-md:0 4px 16px rgba(0,0,0,.10);
@@ -664,14 +666,70 @@
     main{ flex:1; overflow:auto; padding:12px 14px; position:relative;}
     /* Lade-/Leer-Overlay (aus dem Wareneingang-Tracker übernommen) */
     .state-overlay{ position:absolute; inset:0; display:flex; flex-direction:column;
-      align-items:center; justify-content:center; gap:12px; background:${C.bg}; z-index:20;}
+      align-items:center; justify-content:center; gap:14px; background:${C.bg}; z-index:20;}
     .state-overlay[hidden]{ display:none;}
     .state-icon{ font-size:32px; opacity:.4;}
     .state-text{ font-family:var(--font-mono); font-size:11px; letter-spacing:.1em;
       text-transform:uppercase; color:${C.muted};}
-    .loader-ring{ width:32px; height:32px; border:3px solid var(--border2, ${C.border});
-      border-top-color:var(--accent); border-radius:50%; animation:spin .8s linear infinite;}
+
+    /* ═══ WE-Ladeanimation (1:1 aus dem Wareneingang-Tracker) ═══ */
+    .we-loader{ display:flex; flex-direction:column; align-items:center; gap:26px;}
+    .we-loader-scene{ position:relative; width:280px; height:90px;}
+    /* Fahrbahn */
+    .we-road{ position:absolute; bottom:18px; left:0; width:220px; height:3px;
+      background:var(--border2); border-radius:2px; overflow:hidden;}
+    .we-road-line{ position:absolute; top:1px; left:0; width:100%; height:1px;
+      background:repeating-linear-gradient(90deg, ${C.muted} 0, ${C.muted} 8px,
+        transparent 8px, transparent 16px);
+      animation:we-road-move .6s linear infinite;}
+    @keyframes we-road-move{ to{ transform:translateX(-16px);} }
+    /* LKW */
+    .we-truck{ position:absolute; bottom:20px; left:0;
+      animation:we-truck-drive 3s cubic-bezier(.45,0,.55,1) infinite;}
+    @keyframes we-truck-drive{
+      0%{ left:0;} 45%{ left:150px;} 55%{ left:150px;} 100%{ left:0;} }
+    .we-truck-body{ position:relative; display:flex; align-items:flex-end; gap:2px;}
+    .we-truck-trailer{ width:34px; height:22px; background:var(--accent-strong);
+      border-radius:2px; order:1;}
+    .we-truck-cabin{ width:14px; height:15px; background:var(--accent);
+      border-radius:3px 3px 2px 2px; order:2; position:relative;}
+    .we-truck-cabin::after{ content:''; position:absolute; top:2px; right:2px;
+      width:6px; height:5px; background:${C.bg}; border-radius:1px; opacity:.6;}
+    .we-truck-wheel{ position:absolute; bottom:-4px; width:7px; height:7px;
+      background:${C.ink2}; border:1.5px solid ${C.muted}; border-radius:50%;
+      animation:spin .4s linear infinite;}
     @keyframes spin{ to{ transform:rotate(360deg);} }
+    .we-wheel-1{ left:3px;} .we-wheel-2{ left:22px;} .we-wheel-3{ left:38px;}
+    /* Tor / Halle */
+    .we-gate{ position:absolute; bottom:20px; right:6px; width:44px; height:52px;}
+    .we-gate-roof{ width:0; height:0; border-left:24px solid transparent;
+      border-right:24px solid transparent; border-bottom:14px solid var(--card2); margin:0 -2px;}
+    .we-gate-door{ width:44px; height:38px; background:${C.card};
+      border:2px solid var(--card2); border-top:none; border-radius:0 0 2px 2px;
+      position:relative; overflow:hidden;}
+    .we-gate-door::before{ content:''; position:absolute; top:0; left:0; right:0; height:100%;
+      background:repeating-linear-gradient(0deg, var(--card2) 0, var(--card2) 4px,
+        transparent 4px, transparent 8px);
+      animation:we-door-open 3s ease-in-out infinite;}
+    @keyframes we-door-open{
+      0%,40%{ transform:translateY(0);} 50%,90%{ transform:translateY(-100%);} 100%{ transform:translateY(0);} }
+    /* Prozess-Schritte, die nacheinander aufleuchten */
+    .we-steps{ display:flex; gap:14px; flex-wrap:wrap; justify-content:center;}
+    .we-step{ display:flex; align-items:center; gap:5px; font-family:var(--font-mono);
+      font-size:10px; font-weight:600; letter-spacing:.04em; color:${C.muted};
+      opacity:.4; transition:opacity .3s, color .3s;}
+    .we-step-dot{ width:7px; height:7px; border-radius:50%; background:var(--border2);
+      transition:background .3s, box-shadow .3s;}
+    .we-step.we-step-active{ opacity:1; color:${C.ink};}
+    .we-step.we-step-active .we-step-dot{ background:var(--accent-strong);
+      box-shadow:0 0 8px var(--accent-strong);}
+    .we-loader-text{ font-family:var(--font-mono); font-size:12px; color:${C.ink2}; letter-spacing:.03em;}
+    .we-dots span{ animation:we-dot-blink 1.4s infinite;}
+    .we-dots span:nth-child(2){ animation-delay:.2s;}
+    .we-dots span:nth-child(3){ animation-delay:.4s;}
+    @keyframes we-dot-blink{ 0%,60%,100%{ opacity:.2;} 30%{ opacity:1;} }
+    @media (prefers-reduced-motion:reduce){
+      .we-road-line, .we-truck, .we-truck-wheel, .we-gate-door::before, .we-dots span{ animation:none;} }
     .row{ display:flex; gap:14px; flex-wrap:wrap;}
     .card{ flex:1 1 340px; min-width:280px; background:${C.card}; border:1px solid ${C.border};
       border-radius:var(--r-md); padding:12px 14px;}
@@ -787,8 +845,32 @@
     <nav id="tabs"></nav>
     <main id="main">
       <div class="state-overlay" id="state-loading">
-        <div class="loader-ring"></div>
-        <div class="state-text">Daten werden geladen…</div>
+        <div class="we-loader">
+          <div class="we-loader-scene">
+            <div class="we-road"><div class="we-road-line"></div></div>
+            <div class="we-truck">
+              <div class="we-truck-body">
+                <div class="we-truck-cabin"></div>
+                <div class="we-truck-trailer"></div>
+              </div>
+              <div class="we-truck-wheel we-wheel-1"></div>
+              <div class="we-truck-wheel we-wheel-2"></div>
+              <div class="we-truck-wheel we-wheel-3"></div>
+            </div>
+            <div class="we-gate">
+              <div class="we-gate-roof"></div>
+              <div class="we-gate-door"></div>
+            </div>
+          </div>
+          <div class="we-steps">
+            <div class="we-step" data-i="0"><span class="we-step-dot"></span>Ankunft</div>
+            <div class="we-step" data-i="1"><span class="we-step-dot"></span>Andocken</div>
+            <div class="we-step" data-i="2"><span class="we-step-dot"></span>Entladen</div>
+            <div class="we-step" data-i="3"><span class="we-step-dot"></span>Buchen</div>
+            <div class="we-step" data-i="4"><span class="we-step-dot"></span>Einlagern</div>
+          </div>
+          <div class="we-loader-text">Wareneingang wird geladen<span class="we-dots"><span>.</span><span>.</span><span>.</span></span></div>
+        </div>
       </div>
       <div class="state-overlay" id="state-empty" hidden>
         <div class="state-icon">📦</div>
@@ -936,7 +1018,9 @@
         baselineMode: "segment", toleranzMin: 30, theme: "dark", defaultView: "ueberblick",
       };
       this._rows = null; this._model = null; this._mode = "ueberblick"; this._detail = null;
+      this._loaderTimer = null;
       this._applyTheme();
+      this._startLoaderSteps(); // Ladeanimation läuft ab dem ersten Moment
       this._shadow.getElementById("tabs").addEventListener("click", (e) => {
         const b = e.target.closest("button"); if (!b) return;
         this._mode = b.dataset.id; this._detail = null; this._render();
@@ -1021,6 +1105,28 @@
       this._rebuild();
     }
 
+    /** Lässt die Prozess-Schritte der Ladeanimation nacheinander aufleuchten
+     *  (Logik aus dem Wareneingang-Tracker übernommen). */
+    _startLoaderSteps() {
+      if (this._loaderTimer) return; // läuft bereits
+      const steps = this._shadow.querySelectorAll(".we-step");
+      if (!steps.length) return;
+      let i = 0;
+      const tick = () => {
+        steps.forEach((s, idx) => s.classList.toggle("we-step-active", idx === i));
+        i = (i + 1) % steps.length;
+      };
+      tick();
+      this._loaderTimer = setInterval(tick, 600);
+    }
+
+    _stopLoaderSteps() {
+      if (this._loaderTimer) { clearInterval(this._loaderTimer); this._loaderTimer = null; }
+    }
+
+    /** Timer stoppen, wenn das Widget aus dem DOM entfernt wird (SAC entfernt Kacheln). */
+    disconnectedCallback() { this._stopLoaderSteps(); }
+
     _applyTheme() { this.setAttribute("data-theme", this._props.theme === "dark" ? "dark" : "light"); }
 
     /** Kalibrierungs-Panel mit aktuellen Properties befüllen. */
@@ -1056,6 +1162,8 @@
       const sourceAnswered = Array.isArray(this._rows); // Binding/Testdaten haben geliefert (ggf. leer)
       loading.hidden = hasData || sourceAnswered;
       empty.hidden = hasData || !sourceAnswered;
+      // Schritt-Animation nur laufen lassen, solange das Lade-Overlay sichtbar ist
+      if (loading.hidden) this._stopLoaderSteps(); else this._startLoaderSteps();
       if (!hasData) { main.innerHTML = ""; return; }
       main.innerHTML = "";
       if (this._detail) { this._renderDetail(main); return; }
