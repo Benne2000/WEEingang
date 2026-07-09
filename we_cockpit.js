@@ -1,6 +1,6 @@
 /* =========================================================================
- * WE-Prozess-Cockpit – SAC Custom Widget (v0.9.1) · Entwickler: Benne
- * Tracker-Stil + LKW-Ladeanimation (aus dem Wareneingang-Tracker).
+ * WE-Prozess-Cockpit – SAC Custom Widget (v0.9.2) · Entwickler: Benne
+ * Segment-/Schluesselabgleich mit dem Wareneingang-Tracker.
  * ========================================================================= */
 /* =========================================================================
  * WE Prozess-Cockpit  –  SAC Custom Widget (Grundgerüst v0.1)
@@ -22,9 +22,17 @@
   // Null-Werte, die BW/SAC liefern kann (Konvention aus dem WE-Tracker)
   const NULL_TOKENS = new Set(["", "#", "00000000", "000000000000", "@NullMember", "@TotalMembers", "null", "undefined"]);
   const isNull = (v) => v == null || NULL_TOKENS.has(String(v).trim());
+  /* Erweiterte Prüfung NUR für Merkmale/Zeitstempel: BW füllt leere Felder mit
+     Nullen oder Rauten beliebiger Länge. Bewusst NICHT für Kennzahlen verwendet -
+     dort ist "0" ein gültiger Messwert (z. B. SOLL-Menge 0 bei Storno). */
+  const isNullDim = (v) => {
+    if (isNull(v)) return true;
+    const s = String(v).trim();
+    return /^0+$/.test(s) || /^#+$/.test(s);
+  };
 
   function parseTs(v) {
-    if (isNull(v)) return null;
+    if (isNullDim(v)) return null;
     if (v instanceof Date) return isNaN(v) ? null : v;
     const s = String(v).trim();
     // dd.mm.yyyy hh:mm  (CSV-Export)
@@ -74,19 +82,41 @@
     return { med, scale, n: values.length };
   }
 
+  /* Ladestellen-Normalisierung, 1:1 aus dem Wareneingang-Tracker übernommen.
+     Wichtig: BW liefert den Schlüssel abgeschnitten ("ILW KREFELD CONTAINE"),
+     eine Suche nach "CONTAINER" würde live also ins Leere laufen. */
+  const LADESTELLE_KURZ = {
+    "ILW KREFELD BSL": "BSL",
+    "ILW KREFELD CONTAINE": "Container",
+    "ILW KREFELD LANDVERK": "Landverkehr",
+    "ILW Krefeld Container": "Container",
+    "ILW Krefeld BSL": "BSL",
+    "ILW Krefeld BSL / Eigendisposition": "BSL",
+    "ILW Krefeld Landverkehr": "Landverkehr",
+    "ILW Krefeld Frei Haus / DDP": "Landverkehr",
+    "Eigendisposition": "Eigendisposition",
+  };
+  function ladestelleKurz(wert) {
+    if (isNullDim(wert)) return "Eigendisposition";
+    const w = String(wert).trim();
+    if (LADESTELLE_KURZ[w]) return LADESTELLE_KURZ[w];
+    if (/container|containe/i.test(w)) return "Container";
+    if (/bsl/i.test(w)) return "BSL";
+    if (/frei haus|ddp|landverk/i.test(w)) return "Landverkehr";
+    if (/eigendispo/i.test(w)) return "Eigendisposition";
+    return w; // z. B. "Nicht zugeordnet" bleibt als eigenes Segment sichtbar
+  }
+
   function segmentOf(ladestelle, tm) {
-    // Bevorzugt die Ladestelle (BSL / Container / Landverkehr), wie im WE-Tracker
-    if (!isNull(ladestelle)) {
-      const l = String(ladestelle).toUpperCase();
-      if (l.includes("CONTAINER")) return "Container";
-      if (l.includes("LANDVERKEHR") || l.includes("LKW")) return "LKW";
-      return String(ladestelle).trim(); // z. B. "BSL" als eigenes Segment
-    }
-    if (isNull(tm)) return "Sonstige";
+    // Ladestelle hat Vorrang - identische Kategorien wie im Tracker
+    if (!isNullDim(ladestelle)) return ladestelleKurz(ladestelle);
+    // Fallback über das Transportmittel, wenn die Ladestelle nicht gebunden ist
+    if (isNullDim(tm)) return "Eigendisposition";
     const t = String(tm).toUpperCase();
-    if (t === "SZ" || t === "BSL" || t.includes("LKW")) return "LKW";
+    if (t === "BSL") return "BSL";                     // BSL ist eine eigene Kategorie, kein LKW
+    if (t === "SZ" || t.includes("LKW")) return "Landverkehr";
     if (/G0|CONTAINER|'/.test(t) || /^\d{2}[A-Z]\d$/.test(t)) return "Container";
-    return "Sonstige";
+    return "Eigendisposition";
   }
 
   /** Teamzuordnung aus wöchentlicher F/S-Rotation. */
@@ -134,7 +164,14 @@
     for (const r0 of rows) {
       const r = Object.assign({}, r0);
       // Belegnummer/TE nur auf erster Position gefüllt -> forward fill
-      if (!isNull(r.belegnr)) lastBeleg = String(r.belegnr);
+      // Führende Nullen entfernen: BW liefert die TE mal als "0010000189647",
+      // mal als "10000189647". Der Tracker normalisiert genauso - nur dann
+      // beziehen sich beide Widgets auf denselben Schlüssel (und die
+      // Deduplizierung je Anlieferung zerfällt nicht in zwei Gruppen).
+      if (!isNullDim(r.belegnr)) {
+        const raw = String(r.belegnr).trim();
+        lastBeleg = raw.replace(/^0+/, "") || raw;
+      }
       r.belegnr = lastBeleg;
       for (const k of Object.keys(r)) if (k.startsWith("ts_")) r[k] = parseTs(r[k]);
       // Korrekturfeld "Tatsächliches Ende" hat Vorrang
@@ -548,10 +585,17 @@
     // Semantische Farben (theme-abhängig) — Markenrot des WE-Trackers als Akzent
     accent: "var(--accent)", good: "var(--good)", bad: "var(--bad)",
     outlier: "var(--accent)", error: "var(--warn)", ok: "var(--good)",
-    // Segmentfarben (fest, theme-unabhängig für Wiedererkennung)
-    lkw: "#2980b9", container: "#27ae60", sonst: "#8b90a0",
+    // Neutrale Diagrammfarben (Heatmap, Team-Balken, Zeitstrahl) - KEINE Segmentbedeutung
+    lkw: "#2980b9", container: "#27ae60", sonst: "#5d6d7e",
   };
-  const SEGC = { LKW: C.lkw, Container: C.container, BSL: "#f39c12", Sonstige: C.sonst };
+  /* Segmentfarben - identisch zum Wareneingang-Tracker, damit dieselbe
+     Ladestelle in beiden Widgets dieselbe Farbe hat. */
+  const SEGC = {
+    BSL: "#8e44ad",
+    Container: "#e67e22",
+    Landverkehr: "#27ae60",
+    Eigendisposition: "#5d6d7e",
+  };
 
   /* Design-Tokens übernommen aus dem Wareneingang-Tracker (main.js):
      Markenrot als Akzent, Consolas-Mono für Labels, dunkles Standard-Theme. */
@@ -909,7 +953,13 @@
     return String(v).trim();
   };
   const NULLS = new Set(["", "#", "00000000", "000000000000", "@NullMember", "@TotalMembers", "null", "undefined"]);
-  const isNullTok = (v) => v == null || NULLS.has(String(v).trim());
+  /* Merkmalswerte aus SAC: zusätzlich reine Nullen-/Rauten-Folgen als leer werten
+     (BW-Platzhalter). Kennzahlen laufen über readVal und sind davon nicht betroffen. */
+  const isNullTok = (v) => {
+    if (v == null) return true;
+    const s = String(v).trim();
+    return NULLS.has(s) || /^0+$/.test(s) || /^#+$/.test(s);
+  };
   const readDim = (row, ...keys) => {
     for (const key of keys)
       for (const k of [`${key}_0`, key]) {
@@ -932,7 +982,8 @@
         const v = row[k];
         if (v == null) continue;
         const n = typeof v === "object" && "raw" in v ? v.raw : v;
-        if (n != null && !isNullTok(String(n))) return Number(n);
+        // Bewusst NUR Token-Prüfung: "0" ist eine gültige Kennzahl, kein Leerwert.
+        if (n != null && !NULLS.has(String(n).trim())) return Number(n);
       }
     return null;
   };
@@ -1306,8 +1357,8 @@
       const wrap = document.createElement("div");
       wrap.innerHTML = `
         <div class="legend">
-          <span><i style="background:${C.lkw}"></i>LKW</span>
-          <span><i style="background:${C.container}"></i>Container</span>
+          ${[...new Set(M.deliveries.map((d) => d.segment))].sort()
+            .map((s) => `<span><i style="background:${SEGC[s] || C.sonst}"></i>${esc(s)}</span>`).join("")}
           <span><i style="background:${C.outlier}"></i>Ausreißer</span>
           <span style="color:${C.outlier}">→ Punkt oder Tabellenzeile anklicken für TE-Details</span>
           <span style="margin-left:auto">${esc(mode.desc)}</span>
