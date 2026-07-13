@@ -344,6 +344,54 @@
     return n == null ? 0 : Math.ceil(n);
   };
 
+  // Liest einen Zeitstempel als "Wanduhrzeit".
+  // WICHTIG: SAC liefert bei Datums-Merkmalen in der .id oft einen bereits nach
+  // UTC verschobenen technischen Wert (z.B. "...T12:36:00Z" für 14:36 lokal),
+  // während das .label den korrekt formatierten Anzeigewert trägt ("14:36").
+  // Deshalb bevorzugen wir hier das LABEL — das ist die Zeit, die der Nutzer
+  // im BW/in der Query sieht. parseTs legt die Ziffern zeitzonenneutral ab.
+  const readTs = (row, ...keys) => {
+    for (const key of keys) {
+      for (const k of [`${key}_0`, key]) {
+        const v = row[k];
+        if (v == null) continue;
+        if (typeof v === 'object') {
+          // 1) Label bevorzugen, wenn es wie ein Datum aussieht (Wanduhrzeit)
+          const label = v.label;
+          if (label != null && !isNull(label) && /\d{1,2}[.\-/]\d{1,2}|\d{2}:\d{2}/.test(String(label))) {
+            const d = parseTs(label);
+            if (d) return d;
+          }
+          // 2) Sonst die id versuchen
+          const id = v.id;
+          if (id != null && !isNull(id)) {
+            const d = parseTs(id);
+            if (d) return d;
+          }
+          // 3) Zur Not doch das Label (auch wenn ungewöhnliches Format)
+          if (label != null && !isNull(label)) {
+            const d = parseTs(label);
+            if (d) return d;
+          }
+        } else if (!isNull(v)) {
+          const d = parseTs(v);
+          if (d) return d;
+        }
+      }
+    }
+    return null;
+  };
+
+  // Entfernt führende Nullen bei rein numerischen Kennungen (Belegnummer,
+  // Produktnummer). Nicht-numerische Werte bleiben unangetastet.
+  const ohneNullen = (v) => {
+    if (v == null) return v;
+    const s = String(v).trim();
+    if (/^0+$/.test(s)) return '0';
+    if (/^0+\d+$/.test(s)) return s.replace(/^0+/, '');
+    return s;
+  };
+
   // Normalisiert einen Tor-Wert: '#' oder leer → null (kein Tor zugewiesen).
   const normTor = (raw) => {
     if (isNull(raw)) return null;
@@ -419,8 +467,8 @@
           ladestelle:      readDim(row, 'dimension_ladestelle', 'LADESTELLE') ?? 'Eigendisposition',
           // Tor: "#" bedeutet noch kein Tor zugewiesen
           tor:             normTor(readDim(row, 'dimension_tor', 'TOR')),
-          liefernummer:    readDim(row, 'dimension_liefernummer', 'LIFNR'),
-          bestellnummer:   readDim(row, 'dimension_bestellnummer', 'EBELN'),
+          liefernummer:    ohneNullen(readDim(row, 'dimension_liefernummer', 'LIFNR')),
+          bestellnummer:   ohneNullen(readDim(row, 'dimension_bestellnummer', 'EBELN')),
           // Lieferant = Warensender. BW-Merkmal mit Key + Text.
           lieferant:       readKeyText(row, 'dimension_lieferant_name', 'dimension_lieferant_nr', 'WARENSENDER'),
           lieferantNr:     readDim(row,  'dimension_lieferant_nr', 'WARENSENDER_NR', 'WARENSENDER'),
@@ -441,24 +489,24 @@
           frachtfuehrer:   readKeyText(row, 'dimension_frachtfuehrer'),
 
           // Ist-Start / Ist-Ende (eigene BW-Felder)
-          istStart:        parseTs(readDim(row, 'dimension_ist_start')),
-          istEnde:         parseTs(readDim(row, 'dimension_ist_ende')),
+          istStart:        readTs(row, 'dimension_ist_start'),
+          istEnde:         readTs(row, 'dimension_ist_ende'),
 
           // Zeitfenster (Soll)
-          geplantStart:    parseTs(readDim(row, 'dimension_geplant_start', 'GEPLANT_START')),
-          geplantEnde:     parseTs(readDim(row, 'dimension_geplant_ende', 'GEPLANT_ENDE')),
+          geplantStart:    readTs(row, 'dimension_geplant_start', 'GEPLANT_START'),
+          geplantEnde:     readTs(row, 'dimension_geplant_ende', 'GEPLANT_ENDE'),
 
           // Prozess-Timestamps (Ist) — Reihenfolge des WE-Prozesses
-          tsAnkunft:        parseTs(readDim(row, 'dimension_ts_ankunft', 'ANKUNFT')),
-          tsAngedockt:      parseTs(readDim(row, 'dimension_ts_angedockt', 'ANGEDOCKT')),
-          tsEntladenStart:  parseTs(readDim(row, 'dimension_ts_entladen_start', 'ENTLADEN_START')),
-          tsEntladenEnde:   parseTs(readDim(row, 'dimension_ts_entladen_ende', 'ENTLADEN_ENDE')),
-          tsEntladenTat:    parseTs(readDim(row, 'dimension_ts_entladen_tat', 'ENTLADEN_TAT')),
-          tsWeBuchung:      parseTs(readDim(row, 'dimension_ts_we_buchung', 'WE_BUCHUNG')),
+          tsAnkunft:        readTs(row, 'dimension_ts_ankunft', 'ANKUNFT'),
+          tsAngedockt:      readTs(row, 'dimension_ts_angedockt', 'ANGEDOCKT'),
+          tsEntladenStart:  readTs(row, 'dimension_ts_entladen_start', 'ENTLADEN_START'),
+          tsEntladenEnde:   readTs(row, 'dimension_ts_entladen_ende', 'ENTLADEN_ENDE'),
+          tsEntladenTat:    readTs(row, 'dimension_ts_entladen_tat', 'ENTLADEN_TAT'),
+          tsWeBuchung:      readTs(row, 'dimension_ts_we_buchung', 'WE_BUCHUNG'),
           // Fertigstellung = Einlagerung abgeschlossen
-          tsEinlagerung:    parseTs(readDim(row, 'dimension_ts_einlagerung', 'FERTIGSTELLUNG')),
+          tsEinlagerung:    readTs(row, 'dimension_ts_einlagerung', 'FERTIGSTELLUNG'),
           // Abfahrt = OPTIONAL, zählt nicht als Pflicht-Prozessschritt
-          tsAbfahrt:        parseTs(readDim(row, 'dimension_ts_abfahrt', 'ABFAHRT')),
+          tsAbfahrt:        readTs(row, 'dimension_ts_abfahrt', 'ABFAHRT'),
 
           produkte:         [],
 
@@ -476,7 +524,7 @@
 
       // ── Produktzeile anhängen ──
       const te = teMap.get(teNr);
-      const prodNr = readDim(row, 'dimension_produkt_nr', 'MATNR');
+      const prodNr = ohneNullen(readDim(row, 'dimension_produkt_nr', 'MATNR'));
       if (prodNr) {
         te.produkte.push({
           nr:           prodNr,
@@ -484,7 +532,7 @@
           menge:        readVal(row, 'value_menge', 'MENGE') ?? 0,
           einheit:      readDim(row, 'dimension_einheit', 'MEINS') ?? '',
           halle:        normHalle(readDim(row, 'dimension_halle', 'LGNUM')) ?? '',
-          tsEinlagerung: parseTs(readDim(row, 'dimension_ts_einlagerung')),
+          tsEinlagerung: readTs(row, 'dimension_ts_einlagerung'),
 
           // ── Neue Positionsebene-Felder ──────────────────────────────
           packmittel:      readKeyText(row, 'dimension_packmittel'),
@@ -1448,7 +1496,7 @@
 
       .te-grid {
         display:               grid;
-        grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+        grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
         gap:                   12px;
       }
 
@@ -1761,6 +1809,10 @@
         border-radius: var(--r-sm);
         padding:     1px 6px;
         flex-shrink: 0;
+      }
+      .tc-fact.leer, .tor-badge-card.leer {
+        color:       var(--c-text3);
+        opacity:     0.5;
       }
 
       /* ── Geteiltes Hover-Popup (EIN Element für alle Kacheln) ── */
@@ -2186,6 +2238,9 @@
       @media (max-width: 600px) { .d-cols { grid-template-columns: 1fr; } }
 
       /* ══ Detailansicht (Etappe 3) ══ */
+      /* Alle Detailinhalte markierbar & kopierbar (STRG+C) */
+      #view-detail, #detail-content { user-select: text; -webkit-user-select: text; }
+      #detail-content * { user-select: text; -webkit-user-select: text; }
       .detail-head {
         background:    var(--c-bg2);
         border:        1px solid var(--c-border);
@@ -2371,36 +2426,58 @@
         height:     2px;
         background: var(--c-border2);
       }
-      /* ── Soll-Band (Plan): eigenes beschriftetes Band oberhalb der Achse ── */
+      /* ── Soll-Band (Plan): graues, gestricheltes Band oberhalb der Achse ── */
       .zs-soll-band {
         position:      absolute;
-        top:           6px;
-        height:        18px;
+        top:           8px;
+        height:        16px;
         display:       flex;
         align-items:   center;
         justify-content: center;
-        gap:           4px;
-        border-top:    1px dashed var(--c-text2);
-        border-bottom: 1px dashed var(--c-text2);
-        background:    repeating-linear-gradient(45deg,
-          rgba(255,255,255,0.03) 0, rgba(255,255,255,0.03) 4px,
-          transparent 4px, transparent 8px);
+        border:        1px dashed var(--c-text3);
+        border-radius: 3px;
+        background:    var(--c-bg3);
       }
-      /* senkrechte Endmarkierungen des Soll-Fensters */
-      .zs-soll-cap {
-        position: absolute; top: -3px; bottom: -3px;
-        width: 2px; background: var(--c-text2);
-      }
-      .zs-soll-cap:first-child { left: 0; }
-      .zs-soll-cap:last-child  { right: 0; }
       .zs-soll-label {
         font-family:    var(--font-mono);
         font-size:      9px;
         color:          var(--c-text2);
         white-space:    nowrap;
-        padding:        0 4px;
-        background:     var(--c-bg2);
-        z-index:        1;
+        padding:        0 6px;
+        background:     var(--c-bg3);
+      }
+      /* Senkrechte Verbindungslinie vom Soll-Band nach unten zur Ist-Achse.
+         Gestrichelt & grau, mit Timestamp am Fuß auf Achsenhöhe. */
+      .zs-soll-drop {
+        position:  absolute;
+        top:       24px;      /* direkt unter dem Band */
+        height:    72px;      /* bis zur Achse (top 96) */
+        width:     0;
+        border-left: 1px dashed var(--c-text3);
+        z-index:   0;
+        transform: translateX(-0.5px);
+      }
+      .zs-soll-tick {
+        position: absolute; left: -3px;
+        width: 6px; height: 6px; border-radius: 50%;
+        background: var(--c-bg2);
+        border: 1.5px solid var(--c-text2);
+      }
+      .zs-soll-tick.start { top: -1px; }
+      .zs-soll-tick.ende  { top: -1px; }
+      .zs-soll-time {
+        position:    absolute;
+        bottom:      -15px;
+        left:        50%;
+        transform:   translateX(-50%);
+        font-family: var(--font-mono);
+        font-size:   8px;
+        font-weight: 600;
+        color:       var(--c-text2);
+        white-space: nowrap;
+        background:  var(--c-bg2);
+        padding:     1px 4px;
+        border-radius: 3px;
       }
       /* Ist-Verbindungslinie */
       .zs-ist-linie {
@@ -4112,9 +4189,9 @@
           <div class="tc-footer">
             <div class="tc-footer-facts">
               ${this._lsBadgeHTML(te.ladestelle ?? 'Landverkehr')}
-              <span class="tc-fact">${te.anzahlPositionen} Pos.</span>
-              ${te.halle ? `<span class="tc-fact">${esc(te.halle)}</span>` : ''}
-              ${te.tor ? `<span class="tor-badge-card">${esc(te.tor)}</span>` : ''}
+              <span class="tc-fact" title="Anzahl Positionen">${te.anzahlPositionen} Pos.</span>
+              <span class="tc-fact${te.halle ? '' : ' leer'}" title="Halle">${esc(te.halle ?? '–')}</span>
+              <span class="tor-badge-card${te.tor ? '' : ' leer'}" title="Tor">${esc(te.tor ?? '–')}</span>
             </div>
             <div class="tc-footer-meta">
               ${zeitText ? `<span class="tc-time">${esc(zeitText)}</span>` : ''}
@@ -4311,7 +4388,7 @@
           <div class="dh-top">
             <div>
               <div class="dh-te">${esc(te.te)}</div>
-              <div class="dh-sub">${esc(te.teExt ?? '')}${te.teExt ? ' · ' : ''}${esc(te.lieferantName ?? '')}</div>
+              <div class="dh-sub">${esc(te.lieferantName ?? '')}</div>
             </div>
             <a class="dh-ewm" href="${esc(ewmLink(te.te))}" target="_blank" rel="noopener">In EWM öffnen ↗</a>
             <span class="tc-badge badge-${esc(status)}">${esc(STATUS_LABEL[status] ?? status)}</span>
@@ -4324,7 +4401,7 @@
         <div class="detail-section">
           <div class="d-section-title">Prozess-Zeitstrahl</div>
           <div class="tl-legend">
-            <div class="tl-legend-item"><div class="tl-legend-swatch" style="height:11px;border-top:1px dashed var(--c-text2);border-bottom:1px dashed var(--c-text2);background:repeating-linear-gradient(45deg,rgba(255,255,255,.05) 0,rgba(255,255,255,.05) 3px,transparent 3px,transparent 6px)"></div>Soll (Plan)</div>
+            <div class="tl-legend-item"><div class="tl-legend-swatch" style="height:11px;border:1px dashed var(--c-text3);border-radius:2px;background:var(--c-bg3)"></div>Soll (Plan)</div>
             <div class="tl-legend-item"><div class="tl-legend-swatch" style="background:var(--c-green);height:4px"></div>Ist-Verlauf</div>
             <div class="tl-legend-item"><div class="tl-legend-swatch" style="background:var(--c-red)"></div>Verzögert</div>
             <div class="tl-legend-item"><div style="width:9px;height:9px;border:1px dashed var(--c-text2);border-radius:50%"></div>Abfahrt (optional)</div>
@@ -4406,18 +4483,44 @@
         positionen.forEach(p => p.pos = p.pos * faktor);
       }
 
-      // ── Soll-Band (Plan) — eigenes beschriftetes Band OBERHALB der Achse ──
+      // ── Soll-Band (Plan) — graues gestricheltes Band oberhalb der Achse,
+      //    mit senkrechten Verbindungslinien nach unten zur Ist-Achse, damit
+      //    man Soll-Start und Soll-Ende direkt gegen den Ist-Verlauf ablesen kann.
       let sollHTML = '';
-      if (te.geplantStart && te.geplantEnde) {
-        const l = Math.max(0, Math.min(100, pctRaw(te.geplantStart)));
-        const r = Math.max(0, Math.min(100, pctRaw(te.geplantEnde)));
-        const w = Math.max(1, r - l);
-        sollHTML = `
+      if (te.geplantStart || te.geplantEnde) {
+        const hatBeide = te.geplantStart && te.geplantEnde;
+        const lRaw = te.geplantStart ? pctRaw(te.geplantStart) : pctRaw(te.geplantEnde);
+        const rRaw = te.geplantEnde ? pctRaw(te.geplantEnde) : pctRaw(te.geplantStart);
+        const l = Math.max(0, Math.min(100, lRaw));
+        const r = Math.max(0, Math.min(100, rRaw));
+        const w = Math.max(0.5, r - l);
+
+        // Band mit Beschriftung
+        const bandLabel = hatBeide
+          ? `Soll ${fmtTime(te.geplantStart)}–${fmtTime(te.geplantEnde)}`
+          : (te.geplantStart ? `Soll ab ${fmtTime(te.geplantStart)}` : `Soll bis ${fmtTime(te.geplantEnde)}`);
+        let bandHTML = `
           <div class="zs-soll-band" style="left:${l.toFixed(2)}%;width:${w.toFixed(2)}%">
-            <span class="zs-soll-cap"></span>
-            <span class="zs-soll-label">Soll ${fmtTime(te.geplantStart)}–${fmtTime(te.geplantEnde)}</span>
-            <span class="zs-soll-cap"></span>
+            <span class="zs-soll-label">${bandLabel}</span>
           </div>`;
+
+        // Senkrechte Verbindungslinien + Timestamp am Fuß (auf Achsenhöhe)
+        let linienHTML = '';
+        if (te.geplantStart) {
+          linienHTML += `
+            <div class="zs-soll-drop" style="left:${l.toFixed(2)}%">
+              <span class="zs-soll-tick start"></span>
+              <span class="zs-soll-time">${fmtTime(te.geplantStart)}</span>
+            </div>`;
+        }
+        if (te.geplantEnde) {
+          linienHTML += `
+            <div class="zs-soll-drop" style="left:${r.toFixed(2)}%">
+              <span class="zs-soll-tick ende"></span>
+              <span class="zs-soll-time">${fmtTime(te.geplantEnde)}</span>
+            </div>`;
+        }
+        sollHTML = bandHTML + linienHTML;
       }
 
       // ── Ist-Verlauf — kräftige farbige Linie AUF der Achse ──
