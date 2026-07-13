@@ -1460,10 +1460,15 @@
         padding:       15px 15px 13px;
         cursor:        pointer;
         position:      relative;
+        display:       flex;
+        flex-direction: column;
         transition:    transform 0.18s var(--ease),
                        box-shadow 0.18s var(--ease),
                        border-color 0.18s;
       }
+      /* Warnleiste immer präsent (ggf. leer) mit fester Höhe, damit alle
+         Kacheln denselben vertikalen Aufbau haben und der Balken nicht springt. */
+      .tc-warnbar { min-height: 20px; }
       /* Akzentstreifen darf nicht rauslaufen, Popup aber schon */
       .te-card::before { border-radius: var(--r-lg) 0 0 var(--r-lg); }
 
@@ -1500,8 +1505,8 @@
       }
 
       .tc-supplier {
-        font-size:      11px;
-        color:          var(--c-text2);
+        font-size:      12px;
+        color:          var(--c-text);
         white-space:    nowrap;
         overflow:       hidden;
         text-overflow:  ellipsis;
@@ -1604,13 +1609,28 @@
       }
 
       /* ── Karten-Footer ── */
+      /* Footer: zwei feste Zeilen. Fakten oben, Zeit/Status unten —
+         immer gleich hoch, damit der Balken über allen Kacheln fluchtet. */
       .tc-footer {
-        display:       flex;
-        align-items:   center;
-        gap:           7px;
-        padding-left:  6px;
-        flex-wrap:     wrap;
-        row-gap:       6px;
+        margin-top:   auto;   /* Footer nach unten drücken → gleiche Kachelhöhe */
+        padding-left: 6px;
+        display:      flex;
+        flex-direction: column;
+        gap:          7px;
+      }
+      .tc-footer-facts {
+        display:     flex;
+        align-items: center;
+        gap:         7px;
+        flex-wrap:   wrap;
+        row-gap:     6px;
+      }
+      .tc-footer-meta {
+        display:         flex;
+        align-items:     center;
+        justify-content: space-between;
+        gap:             8px;
+        min-height:      20px;
       }
       .tc-time {
         font-size:   11px;
@@ -1618,6 +1638,8 @@
         font-family: var(--font-mono);
         flex-shrink: 0;
       }
+      /* Leerer Platzhalter hält die Zeilenhöhe, ist aber unsichtbar */
+      .tc-hint-badge.placeholder { visibility: hidden; }
       .tc-hint-badge {
         font-family:   var(--font-mono);
         font-size:     10px;
@@ -1720,7 +1742,7 @@
       .tc-te-ext {
         font-family: var(--font-mono);
         font-size:   10px;
-        color:       var(--c-text3);
+        color:       var(--c-text2);
       }
       .tc-te-ext::after { content: ' ·'; color: var(--c-text3); }
       .tc-supplier {
@@ -2239,7 +2261,7 @@
         padding: 6px 0; border-bottom: 1px solid var(--c-border);
         font-size: 12px;
       }
-      .detail-row-l { color: var(--c-text2); }
+      .detail-row-l { color: var(--c-text2); font-size: 12px; }
       .detail-row-v { color: var(--c-text); font-family: var(--font-mono); text-align: right; }
 
       /* Zeitvergleiche */
@@ -2252,8 +2274,8 @@
         font-size: 12px;
       }
       .vgl-row.leer { opacity: 0.4; }
-      .vgl-label { color: var(--c-text2); }
-      .vgl-zeit  { font-family: var(--font-mono); font-size: 10px; color: var(--c-text3); white-space: nowrap; }
+      .vgl-label { color: var(--c-text); font-size: 12px; }
+      .vgl-zeit  { font-family: var(--font-mono); font-size: 10px; color: var(--c-text2); white-space: nowrap; }
       .vgl-dauer {
         font-family: var(--font-mono); font-size: 12px; font-weight: 600;
         text-align: right; min-width: 62px;
@@ -2337,41 +2359,61 @@
       .zs-track {
         position:  relative;
         min-width: 480px;
-        height:    104px;
+        height:    150px;
         padding:   0 30px;
         margin:    0 auto;
       }
-      /* Mittellinie */
+      /* Ist-Achse (Mittellinie) — tiefer, damit oben Platz fürs Soll-Band ist */
       .zs-baseline {
         position:   absolute;
-        top:        50px;
+        top:        96px;
         left:       30px; right: 30px;
         height:     2px;
         background: var(--c-border2);
       }
-      /* Soll-Balken (grau, dezent) */
-      .zs-soll {
+      /* ── Soll-Band (Plan): eigenes beschriftetes Band oberhalb der Achse ── */
+      .zs-soll-band {
         position:      absolute;
-        top:           48px;
-        height:        6px;
-        border-radius: 3px;
-        background:    repeating-linear-gradient(90deg,
-          var(--c-text3) 0, var(--c-text3) 5px,
-          transparent 5px, transparent 10px);
-        opacity:       0.5;
+        top:           6px;
+        height:        18px;
+        display:       flex;
+        align-items:   center;
+        justify-content: center;
+        gap:           4px;
+        border-top:    1px dashed var(--c-text2);
+        border-bottom: 1px dashed var(--c-text2);
+        background:    repeating-linear-gradient(45deg,
+          rgba(255,255,255,0.03) 0, rgba(255,255,255,0.03) 4px,
+          transparent 4px, transparent 8px);
+      }
+      /* senkrechte Endmarkierungen des Soll-Fensters */
+      .zs-soll-cap {
+        position: absolute; top: -3px; bottom: -3px;
+        width: 2px; background: var(--c-text2);
+      }
+      .zs-soll-cap:first-child { left: 0; }
+      .zs-soll-cap:last-child  { right: 0; }
+      .zs-soll-label {
+        font-family:    var(--font-mono);
+        font-size:      9px;
+        color:          var(--c-text2);
+        white-space:    nowrap;
+        padding:        0 4px;
+        background:     var(--c-bg2);
+        z-index:        1;
       }
       /* Ist-Verbindungslinie */
       .zs-ist-linie {
         position:      absolute;
-        top:           50px;
-        height:        3px;
+        top:           95px;
+        height:        4px;
         border-radius: 2px;
         z-index:       1;
       }
       /* Punkt-Container */
       .zs-point {
         position:  absolute;
-        top:       44px;
+        top:       89px;
         transform: translateX(-50%);
         z-index:   2;
       }
@@ -2397,7 +2439,7 @@
         text-align: center;
         white-space: nowrap;
       }
-      .zs-point.oben  .zs-label { bottom: 22px; }
+      .zs-point.oben  .zs-label { bottom: 19px; }
       .zs-point.unten .zs-label { top: 22px; }
       .zs-label-name {
         font-size:   9px;
@@ -4017,18 +4059,19 @@
       const badgeLabel = STATUS_LABEL[status] ?? status;
 
       // Warnleiste: max. 4 Icons, Rest als "+n"-Overflow.
-      let warnHTML = '';
+      // Immer gerendert (ggf. leer) → alle Kacheln gleich hoch.
+      let warnInner = '';
       if (te.warnungen.length) {
         const sicht = te.warnungen.slice(0, 4);
         const rest  = te.warnungen.slice(4);
-        const icons = sicht.map(w =>
+        warnInner = sicht.map(w =>
           `<span class="tc-warn w-${w.farbe}" title="${esc(w.tooltip)}">${w.icon}</span>`
         ).join('');
-        const overflow = rest.length
-          ? `<span class="tc-warn w-more" title="${esc(rest.map(w => w.label + ': ' + w.tooltip).join('\n\n'))}">+${rest.length}</span>`
-          : '';
-        warnHTML = `<div class="tc-warnbar">${icons}${overflow}</div>`;
+        if (rest.length) {
+          warnInner += `<span class="tc-warn w-more" title="${esc(rest.map(w => w.label + ': ' + w.tooltip).join('\n\n'))}">+${rest.length}</span>`;
+        }
       }
+      const warnHTML = `<div class="tc-warnbar">${warnInner}</div>`;
 
       // Ein einzelner Statushinweis, priorisiert.
       let statusHint = '';
@@ -4067,13 +4110,16 @@
           </div>
           <div class="tc-progress">${this._fortschrittHTML(te)}</div>
           <div class="tc-footer">
-            ${this._lsBadgeHTML(te.ladestelle ?? 'Landverkehr')}
-            <span class="tc-fact">${te.anzahlPositionen} Pos.</span>
-            ${te.halle ? `<span class="tc-fact">${esc(te.halle)}</span>` : ''}
-            ${te.tor ? `<span class="tor-badge-card">${esc(te.tor)}</span>` : ''}
-            <div class="tc-spacer"></div>
-            ${zeitText ? `<span class="tc-time">${esc(zeitText)}</span>` : ''}
-            ${statusHint}
+            <div class="tc-footer-facts">
+              ${this._lsBadgeHTML(te.ladestelle ?? 'Landverkehr')}
+              <span class="tc-fact">${te.anzahlPositionen} Pos.</span>
+              ${te.halle ? `<span class="tc-fact">${esc(te.halle)}</span>` : ''}
+              ${te.tor ? `<span class="tor-badge-card">${esc(te.tor)}</span>` : ''}
+            </div>
+            <div class="tc-footer-meta">
+              ${zeitText ? `<span class="tc-time">${esc(zeitText)}</span>` : ''}
+              ${statusHint || '<span class="tc-hint-badge placeholder"></span>'}
+            </div>
           </div>
         </div>
       `;
@@ -4278,8 +4324,8 @@
         <div class="detail-section">
           <div class="d-section-title">Prozess-Zeitstrahl</div>
           <div class="tl-legend">
-            <div class="tl-legend-item"><div class="tl-legend-swatch" style="background:repeating-linear-gradient(90deg,var(--c-text3) 0,var(--c-text3) 5px,transparent 5px,transparent 10px);opacity:0.5"></div>Soll-Zeitfenster</div>
-            <div class="tl-legend-item"><div class="tl-legend-swatch" style="background:var(--c-green)"></div>Ist-Verlauf</div>
+            <div class="tl-legend-item"><div class="tl-legend-swatch" style="height:11px;border-top:1px dashed var(--c-text2);border-bottom:1px dashed var(--c-text2);background:repeating-linear-gradient(45deg,rgba(255,255,255,.05) 0,rgba(255,255,255,.05) 3px,transparent 3px,transparent 6px)"></div>Soll (Plan)</div>
+            <div class="tl-legend-item"><div class="tl-legend-swatch" style="background:var(--c-green);height:4px"></div>Ist-Verlauf</div>
             <div class="tl-legend-item"><div class="tl-legend-swatch" style="background:var(--c-red)"></div>Verzögert</div>
             <div class="tl-legend-item"><div style="width:9px;height:9px;border:1px dashed var(--c-text2);border-radius:50%"></div>Abfahrt (optional)</div>
           </div>
@@ -4360,16 +4406,21 @@
         positionen.forEach(p => p.pos = p.pos * faktor);
       }
 
-      // Soll-Balken (grau)
+      // ── Soll-Band (Plan) — eigenes beschriftetes Band OBERHALB der Achse ──
       let sollHTML = '';
       if (te.geplantStart && te.geplantEnde) {
         const l = Math.max(0, Math.min(100, pctRaw(te.geplantStart)));
         const r = Math.max(0, Math.min(100, pctRaw(te.geplantEnde)));
         const w = Math.max(1, r - l);
-        sollHTML = `<div class="zs-soll" style="left:${l.toFixed(2)}%;width:${w.toFixed(2)}%"></div>`;
+        sollHTML = `
+          <div class="zs-soll-band" style="left:${l.toFixed(2)}%;width:${w.toFixed(2)}%">
+            <span class="zs-soll-cap"></span>
+            <span class="zs-soll-label">Soll ${fmtTime(te.geplantStart)}–${fmtTime(te.geplantEnde)}</span>
+            <span class="zs-soll-cap"></span>
+          </div>`;
       }
 
-      // Ist-Verbindungslinie (vom ersten zum letzten Ist-Punkt)
+      // ── Ist-Verlauf — kräftige farbige Linie AUF der Achse ──
       let istLinieHTML = '';
       if (positionen.length >= 2) {
         const first = positionen[0].pos;
