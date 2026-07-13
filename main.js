@@ -106,17 +106,35 @@
 
   // Prozessschritte in chronologischer Reihenfolge – Reihenfolge ist wichtig
   // für Fortschrittsbalken-Berechnung
+  // Die 6 PFLICHT-Prozessschritte in Reihenfolge. Abfahrt ist optional
+  // und wird separat behandelt (siehe te.abgefahren).
   const PROZESS_SCHRITTE = [
-    { id: 'ts_ankunft',       label: 'Ankunft' },
-    { id: 'ts_angedockt',     label: 'Angedockt' },
-    { id: 'ts_entladen_start',label: 'Entladen ▶' },
-    { id: 'ts_entladen_ende', label: 'Entladen ■' },
-    { id: 'ts_we_buchung',    label: 'WE-Buchung' },
-    { id: 'ts_abfahrt',       label: 'Abfahrt' },
+    'Ankunft am Kontrollpunkt',
+    'Am Tor angedockt',
+    'Entladen gestartet',
+    'Entladen beendet',
+    'Wareneingang gebucht',
+    'Fertigstellung',
   ];
+
+  // Anzeigenamen der Status
+  const STATUS_LABEL = {
+    erwartet:    'Erwartet',
+    ankunft:     'Eingetroffen',
+    entladen:    'Wird entladen',
+    eingelagert: 'Eingelagert',
+    'verzögert': 'Verzögert',
+  };
+
+  // EWM-Deeplink. Platzhalter bis die echte URL feststeht.
+  const EWM_BASE_URL = 'https://ewm.example.com/te/';
+  const ewmLink = (intTE) => EWM_BASE_URL + encodeURIComponent(intTE);
 
   // Verzögerungsschwellwert in Minuten – ab wann eine TE als "verzögert" gilt
   const VERZOEGERUNG_SCHWELLE_MIN = 30;
+
+  // Andocken darf höchstens 30 Minuten nach dem geplanten Start erfolgen.
+  const ANDOCK_TOLERANZ_MIN = 30;
 
   // ── Helper ───────────────────────────────────────────────────────────────
 
@@ -284,6 +302,48 @@
     return null;
   };
 
+  // Liest ein BW-Merkmal als { key, text }. Beide können null sein.
+  // BW liefert Key in .id und Text in .label — bei manchen Feldern sind beide gleich.
+  const readKeyText = (row, ...keys) => {
+    const key  = readDim(row, ...keys);
+    const text = readLabel(row, ...keys);
+    if (key == null && text == null) return { key: null, text: null };
+    return { key, text: (text ?? key) };
+  };
+
+  // Formatiert { key, text } als "Key – Text" bzw. nur das Vorhandene.
+  const keyTextStr = (kt) => {
+    if (!kt || (!kt.key && !kt.text)) return null;
+    if (!kt.key)  return kt.text;
+    if (!kt.text || kt.text === kt.key) return kt.key;
+    return `${kt.key} – ${kt.text}`;
+  };
+
+  // BW kodiert Wahrheitswerte uneinheitlich: ja/nein, wahr/falsch, X/#, 1/0.
+  // Diese Funktion kapselt das an genau einer Stelle.
+  const WAHR_TOKENS = new Set(['ja', 'wahr', 'x', 'true', 'j', 'y', 'yes', '1']);
+  const istWahr = (raw) => {
+    if (isNull(raw)) return false;
+    return WAHR_TOKENS.has(String(raw).trim().toLowerCase());
+  };
+
+  // Liest eine Kennzahl als Zahl. Paletten kommen als Ganzzahl,
+  // wir runden defensiv auf (angebrochene Palette = ganzer Stellplatz).
+  const readNum = (row, ...keys) => {
+    const v = readVal(row, ...keys);
+    if (v == null || v === '') return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  // Wie readNum, aber für Palettenzahlen: erwartet Ganzzahlen. Falls doch ein
+  // Dezimalwert kommt (angebrochene Palette), wird aufgerundet — eine
+  // angebrochene Palette belegt einen ganzen Stellplatz.
+  const readPaletten = (row, ...keys) => {
+    const n = readNum(row, ...keys);
+    return n == null ? 0 : Math.ceil(n);
+  };
+
   // Normalisiert einen Tor-Wert: '#' oder leer → null (kein Tor zugewiesen).
   const normTor = (raw) => {
     if (isNull(raw)) return null;
@@ -361,12 +421,28 @@
           tor:             normTor(readDim(row, 'dimension_tor', 'TOR')),
           liefernummer:    readDim(row, 'dimension_liefernummer', 'LIFNR'),
           bestellnummer:   readDim(row, 'dimension_bestellnummer', 'EBELN'),
-          // Lieferant = Warensender (Text des BW-Merkmals)
-          lieferantNr:     readDim(row, 'dimension_lieferant_nr', 'WARENSENDER_NR', 'WARENSENDER'),
-          lieferantName:   readDim(row, 'dimension_lieferant_name', 'WARENSENDER_TEXT', 'WARENSENDER') ?? '–',
+          // Lieferant = Warensender. BW-Merkmal mit Key + Text.
+          lieferant:       readKeyText(row, 'dimension_lieferant_name', 'dimension_lieferant_nr', 'WARENSENDER'),
+          lieferantNr:     readDim(row,  'dimension_lieferant_nr', 'WARENSENDER_NR', 'WARENSENDER'),
+          lieferantName:   readLabel(row, 'dimension_lieferant_name', 'dimension_lieferant_nr', 'WARENSENDER') ?? '–',
           transportmittel: readDim(row, 'dimension_transportmittel', 'TRMIT'),
           // Halle = "Einlagerung in Halle" (Werte 4, 6, 8 ...)
           halle:           normHalle(readDim(row, 'dimension_halle', 'HALLE', 'LGNUM')),
+
+          // ── Neue TE-Ebene-Felder ──────────────────────────────────────
+          teExt:           readDim(row, 'dimension_te_ext', 'TE_EXT'),
+          direktfahrt:     istWahr(readDim(row, 'dimension_direktfahrt')),
+          shuttle:         istWahr(readDim(row, 'dimension_shuttle')),
+          vorpalettierung: readDim(row, 'dimension_vorpalettierung'),
+          // Priorität: Key + Text. Vorhanden = Warnung (egal welche Stufe).
+          prioritaet:      readKeyText(row, 'dimension_prioritaet'),
+          containerDepot:  readDim(row, 'dimension_container_depot'),
+          // Frachtführer: Key numerisch (400352), Klartext im Label
+          frachtfuehrer:   readKeyText(row, 'dimension_frachtfuehrer'),
+
+          // Ist-Start / Ist-Ende (eigene BW-Felder)
+          istStart:        parseTs(readDim(row, 'dimension_ist_start')),
+          istEnde:         parseTs(readDim(row, 'dimension_ist_ende')),
 
           // Zeitfenster (Soll)
           geplantStart:    parseTs(readDim(row, 'dimension_geplant_start', 'GEPLANT_START')),
@@ -391,6 +467,10 @@
           verzoegerungMin:  null,
           fortschritt:      0,
           abgefahren:       false,
+          warnungen:        [],     // [{ typ, icon, farbe, label, tooltip }]
+          anzahlPositionen: 0,
+          anlieferpaletten: 0,      // Summe über alle Positionen
+          andockVerspaetet: false,  // Andocken > geplanter Start + 30 min
         });
       }
 
@@ -403,8 +483,25 @@
           name:         readLabel(row, 'dimension_produkt_name', 'dimension_produkt_nr', 'MAKTX') ?? '–',
           menge:        readVal(row, 'value_menge', 'MENGE') ?? 0,
           einheit:      readDim(row, 'dimension_einheit', 'MEINS') ?? '',
-          halle:        readDim(row, 'dimension_halle', 'LGNUM') ?? '',
+          halle:        normHalle(readDim(row, 'dimension_halle', 'LGNUM')) ?? '',
           tsEinlagerung: parseTs(readDim(row, 'dimension_ts_einlagerung')),
+
+          // ── Neue Positionsebene-Felder ──────────────────────────────
+          packmittel:      readKeyText(row, 'dimension_packmittel'),
+          hwg:             readKeyText(row, 'dimension_hwg'),
+          einlagersteuerkz: readDim(row, 'dimension_einlagersteuerkz'),
+          fotoErstellt:    istWahr(readDim(row, 'dimension_foto_erstellt')),
+          baender:         istWahr(readDim(row, 'dimension_baender')),
+          sperrgut:        istWahr(readDim(row, 'dimension_sperrgut')),
+          stapelbarkeit:   readDim(row, 'dimension_stapelbarkeit'),
+          // Kritischer Artikel: Kategorie (Key + Text) + Freitext
+          kritKategorie:   readKeyText(row, 'dimension_krit_kategorie'),
+          kritFreitext:    readDim(row, 'dimension_krit_freitext'),
+          // Qualitätsprüfgruppe: Wert vorhanden ⇒ prüfpflichtig
+          qpGruppe:        readDim(row, 'dimension_qp_gruppe'),
+          // Kennzahlen
+          bestand:         readNum(row, 'value_bestand_tagesgenau'),
+          anlieferpaletten: readPaletten(row, 'value_anlieferpaletten'),
         });
       }
     }
@@ -497,6 +594,101 @@
         te.ueberfaelligMin = ueberfaellig;
       }
     }
+
+    // ── Andock-Regel ────────────────────────────────────────────────────
+    // Andocken darf höchstens ANDOCK_TOLERANZ_MIN nach dem geplanten Start liegen.
+    te.andockVerspaetet = false;
+    te.andockVerzugMin  = null;
+    if (te.geplantStart && te.tsAngedockt) {
+      const verzug = diffMin(te.geplantStart, te.tsAngedockt);
+      if (verzug > ANDOCK_TOLERANZ_MIN) {
+        te.andockVerspaetet = true;
+        te.andockVerzugMin  = verzug;
+      }
+    }
+
+    // ── Aggregate über die Positionen ───────────────────────────────────
+    te.anzahlPositionen = te.produkte.length;
+    te.anlieferpaletten = te.produkte.reduce((s, p) => s + (p.anlieferpaletten || 0), 0);
+
+    // ── Warnungen (einmalig hier, nicht im Renderpfad) ──────────────────
+    te.warnungen = baueWarnungen(te);
+  }
+
+  // Baut die Warnleiste einer TE. Positionsfelder lösen aus, sobald
+  // MINDESTENS EINE Position betroffen ist; der Tooltip nennt die Details.
+  function baueWarnungen(te) {
+    const w = [];
+    const pos = te.produkte;
+    const n   = pos.length;
+
+    // 1) Priorität — TE-Ebene. Jeder Wert ist warnwürdig, egal welche Stufe.
+    if (te.prioritaet && te.prioritaet.key) {
+      w.push({
+        typ: 'prio', icon: '🔺', farbe: 'warn',
+        label: 'Priorität',
+        tooltip: 'Priorität: ' + (keyTextStr(te.prioritaet) ?? te.prioritaet.key),
+      });
+    }
+
+    // 2) Kritischer Artikel — Positionsebene. Tooltip listet die Meldungen.
+    const kritPos = pos.filter(p => p.kritKategorie && p.kritKategorie.key);
+    if (kritPos.length) {
+      const meldungen = [...new Set(kritPos.map(p => keyTextStr(p.kritKategorie)))];
+      const freitexte = [...new Set(pos.map(p => p.kritFreitext).filter(Boolean))];
+      w.push({
+        typ: 'krit', icon: '⚠', farbe: 'krit',
+        label: 'Kritischer Artikel',
+        tooltip: `Kritischer Artikel (${kritPos.length} von ${n} Positionen):\n· `
+               + meldungen.join('\n· ')
+               + (freitexte.length ? '\n\nFreitext:\n· ' + freitexte.join('\n· ') : ''),
+      });
+    }
+
+    // 3) Qualitätsprüfgruppe — Positionsebene. Wert vorhanden ⇒ prüfpflichtig.
+    const qpPos = pos.filter(p => !isNull(p.qpGruppe));
+    if (qpPos.length) {
+      const gruppen = [...new Set(qpPos.map(p => p.qpGruppe))];
+      w.push({
+        typ: 'qp', icon: '🔬', farbe: 'qp',
+        label: 'Qualitätsprüfung',
+        tooltip: `${qpPos.length} von ${n} Positionen prüfpflichtig\nPrüfgruppe: ${gruppen.join(', ')}`,
+      });
+    }
+
+    // 4) Bänder — Positionsebene.
+    const bandPos = pos.filter(p => p.baender);
+    if (bandPos.length) {
+      w.push({
+        typ: 'baender', icon: '🎗', farbe: 'info',
+        label: 'Bänder',
+        tooltip: `${bandPos.length} von ${n} Positionen müssen gebändert werden`,
+      });
+    }
+
+    // 5) Nullbestand — Positionsebene. Bestand 0 ODER leer zählt.
+    const nullPos = pos.filter(p => p.bestand == null || p.bestand === 0);
+    if (nullPos.length) {
+      const namen = nullPos.slice(0, 5).map(p => p.name);
+      w.push({
+        typ: 'nullbestand', icon: '📦', farbe: 'warn',
+        label: 'Nullbestand',
+        tooltip: `${nullPos.length} von ${n} Positionen ohne Lagerbestand:\n· `
+               + namen.join('\n· ')
+               + (nullPos.length > 5 ? `\n… und ${nullPos.length - 5} weitere` : ''),
+      });
+    }
+
+    // 6) TE-Hinweis — Freitext.
+    if (!isNull(te.teHinweis)) {
+      w.push({
+        typ: 'hinweis', icon: '📌', farbe: 'info',
+        label: 'Hinweis',
+        tooltip: te.teHinweis,
+      });
+    }
+
+    return w;
   }
 
   // ── Template ─────────────────────────────────────────────────────────────
@@ -1298,18 +1490,6 @@
       .te-card.s-abgefahren::before { background: var(--c-text3); opacity: 0.4; }
       .te-card.s-verzögert::before  { background: var(--c-red); }
 
-      /* ── Karten-Header ── */
-      .tc-header {
-        display:       flex;
-        align-items:   flex-start;
-        justify-content: space-between;
-        gap:           8px;
-        margin-bottom: 11px;
-        padding-left:  6px;
-      }
-
-      .tc-meta { flex: 1; min-width: 0; }
-
       .tc-te-nr {
         font-family:    var(--font-mono);
         font-size:      12px;
@@ -1351,8 +1531,9 @@
       /* ── Fortschrittsbalken ── */
       .tc-progress {
         display:       flex;
+        align-items:   center;
         gap:           2px;
-        padding-left:  6px;
+        padding:       0 4px 0 6px;
         margin-bottom: 11px;
       }
 
@@ -1426,12 +1607,11 @@
       .tc-footer {
         display:       flex;
         align-items:   center;
-        gap:           8px;
+        gap:           7px;
         padding-left:  6px;
-        flex-wrap:     nowrap;
-        white-space:   nowrap;
+        flex-wrap:     wrap;
+        row-gap:       6px;
       }
-      .tc-footer-spacer { flex: 1; }
       .tc-time {
         font-size:   11px;
         color:       var(--c-text2);
@@ -1445,17 +1625,126 @@
         padding:       2px 8px;
         border-radius: var(--r-sm);
         flex-shrink:   0;
+        white-space:   nowrap;
       }
       .tc-hint-badge.ok   { color: var(--c-green); background: var(--c-green-dim); }
       .tc-hint-badge.warn { color: var(--c-yellow); background: var(--c-yellow-dim); }
 
-      /* ── Hover-Popup mit allen Details ── */
+      /* ── Warnleiste auf der Kachel ── */
+      .tc-warnbar {
+        display:       flex;
+        gap:           5px;
+        align-items:   center;
+        margin-bottom: 9px;
+        padding-left:  6px;
+      }
+      .tc-warn {
+        font-size:     12px;
+        line-height:   1;
+        padding:       3px 5px;
+        border-radius: var(--r-sm);
+        cursor:        help;
+        border:        1px solid transparent;
+      }
+      .tc-warn.w-warn { background: var(--c-yellow-dim); border-color: rgba(245,176,65,.35); }
+      .tc-warn.w-krit { background: var(--c-red-dim);    border-color: rgba(231,76,60,.4);  }
+      .tc-warn.w-qp   { background: var(--c-blue-dim);   border-color: rgba(61,154,214,.35);}
+      .tc-warn.w-info { background: var(--c-bg4);        border-color: var(--c-border2);    }
+      .tc-warn.w-more {
+        font-family: var(--font-mono);
+        font-size:   9px;
+        font-weight: 700;
+        color:       var(--c-text2);
+        background:  var(--c-bg4);
+        border-color: var(--c-border2);
+        padding:     3px 6px;
+      }
+      /* gleiche Farben im Popup */
+      .w-warn { color: var(--c-yellow); }
+      .w-krit { color: var(--c-red-light); }
+      .w-qp   { color: var(--c-blue); }
+      .w-info { color: var(--c-text2); }
+
+      /* ── Kachel-Kopf ── */
+      .tc-head {
+        display:     flex;
+        align-items: center;
+        gap:         8px;
+        margin-bottom: 3px;
+      }
+      .tc-head .tc-te-nr { flex-shrink: 0; }
+      .tc-head .tc-tm    { flex-shrink: 0; }
+      .tc-head .tc-badge { flex-shrink: 0; }
+      .tc-spacer { flex: 1; min-width: 4px; }
+      .tc-te-nr {
+        font-family:    var(--font-mono);
+        font-size:      15px;
+        font-weight:    700;
+        letter-spacing: 0.02em;
+        color:          var(--c-text);
+        text-decoration: none;
+        display:        inline-flex;
+        align-items:    center;
+        gap:            3px;
+        border-radius:  3px;
+        padding:        0 2px;
+      }
+      .tc-te-nr:hover { color: var(--c-red-light); background: var(--c-red-dim); }
+      .tc-ext-ico { font-size: 9px; opacity: 0.5; }
+      .tc-te-nr:hover .tc-ext-ico { opacity: 1; }
+      .tc-tm {
+        font-family:   var(--font-mono);
+        font-size:     9px;
+        font-weight:   700;
+        color:         var(--c-text2);
+        background:    var(--c-bg4);
+        border:        1px solid var(--c-border2);
+        border-radius: var(--r-sm);
+        padding:       1px 5px;
+      }
+      .tc-ff {
+        font-size:     11px;
+        color:         var(--c-text2);
+        white-space:   nowrap;
+        overflow:      hidden;
+        text-overflow: ellipsis;
+        max-width:     150px;
+      }
+      .tc-sub {
+        display:       flex;
+        align-items:   center;
+        gap:           7px;
+        margin-bottom: 11px;
+        padding-left:  2px;
+      }
+      .tc-te-ext {
+        font-family: var(--font-mono);
+        font-size:   10px;
+        color:       var(--c-text3);
+      }
+      .tc-te-ext::after { content: ' ·'; color: var(--c-text3); }
+      .tc-supplier {
+        font-size:     11px;
+        color:         var(--c-text2);
+        white-space:   nowrap;
+        overflow:      hidden;
+        text-overflow: ellipsis;
+      }
+      .tc-fact {
+        font-family: var(--font-mono);
+        font-size:   9px;
+        color:       var(--c-text2);
+        background:  var(--c-bg3);
+        border:      1px solid var(--c-border);
+        border-radius: var(--r-sm);
+        padding:     1px 6px;
+        flex-shrink: 0;
+      }
+
+      /* ── Geteiltes Hover-Popup (EIN Element für alle Kacheln) ── */
       .tc-popup {
         position:      absolute;
-        top:           calc(100% + 8px);
-        left:          50%;
-        transform:     translateX(-50%) translateY(-6px);
-        width:         290px;
+        width:         300px;
         max-width:     92vw;
         background:    var(--c-bg3);
         border:        1px solid var(--c-border2);
@@ -1465,62 +1754,169 @@
         opacity:       0;
         visibility:    hidden;
         pointer-events: none;
-        transition:    opacity 0.16s var(--ease), transform 0.16s var(--ease);
-        z-index:       100;
+        transform:     translateY(-4px);
+        transition:    opacity 0.14s var(--ease), transform 0.14s var(--ease);
+        z-index:       200;
       }
-      .te-card:hover .tc-popup {
-        opacity:    1;
-        visibility: visible;
-        transform:  translateX(-50%) translateY(0);
-      }
-      /* kleiner Pfeil nach oben */
-      .tc-popup::before {
-        content:      '';
-        position:     absolute;
-        top:          -6px;
-        left:         50%;
-        transform:    translateX(-50%) rotate(45deg);
-        width:        11px; height: 11px;
-        background:   var(--c-bg3);
-        border-left:  1px solid var(--c-border2);
-        border-top:   1px solid var(--c-border2);
-      }
+      .tc-popup.visible { opacity: 1; visibility: visible; transform: translateY(0); }
       .tc-pop-head {
-        display:       flex;
-        align-items:   center;
+        display:         flex;
+        align-items:     center;
         justify-content: space-between;
-        gap:           8px;
-        margin-bottom: 10px;
-        padding-bottom: 8px;
-        border-bottom: 1px solid var(--c-border);
+        gap:             8px;
+        margin-bottom:   9px;
+        padding-bottom:  8px;
+        border-bottom:   1px solid var(--c-border);
       }
-      .tc-pop-te {
-        font-family:   var(--font-mono);
-        font-size:     14px;
-        font-weight:   700;
-        color:         var(--c-text);
-      }
+      .tc-pop-te { font-family: var(--font-mono); font-size: 14px; font-weight: 700; color: var(--c-text); }
       .tc-pop-row {
         display:         flex;
         justify-content: space-between;
         gap:             12px;
         font-size:       11px;
-        line-height:     1.9;
+        line-height:     1.85;
       }
       .tc-pop-label { color: var(--c-text2); }
       .tc-pop-val   { color: var(--c-text); font-family: var(--font-mono); text-align: right; }
       .tc-pop-sep   { height: 1px; background: var(--c-border); margin: 8px 0; }
-      .tc-pop-hint  { font-size: 11px; color: var(--c-yellow); line-height: 1.5; }
+      .tc-pop-warn  { display: flex; flex-direction: column; gap: 4px; }
+      .tc-pop-warn-row { font-size: 11px; color: var(--c-text2); line-height: 1.45; }
 
-      .tc-info {
+      /* ── Suchfeld ── */
+      .te-search {
+        display:       inline-flex;
+        align-items:   center;
+        gap:           6px;
+        padding:       3px 8px;
+        background:    var(--c-bg3);
+        border:        1px solid var(--c-border2);
+        border-radius: var(--r-sm);
+        min-width:     210px;
+      }
+      .te-search:focus-within { border-color: var(--c-red-border); }
+      .te-search-ico { font-size: 10px; opacity: 0.6; }
+      .te-search-input {
+        flex:        1;
+        border:      none;
+        background:  transparent;
+        outline:     none;
+        color:       var(--c-text);
+        font-family: var(--font);
+        font-size:   11px;
+        min-width:   0;
+      }
+      .te-search-input::placeholder { color: var(--c-text3); }
+      .te-search-input::-webkit-search-cancel-button { display: none; }
+      .te-search-clear {
+        border:      none;
+        background:  transparent;
+        color:       var(--c-text2);
+        cursor:      pointer;
+        font-size:   15px;
+        line-height: 1;
+        padding:     0 2px;
+      }
+      .te-search-clear:hover { color: var(--c-text); }
+      .te-search-clear.hidden { display: none; }
+
+      .search-notice {
         display:       flex;
         align-items:   center;
-        gap:           4px;
+        gap:           10px;
+        margin:        0 0 12px;
+        padding:       7px 12px;
         font-size:     11px;
         color:         var(--c-text2);
+        background:    var(--c-blue-dim);
+        border:        1px solid rgba(61,154,214,.3);
+        border-radius: var(--r-sm);
       }
+      .search-notice.hidden { display: none; }
+      .search-notice-btn {
+        margin-left:   auto;
+        border:        1px solid var(--c-border2);
+        background:    transparent;
+        color:         var(--c-text);
+        font-family:   var(--font-mono);
+        font-size:     10px;
+        padding:       3px 9px;
+        border-radius: var(--r-sm);
+        cursor:        pointer;
+      }
+      .search-notice-btn:hover { background: var(--c-bg4); }
 
-      .tc-info-icon { font-size: 10px; opacity: 0.65; }
+      /* ── Datumsspalten-Modus ── */
+      .te-grid.board-modus {
+        display: block;
+        overflow-x: auto;
+        padding-bottom: 8px;
+      }
+      .datum-board {
+        display: flex;
+        gap:     14px;
+        align-items: flex-start;
+        min-width: min-content;
+      }
+      .datum-spalte {
+        flex:      0 0 300px;
+        display:   flex;
+        flex-direction: column;
+        background: var(--c-bg2);
+        border:     1px solid var(--c-border);
+        border-radius: var(--r-md);
+        overflow:  hidden;
+      }
+      .datum-spalte.heute { border-color: var(--c-red-border); }
+      .datum-spalte-head {
+        padding:       10px 12px;
+        background:    var(--c-bg3);
+        border-bottom: 1px solid var(--c-border);
+      }
+      .datum-spalte.heute .datum-spalte-head { background: var(--c-red-dim); }
+      .datum-spalte-tag {
+        font-family:    var(--font-mono);
+        font-size:      10px;
+        font-weight:    700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color:          var(--c-text2);
+        display:        flex;
+        align-items:    center;
+        gap:            6px;
+      }
+      .datum-heute-tag {
+        font-size:     8px;
+        color:         var(--c-red-light);
+        background:    var(--c-bg);
+        border:        1px solid var(--c-red-border);
+        border-radius: 8px;
+        padding:       1px 6px;
+        letter-spacing: 0.04em;
+      }
+      .datum-spalte-datum {
+        font-family: var(--font-mono);
+        font-size:   17px;
+        font-weight: 700;
+        color:       var(--c-text);
+        margin:      2px 0 4px;
+      }
+      .datum-spalte-meta {
+        display:     flex;
+        gap:         8px;
+        font-family: var(--font-mono);
+        font-size:   9px;
+        color:       var(--c-text3);
+      }
+      .datum-spalte-warn { color: var(--c-yellow); }
+      .datum-spalte-body {
+        display:        flex;
+        flex-direction: column;
+        gap:            10px;
+        padding:        10px;
+        max-height:     62vh;
+        overflow-y:     auto;
+      }
+      .datum-spalte-body .te-card { margin: 0; }
 
       /* Δ-Zeit Badge */
       /* Ladestellen-Filter-Chips */
@@ -1571,33 +1967,6 @@
       .group-mode-btn.active {
         background: var(--c-red);
         color:      #fff;
-      }
-
-      /* Gruppierungs-Toggle (alt) */
-      .group-toggle-btn {
-        display:        inline-flex;
-        align-items:    center;
-        gap:            6px;
-        padding:        4px 11px;
-        border-radius:  var(--r-sm);
-        border:         1px solid var(--c-border2);
-        font-family:    var(--font-mono);
-        font-size:      10px;
-        font-weight:    600;
-        letter-spacing: 0.07em;
-        text-transform: uppercase;
-        color:          var(--c-text3);
-        background:     transparent;
-        cursor:         pointer;
-        transition:     all 0.15s;
-        margin-left:    4px;
-        flex-shrink:    0;
-      }
-      .group-toggle-btn:hover { background: var(--c-bg3); color: var(--c-text2); }
-      .group-toggle-btn.active {
-        background:   rgba(41,128,185,.15);
-        border-color: rgba(41,128,185,.4);
-        color:        #5dade2;
       }
 
       /* Ladestellen-Gruppen-Header in Kacheln-View */
@@ -1653,22 +2022,6 @@
       .ls-land { background: var(--c-green-dim);    color: #58d68d; }
       .ls-eigen { background: rgba(93,109,126,.18); color: #aab7b8; }
 
-      /* Tor-Badge auf Kachel */
-      .tc-abfahrt-tag {
-        font-family:    var(--font-mono);
-        font-size:      8px;
-        font-weight:    600;
-        letter-spacing: 0.06em;
-        text-transform: uppercase;
-        color:          var(--c-text3);
-        background:     var(--c-bg3);
-        border:         1px solid var(--c-border);
-        border-radius:  var(--r-sm);
-        padding:        2px 6px;
-        white-space:    nowrap;
-        flex-shrink:    0;
-      }
-
       .tor-badge-card {
         font-family:    var(--font-mono);
         font-size:      10px;
@@ -1681,20 +2034,6 @@
         flex-shrink:    0;
       }
 
-      .tc-delta {
-        margin-left:    auto;
-        font-family:    var(--font-mono);
-        font-size:      10px;
-        font-weight:    600;
-        padding:        2px 7px;
-        border-radius:  var(--r-sm);
-        white-space:    nowrap;
-      }
-
-      .tc-delta.pos  { background: var(--c-red-dim);   color: #e74c3c; }
-      .tc-delta.neg  { background: var(--c-green-dim); color: #58d68d; }
-      .tc-delta.zero { background: var(--c-bg4);        color: var(--c-text3); }
-
       /* Hinweis-Flag */
       /* Planabweichungs-Markierung */
       .te-card.abweichung {
@@ -1703,29 +2042,6 @@
       }
       .te-card.abweichung::before {
         background: var(--c-yellow) !important;
-      }
-      .tc-abw-badge {
-        font-family:   var(--font-mono);
-        font-size:     8px;
-        font-weight:   700;
-        letter-spacing: 0.04em;
-        text-transform: uppercase;
-        color:         #f0a500;
-        background:    rgba(230,126,34,0.15);
-        border:        1px solid rgba(230,126,34,0.4);
-        border-radius: var(--r-sm);
-        padding:       2px 7px;
-        white-space:   nowrap;
-        flex-shrink:   0;
-      }
-
-      .tc-hint-flag {
-        position: absolute;
-        top:      10px;
-        right:    10px;
-        font-size: 13px;
-        filter:   drop-shadow(0 0 5px rgba(243,156,18,0.55));
-        line-height: 1;
       }
 
       /* Leerer-State innerhalb Grid */
@@ -1788,31 +2104,6 @@
         overflow:      hidden;
       }
 
-      .detail-header {
-        background:    var(--c-bg3);
-        border-bottom: 1px solid var(--c-border);
-        padding:       14px 20px;
-        display:       flex;
-        align-items:   center;
-        gap:           14px;
-        flex-wrap:     wrap;
-      }
-
-      .dh-te-nr {
-        font-family:    var(--font-mono);
-        font-size:      15px;
-        font-weight:    700;
-        color:          var(--c-text);
-        letter-spacing: 0.03em;
-      }
-
-      .dh-supplier {
-        font-size:  12px;
-        color:      var(--c-text2);
-      }
-
-      .dh-spacer { flex: 1; }
-
       .dh-delta {
         font-family:  var(--font-mono);
         font-size:    12px;
@@ -1823,8 +2114,6 @@
 
       .dh-delta.pos  { background: var(--c-red-dim);   color: #e74c3c; }
       .dh-delta.neg  { background: var(--c-green-dim); color: #58d68d; }
-
-      .detail-body { padding: 20px; }
 
       /* ── Hinweis-Box im Detail ── */
       .detail-hint {
@@ -1840,8 +2129,6 @@
         margin-bottom: 18px;
         line-height:   1.45;
       }
-
-      .detail-hint-icon { font-size: 14px; flex-shrink: 0; margin-top: 1px; }
 
       /* ── Sektion ── */
       .d-section { margin-bottom: 22px; }
@@ -1875,6 +2162,140 @@
       }
 
       @media (max-width: 600px) { .d-cols { grid-template-columns: 1fr; } }
+
+      /* ══ Detailansicht (Etappe 3) ══ */
+      .detail-head {
+        background:    var(--c-bg2);
+        border:        1px solid var(--c-border);
+        border-radius: var(--r-lg);
+        padding:       16px 18px;
+        margin-bottom: 18px;
+        position:      relative;
+      }
+      .detail-head::before {
+        content: ''; position: absolute; left: 0; top: 0; bottom: 0;
+        width: 3px; border-radius: var(--r-lg) 0 0 var(--r-lg);
+      }
+      .detail-head.s-eingelagert::before { background: var(--c-green); }
+      .detail-head.s-verzögert::before   { background: var(--c-red); }
+      .detail-head.s-entladen::before    { background: var(--c-blue); }
+      .detail-head.s-ankunft::before     { background: var(--c-yellow); }
+      .detail-head.s-erwartet::before    { background: var(--c-text3); }
+
+      .dh-top { display: flex; align-items: center; gap: 12px; }
+      .dh-te {
+        font-family:    var(--font-mono);
+        font-size:      22px;
+        font-weight:    700;
+        letter-spacing: 0.02em;
+        color:          var(--c-text);
+      }
+      .dh-sub { font-size: 12px; color: var(--c-text2); margin-top: 2px; }
+      .dh-ewm {
+        margin-left:   auto;
+        font-family:   var(--font-mono);
+        font-size:     11px;
+        color:         var(--c-blue);
+        text-decoration: none;
+        border:        1px solid var(--c-border2);
+        border-radius: var(--r-sm);
+        padding:       4px 10px;
+      }
+      .dh-ewm:hover { background: var(--c-blue-dim); border-color: var(--c-blue); }
+      .dh-delta { font-family: var(--font-mono); font-size: 11px; padding: 3px 9px; border-radius: var(--r-sm); }
+      .dh-delta.pos { color: var(--c-red-light); background: var(--c-red-dim); }
+      .dh-delta.neg { color: var(--c-green); background: var(--c-green-dim); }
+
+      .detail-warnbar { display: flex; flex-wrap: wrap; gap: 7px; margin: 13px 0 4px; }
+      .detail-warn {
+        display: inline-flex; align-items: center; gap: 6px;
+        font-size: 11px; padding: 4px 9px; border-radius: var(--r-sm);
+        border: 1px solid transparent; cursor: help;
+      }
+      .detail-warn.w-warn { background: var(--c-yellow-dim); border-color: rgba(245,176,65,.35); color: var(--c-yellow); }
+      .detail-warn.w-krit { background: var(--c-red-dim);    border-color: rgba(231,76,60,.4);  color: var(--c-red-light); }
+      .detail-warn.w-qp   { background: var(--c-blue-dim);   border-color: rgba(61,154,214,.35);color: var(--c-blue); }
+      .detail-warn.w-info { background: var(--c-bg4);        border-color: var(--c-border2);    color: var(--c-text2); }
+      .detail-warn-txt { color: var(--c-text); }
+
+      .dh-facts {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 10px 18px;
+        margin-top: 15px;
+        padding-top: 14px;
+        border-top: 1px solid var(--c-border);
+      }
+      @media (max-width: 720px) { .dh-facts { grid-template-columns: repeat(2, 1fr); } }
+      .dh-fact { display: flex; flex-direction: column; gap: 2px; }
+      .dh-fact-l { font-size: 9px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--c-text3); }
+      .dh-fact-v { font-size: 13px; color: var(--c-text); font-family: var(--font-mono); }
+      .dh-flag { font-size: 10px; padding: 1px 5px; border-radius: 3px; }
+      .dh-flag.warn { color: var(--c-yellow); background: var(--c-yellow-dim); }
+
+      .detail-section { margin-bottom: 20px; }
+      .detail-row {
+        display: flex; justify-content: space-between; gap: 12px;
+        padding: 6px 0; border-bottom: 1px solid var(--c-border);
+        font-size: 12px;
+      }
+      .detail-row-l { color: var(--c-text2); }
+      .detail-row-v { color: var(--c-text); font-family: var(--font-mono); text-align: right; }
+
+      /* Zeitvergleiche */
+      .vgl-table { display: flex; flex-direction: column; }
+      .vgl-row {
+        display: grid;
+        grid-template-columns: 1fr auto auto;
+        gap: 12px; align-items: center;
+        padding: 6px 0; border-bottom: 1px solid var(--c-border);
+        font-size: 12px;
+      }
+      .vgl-row.leer { opacity: 0.4; }
+      .vgl-label { color: var(--c-text2); }
+      .vgl-zeit  { font-family: var(--font-mono); font-size: 10px; color: var(--c-text3); white-space: nowrap; }
+      .vgl-dauer {
+        font-family: var(--font-mono); font-size: 12px; font-weight: 600;
+        text-align: right; min-width: 62px;
+      }
+      .vgl-dauer.ok  { color: var(--c-text); }
+      .vgl-dauer.bad { color: var(--c-red-light); }
+
+      /* Positionstabelle */
+      .pt-scroll { overflow-x: auto; border: 1px solid var(--c-border); border-radius: var(--r-md); }
+      .pt-table { border-collapse: separate; border-spacing: 0; width: 100%; font-size: 11px; white-space: nowrap; }
+      .pt-table th {
+        position: sticky; top: 0; z-index: 2;
+        background: var(--c-bg3); color: var(--c-text2);
+        font-family: var(--font-mono); font-size: 9px; font-weight: 600;
+        text-transform: uppercase; letter-spacing: 0.05em;
+        text-align: left; padding: 8px 10px;
+        border-bottom: 1px solid var(--c-border2);
+      }
+      .pt-table td { padding: 7px 10px; border-bottom: 1px solid var(--c-border); color: var(--c-text); }
+      .pt-table tbody tr:last-child td { border-bottom: none; }
+      .pt-table .pt-num    { text-align: right; font-family: var(--font-mono); }
+      .pt-table .pt-center { text-align: center; }
+      .pt-sticky {
+        position: sticky; left: 0; z-index: 1;
+        background: var(--c-bg2);
+        border-right: 1px solid var(--c-border2);
+        min-width: 190px;
+      }
+      thead .pt-sticky { z-index: 3; background: var(--c-bg3); }
+      .pt-prod-nr   { font-family: var(--font-mono); font-size: 11px; color: var(--c-text); }
+      .pt-prod-name { font-size: 10px; color: var(--c-text2); margin-top: 1px;
+                      max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+      .pt-muted { color: var(--c-text3); }
+      .pt-warn  { color: var(--c-yellow); font-weight: 600; }
+      .pt-flag {
+        display: inline-block; font-size: 9px; padding: 1px 6px; border-radius: 8px;
+        font-family: var(--font-mono);
+      }
+      .pt-flag.on  { color: var(--c-yellow); background: var(--c-yellow-dim); }
+      .pt-flag.off { color: var(--c-text3); }
+      .pt-krit { color: var(--c-red-light); font-size: 10px; }
+      .pt-time-cell { font-family: var(--font-mono); color: var(--c-text2); }
 
       .d-info-list { display: flex; flex-direction: column; }
 
@@ -2060,33 +2481,6 @@
       :host([theme="light"]) .prod-table tbody tr:hover td {
         background: rgba(0,0,0,0.02);
       }
-
-      .pt-nr   { font-family: var(--font-mono); font-size: 10px; color: var(--c-text3); }
-      .pt-name { font-size: 12px; color: var(--c-text); }
-      .pt-menge {
-        font-family:  var(--font-mono);
-        font-size:    12px;
-        color:        var(--c-text);
-        text-align:   right;
-        white-space:  nowrap;
-      }
-      .pt-halle {
-        display:       inline-block;
-        padding:       2px 7px;
-        background:    var(--c-blue-dim);
-        color:         #5dade2;
-        border-radius: var(--r-sm);
-        font-family:   var(--font-mono);
-        font-size:     10px;
-        font-weight:   600;
-      }
-      .pt-time {
-        font-family: var(--font-mono);
-        font-size:   10px;
-        color:       var(--c-green);
-        white-space: nowrap;
-      }
-      .pt-time.open { color: var(--c-text3); }
 
       /* ════════════════════════════════════════════════════════════
          VIEW 3 – GANTT
@@ -2624,7 +3018,88 @@
         color:        #58d68d;
         background:   var(--c-green-dim);
       }
-    </style>
+    
+      /* ══ Palettenplanung (Etappe 4) ══ */
+      .pp-ctrl {
+        display: flex; align-items: center; justify-content: space-between;
+        gap: 16px; flex-wrap: wrap; margin-bottom: 16px;
+      }
+      .pp-title-wrap { display: flex; align-items: baseline; }
+      .pp-title { font-size: 16px; font-weight: 700; color: var(--c-text); }
+      .pp-body { min-height: 200px; }
+      .pp-sub   { font-size: 11px; color: var(--c-text2); margin-left: 8px; }
+      .pp-zeitraum { display: flex; gap: 4px; flex-wrap: wrap; }
+      .pp-chip {
+        padding: 4px 12px; border-radius: 20px;
+        font-family: var(--font-mono); font-size: 10px; font-weight: 500;
+        border: 1px solid var(--c-border2); color: var(--c-text2);
+        background: transparent; cursor: pointer; transition: all 0.15s; white-space: nowrap;
+      }
+      .pp-chip:hover  { border-color: var(--c-red-border); color: var(--c-text); }
+      .pp-chip.active { background: var(--c-red); border-color: var(--c-red); color: #fff; }
+
+      .pp-kpis { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+      .pp-kpi {
+        display: flex; flex-direction: column; gap: 2px;
+        background: var(--c-bg2); border: 1px solid var(--c-border);
+        border-radius: var(--r-md); padding: 10px 16px; min-width: 90px;
+      }
+      .pp-kpi-val { font-family: var(--font-mono); font-size: 20px; font-weight: 700; color: var(--c-text); }
+      .pp-kpi-lbl { font-size: 10px; color: var(--c-text2); }
+
+      .pp-empty {
+        padding: 40px; text-align: center; color: var(--c-text2);
+        background: var(--c-bg2); border: 1px dashed var(--c-border2); border-radius: var(--r-md);
+      }
+
+      .pp-scroll { overflow-x: auto; border: 1px solid var(--c-border); border-radius: var(--r-md); }
+      .pp-table { border-collapse: separate; border-spacing: 0; width: 100%; font-size: 12px; }
+      .pp-table th, .pp-table td { padding: 8px 12px; white-space: nowrap; }
+
+      .pp-corner {
+        position: sticky; left: 0; z-index: 3;
+        background: var(--c-bg3); color: var(--c-text2);
+        font-family: var(--font-mono); font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em;
+        text-align: left; min-width: 180px;
+        border-bottom: 1px solid var(--c-border2);
+      }
+      .pp-tag {
+        background: var(--c-bg3); text-align: center; color: var(--c-text2);
+        border-bottom: 1px solid var(--c-border2); border-left: 1px solid var(--c-border);
+      }
+      .pp-tag.heute { background: var(--c-red-dim); }
+      .pp-tag-wd { font-family: var(--font-mono); font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em; }
+      .pp-tag-dm { font-family: var(--font-mono); font-size: 12px; font-weight: 700; color: var(--c-text); margin-top: 1px; }
+
+      .pp-halle-row td {
+        background: var(--c-bg3); border-top: 2px solid var(--c-border2);
+        border-bottom: 1px solid var(--c-border);
+      }
+      .pp-halle-name {
+        position: sticky; left: 0; z-index: 1;
+        font-weight: 700; color: var(--c-text); background: var(--c-bg3);
+      }
+      .pp-halle-total { font-family: var(--font-mono); font-size: 10px; color: var(--c-text2); text-align: right; }
+
+      .pp-pack-row td { border-bottom: 1px solid var(--c-border); }
+      .pp-pack-name {
+        position: sticky; left: 0; z-index: 1;
+        background: var(--c-bg2); color: var(--c-text2); padding-left: 20px;
+        border-right: 1px solid var(--c-border2);
+      }
+      .pp-pack-row.undef .pp-pack-name { color: var(--c-yellow); }
+      .pp-cell { text-align: center; font-family: var(--font-mono); border-left: 1px solid var(--c-border); color: var(--c-text); }
+      .pp-cell.leer { color: var(--c-text3); }
+      .pp-cell.pp-sum { font-weight: 700; background: var(--c-bg3); }
+
+      .pp-halle-sum td { background: var(--c-bg3); border-bottom: 2px solid var(--c-border2); }
+      .pp-halle-sum .pp-pack-name { font-weight: 600; color: var(--c-text); background: var(--c-bg3); padding-left: 12px; }
+
+      .pp-foot td { background: var(--c-bg4); border-top: 2px solid var(--c-border2); }
+      .pp-foot .pp-pack-name { position: sticky; left: 0; font-weight: 700; color: var(--c-text); background: var(--c-bg4); padding-left: 12px; }
+      .pp-cell.pp-grand { font-weight: 700; color: var(--c-red-light); }
+
+</style>
 
     <!-- ── DOM ────────────────────────────────────────────────────────── -->
     <div class="widget-root">
@@ -2673,6 +3148,9 @@
           </button>
           <button class="nav-tab" data-view="gantt">
             <span class="nav-tab-icon">▤</span><span class="nav-tab-label">Zeitstrahl</span>
+          </button>
+          <button class="nav-tab" data-view="paletten">
+            <span class="nav-tab-icon">▦</span><span class="nav-tab-label">Palettenplanung</span>
           </button>
         </div>
 
@@ -2746,6 +3224,7 @@
           <div class="filter-bar">
             <span class="filter-label">Zeitraum</span>
             <div class="zeitraum-chips">
+              <button class="zeitraum-chip" data-zeitraum="gestern">Gestern</button>
               <button class="zeitraum-chip active" data-zeitraum="heute">Heute</button>
               <button class="zeitraum-chip" data-zeitraum="woche">Diese Woche</button>
               <button class="zeitraum-chip" data-zeitraum="geplant">Geplant</button>
@@ -2771,12 +3250,27 @@
             <div class="group-mode-switch" role="group" aria-label="Gruppierung">
               <button class="group-mode-btn active" data-gruppe="status" title="Nach Status gruppieren">Status</button>
               <button class="group-mode-btn" data-gruppe="ladestelle" title="Nach Ladestelle gruppieren">Ladestelle</button>
+              <button class="group-mode-btn" data-gruppe="datum" title="Als Spalten je Tag (geplanter Start)">Datum</button>
               <button class="group-mode-btn" data-gruppe="keine" title="Nicht gruppieren">Keine</button>
             </div>
+            <div class="te-search">
+              <span class="te-search-ico">🔍</span>
+              <input type="search" id="te-search-input" class="te-search-input"
+                     placeholder="TE-Nr. oder Lieferant suchen…" autocomplete="off"
+                     aria-label="Transporteinheiten suchen">
+              <button class="te-search-clear hidden" id="te-search-clear" title="Suche zurücksetzen">×</button>
+            </div>
+          </div>
+          <div class="search-notice hidden" id="search-notice">
+            <span>🔍 Suche aktiv — Zeitraum- und Statusfilter sind ausgesetzt</span>
+            <button class="search-notice-btn" id="search-notice-reset">Zurücksetzen</button>
           </div>
           <div class="te-grid" id="te-grid">
           </div>
         </div>
+
+        <!-- Geteiltes Hover-Popup: EIN Element für alle Kacheln -->
+        <div class="tc-popup" id="te-popup" aria-hidden="true"></div>
 
         <!-- ── VIEW: TORE ── -->
         <div class="view" id="view-tore">
@@ -2808,6 +3302,24 @@
             </div>
           </div>
           <div id="gantt-content"></div>
+        </div>
+
+        <!-- ── VIEW: PALETTENPLANUNG ── -->
+        <div class="view" id="view-paletten">
+          <div class="pp-ctrl">
+            <div class="pp-title-wrap">
+              <span class="pp-title">Palettenbedarf</span>
+              <span class="pp-sub" id="pp-sub">nach Halle und Packmittel</span>
+            </div>
+            <div class="pp-zeitraum" id="pp-zeitraum-chips">
+              <button class="pp-chip" data-pp="gestern">Gestern</button>
+              <button class="pp-chip active" data-pp="heute">Heute</button>
+              <button class="pp-chip" data-pp="morgen">Morgen</button>
+              <button class="pp-chip" data-pp="woche">Diese Woche</button>
+              <button class="pp-chip" data-pp="geplant">Geplant (14 T.)</button>
+            </div>
+          </div>
+          <div class="pp-body" id="pp-content"></div>
         </div>
 
       </div>
@@ -2842,7 +3354,10 @@
       this._loaderTimer    = null;      // Ladeanimation-Timer
       this._autoRefresh    = false;     // Auto-Aktualisierung aktiv?
       this._lsFilter       = 'alle';    // Ladestellen-Filter: 'alle'|'BSL'|'Container'|'Landverkehr'
-      this._gruppierModus  = 'status';  // 'status'|'ladestelle'|'keine' — Default: nach Status (Live/Abgeschlossen/Geplant)
+      this._gruppierModus  = 'status';  // 'status'|'ladestelle'|'datum'|'keine'
+      this._suchbegriff    = '';        // aktive Suche (setzt Filter aus)
+      this._suchTimer      = null;      // Debounce-Handle
+      this._ppZeitraum     = 'heute';   // Palettenplanung: eigener Zeitraum
     }
 
     connectedCallback() {
@@ -2858,6 +3373,7 @@
       this._stopCountdown();
       this._stopClock();
       this._stopLoaderSteps();
+      clearTimeout(this._suchTimer);
     }
 
     // ── Hilfsmethode: Element im Shadow DOM finden ───────────────────────
@@ -2925,13 +3441,61 @@
         }, opts);
       });
 
-      // Gruppierungs-Umschalter (Status / Ladestelle / Keine)
+      // Gruppierungs-Umschalter (Status / Ladestelle / Datum / Keine)
       this._shadow.querySelectorAll('.group-mode-btn').forEach(btn => {
         btn.addEventListener('click', () => {
           this._gruppierModus = btn.dataset.gruppe;
           this._shadow.querySelectorAll('.group-mode-btn').forEach(b =>
             b.classList.toggle('active', b === btn));
           this._renderKacheln();
+        }, opts);
+      });
+
+      // Popup hängt im .body und scrollt nicht mit → beim Scrollen ausblenden.
+      // Einmalig hier registriert, nicht bei jedem Render.
+      // capture:true — Scroll-Events blubbern nicht. Im Datumsspalten-Modus
+      // scrollen die einzelnen Spalten-Bodies, die wir so trotzdem erwischen.
+      this._$('view-kacheln')?.addEventListener('scroll', () => this._versteckePopup(),
+        { passive: true, capture: true, signal: this._ac.signal });
+
+      // ── Suche (Debounce 150ms) ─────────────────────────────────────────
+      const sucheInput = this._$('te-search-input');
+      const sucheClear = this._$('te-search-clear');
+      const notice     = this._$('search-notice');
+
+      const sucheAnwenden = (wert) => {
+        this._suchbegriff = wert;
+        sucheClear?.classList.toggle('hidden', !wert);
+        notice?.classList.toggle('hidden', !wert);
+        this._updateKPIs();
+        this._renderKacheln();
+      };
+
+      sucheInput?.addEventListener('input', () => {
+        clearTimeout(this._suchTimer);
+        const wert = sucheInput.value;
+        this._suchTimer = setTimeout(() => sucheAnwenden(wert), 150);
+      }, opts);
+
+      sucheInput?.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') { sucheInput.value = ''; sucheAnwenden(''); }
+      }, opts);
+
+      const sucheZuruecksetzen = () => {
+        if (sucheInput) sucheInput.value = '';
+        clearTimeout(this._suchTimer);
+        sucheAnwenden('');
+      };
+      sucheClear?.addEventListener('click', sucheZuruecksetzen, opts);
+      this._$('search-notice-reset')?.addEventListener('click', sucheZuruecksetzen, opts);
+
+      // ── Palettenplanung: Zeitraum-Chips ────────────────────────────────
+      this._shadow.querySelectorAll('.pp-chip').forEach(btn => {
+        btn.addEventListener('click', () => {
+          this._ppZeitraum = btn.dataset.pp;
+          this._shadow.querySelectorAll('.pp-chip').forEach(b =>
+            b.classList.toggle('active', b === btn));
+          this._renderPaletten();
         }, opts);
       });
 
@@ -2966,8 +3530,9 @@
           t.classList.toggle('active', t.dataset.view === name);
         });
       }
-      // Tore-View bei Bedarf rendern
+      // Views bei Bedarf rendern
       if (name === 'tore') this._renderTore();
+      if (name === 'paletten') this._renderPaletten();
     }
 
     // ── Live-Uhr ──────────────────────────────────────────────────────────
@@ -3130,6 +3695,8 @@
       const jetzt = jetztWanduhr();
       const heute = new Date(Date.UTC(jetzt.getUTCFullYear(), jetzt.getUTCMonth(), jetzt.getUTCDate()));
       switch (this._activeZeitraum) {
+        case 'gestern':
+          return { von: new Date(heute.getTime() - 86400000), bis: heute };
         case 'heute':
           return { von: heute, bis: new Date(heute.getTime() + 86400000) };
         case 'woche': {
@@ -3139,7 +3706,8 @@
           return { von: mo, bis: new Date(mo.getTime() + 7 * 86400000) };
         }
         case 'geplant':
-          // Kommende 14 Tage ab heute (Vorschau geplanter Anlieferungen)
+          // Vorschau: kommende 14 Tage. Die eigentliche Schärfung ("geplanter
+          // Start noch nicht erreicht") passiert in _tesFuerZeitraum().
           return { von: heute, bis: new Date(heute.getTime() + 14 * 86400000) };
         case '7tage':
           // Symmetrisch: 7 Tage zurück bis 7 Tage voraus
@@ -3154,11 +3722,42 @@
     }
 
     _tesFuerZeitraum() {
+      const alle = [...this._teMap.values()];
+
+      // Aktive Suche setzt Zeitraum- und Statusfilter aus: sonst findet man
+      // eine TE nicht, die außerhalb des gewählten Fensters liegt.
+      const q = (this._suchbegriff ?? '').trim().toLowerCase();
+      if (q) {
+        return alle.filter(te =>
+          String(te.te).toLowerCase().includes(q) ||
+          String(te.teExt ?? '').toLowerCase().includes(q) ||
+          String(te.lieferantName ?? '').toLowerCase().includes(q)
+        );
+      }
+
       const { von, bis } = this._zeitraumBereich();
-      return [...this._teMap.values()].filter(te => {
+      const jetzt = jetztWanduhr();
+
+      return alle.filter(te => {
         const anker = te.geplantStart ?? te.tsAnkunft;
-        return anker && anker >= von && anker < bis;
+        if (!anker || anker < von || anker >= bis) return false;
+        // "Geplant" zeigt nur TEs, deren geplanter Start noch bevorsteht.
+        if (this._activeZeitraum === 'geplant') {
+          return te.geplantStart != null && te.geplantStart > jetzt;
+        }
+        return true;
       });
+    }
+
+    // Statusgruppe für die Übersicht. Überfällige TEs (geplante Zeit
+    // verstrichen, nie angekommen) gehören zu "Live" — dort schaut der
+    // Disponent hin. Sonst wären sie in "Geplant" unsichtbar.
+    _statusGruppe(te) {
+      if (te.status === 'eingelagert') return 'abgeschlossen';
+      if (te.status === 'erwartet') {
+        return te.abweichungGrund === 'überfällig' ? 'live' : 'geplant';
+      }
+      return 'live';
     }
 
     _updateKPIs() {
@@ -3173,6 +3772,7 @@
       this._$('kpi-abgefahren').textContent = abgefahren;
 
       const labels = {
+        gestern:'Gestern',
         heute:  'Heute · ' + new Date().toLocaleDateString('de-DE',{day:'2-digit',month:'2-digit',year:'numeric'}),
         woche:  'Diese Woche',
         geplant:'Geplant · kommende 14 Tage',
@@ -3221,38 +3821,38 @@
       }
 
       const modus = this._gruppierModus ?? 'status';
+      // Bei aktiver Suche ist Gruppierung nur Lärm — flach ausgeben.
+      const effModus = this._suchbegriff ? 'keine' : modus;
 
-      if (modus === 'status') {
-        // ── Gruppiert nach Status: Live / Abgeschlossen / Geplant ──
-        const gruppen = {
-          live:         { titel: 'Live', icon: '🔴', col: 'var(--c-red-light)',
-                          hint: 'in Bearbeitung', tes: [] },
-          abgeschlossen:{ titel: 'Abgeschlossen', icon: '✅', col: 'var(--c-green)',
-                          hint: 'eingelagert', tes: [] },
-          geplant:      { titel: 'Geplant', icon: '🗓️', col: 'var(--c-text2)',
-                          hint: 'noch nicht eingetroffen', tes: [] },
+      const gruppenHeader = (icon, titel, farbe, anzahl, warnAnzahl) => `
+        <div class="ls-gruppe-header">
+          <span class="ls-gruppe-title" style="color:${farbe}">${icon} ${esc(titel)}</span>
+          <span class="ls-gruppe-count">${anzahl} TE${anzahl !== 1 ? 's' : ''}</span>
+          ${warnAnzahl ? `<span class="ls-gruppe-count" style="background:var(--c-yellow-dim);color:var(--c-yellow)">${warnAnzahl} ⚠</span>` : ''}
+          <div class="ls-gruppe-line"></div>
+        </div>`;
+
+      if (effModus === 'status') {
+        // ── Live / Abgeschlossen / Geplant ──
+        const meta = {
+          live:          { titel: 'Live',          icon: '🔴', col: 'var(--c-red-light)' },
+          abgeschlossen: { titel: 'Abgeschlossen', icon: '✅', col: 'var(--c-green)'     },
+          geplant:       { titel: 'Geplant',       icon: '🗓️', col: 'var(--c-text2)'     },
         };
-        for (const te of tes) {
-          if (te.status === 'eingelagert')      gruppen.abgeschlossen.tes.push(te);
-          else if (te.status === 'erwartet')    gruppen.geplant.tes.push(te);
-          else                                  gruppen.live.tes.push(te); // ankunft/entladen/verzögert
-        }
+        const buckets = { live: [], abgeschlossen: [], geplant: [] };
+        for (const te of tes) buckets[this._statusGruppe(te)].push(te);
+
         grid.innerHTML = ['live', 'abgeschlossen', 'geplant']
-          .filter(k => gruppen[k].tes.length > 0)
+          .filter(k => buckets[k].length)
           .map(k => {
-            const g = gruppen[k];
-            const vz = g.tes.filter(t => t.planabweichung).length;
-            const header = `<div class="ls-gruppe-header">
-              <span class="ls-gruppe-title" style="color:${g.col}">${g.icon} ${esc(g.titel)}</span>
-              <span class="ls-gruppe-count">${g.tes.length} TE${g.tes.length !== 1 ? 's' : ''}</span>
-              ${vz ? `<span class="ls-gruppe-count" style="background:var(--c-yellow-dim);color:var(--c-yellow)">${vz} ⚠</span>` : ''}
-              <div class="ls-gruppe-line"></div>
-            </div>`;
-            return header + g.tes.map(te => this._teKachelHTML(te)).join('');
+            const m  = meta[k];
+            const gr = buckets[k];
+            const vz = gr.filter(t => t.planabweichung).length;
+            return gruppenHeader(m.icon, m.titel, m.col, gr.length, vz)
+                 + gr.map(te => this._teKachelHTML(te)).join('');
           }).join('');
 
-      } else if (modus === 'ladestelle') {
-        // ── Gruppiert nach Ladestelle ──
+      } else if (effModus === 'ladestelle') {
         const LS_LANG = {
           BSL:              'ILW Krefeld BSL',
           Container:        'ILW Krefeld Container',
@@ -3260,41 +3860,147 @@
           Eigendisposition: 'Eigendisposition',
         };
         const byLS = {};
-        for (const te of tes) {
-          const ls = ladestelleKurz(te.ladestelle);
-          if (!byLS[ls]) byLS[ls] = [];
-          byLS[ls].push(te);
-        }
+        for (const te of tes) (byLS[ladestelleKurz(te.ladestelle)] ??= []).push(te);
+
         grid.innerHTML = LADESTELLE_KATEGORIEN
-          .filter(ls => byLS[ls]?.length > 0)
+          .filter(ls => byLS[ls]?.length)
           .map(ls => {
-            const style = LADESTELLE_STYLE[ls] ?? LADESTELLE_STYLE.Eigendisposition;
+            const st = LADESTELLE_STYLE[ls] ?? LADESTELLE_STYLE.Eigendisposition;
             const gr = byLS[ls];
-            const vz = gr.filter(t => t.status === 'verzögert').length;
-            const header = `<div class="ls-gruppe-header">
-              <span class="ls-gruppe-title" style="color:${style.col}">${style.icon} ${esc(LS_LANG[ls] ?? ls)}</span>
-              <span class="ls-gruppe-count">${gr.length} TE${gr.length !== 1 ? 's' : ''}</span>
-              ${vz ? `<span class="ls-gruppe-count" style="background:var(--c-red-dim);color:#e74c3c">${vz} verzögert</span>` : ''}
-              <div class="ls-gruppe-line"></div>
-            </div>`;
-            return header + gr.map(te => this._teKachelHTML(te)).join('');
+            const vz = gr.filter(t => t.planabweichung).length;
+            return gruppenHeader(st.icon, LS_LANG[ls] ?? ls, st.col, gr.length, vz)
+                 + gr.map(te => this._teKachelHTML(te)).join('');
           }).join('');
 
+      } else if (effModus === 'datum') {
+        // ── Spalten je Tag (Anker: geplanter Start) ──
+        // Eigenes Layout: horizontal scrollbar, eine Spalte pro Kalendertag.
+        const tagKey = (d) => Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+        const byTag = new Map();
+        const ohneDatum = [];
+        for (const te of tes) {
+          const anker = te.geplantStart ?? te.tsAnkunft;
+          if (!anker) { ohneDatum.push(te); continue; }
+          const k = tagKey(anker);
+          if (!byTag.has(k)) byTag.set(k, []);
+          byTag.get(k).push(te);
+        }
+        const heuteKey = (() => { const j = jetztWanduhr();
+          return Date.UTC(j.getUTCFullYear(), j.getUTCMonth(), j.getUTCDate()); })();
+
+        const spalten = [...byTag.keys()].sort((a, b) => a - b).map(k => {
+          const d  = new Date(k);
+          const gr = byTag.get(k).sort((a, b) =>
+            (a.geplantStart ?? a.tsAnkunft) - (b.geplantStart ?? b.tsAnkunft));
+          const vz = gr.filter(t => t.planabweichung).length;
+          const istHeute = k === heuteKey;
+          return `
+            <div class="datum-spalte${istHeute ? ' heute' : ''}">
+              <div class="datum-spalte-head">
+                <div class="datum-spalte-tag">
+                  ${d.toLocaleDateString('de-DE', { weekday: 'short', timeZone: 'UTC' })}
+                  ${istHeute ? '<span class="datum-heute-tag">heute</span>' : ''}
+                </div>
+                <div class="datum-spalte-datum">${d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', timeZone: 'UTC' })}</div>
+                <div class="datum-spalte-meta">
+                  <span>${gr.length} TE${gr.length !== 1 ? 's' : ''}</span>
+                  ${vz ? `<span class="datum-spalte-warn">${vz} ⚠</span>` : ''}
+                </div>
+              </div>
+              <div class="datum-spalte-body">${gr.map(te => this._teKachelHTML(te)).join('')}</div>
+            </div>`;
+        }).join('');
+
+        const rest = ohneDatum.length ? `
+          <div class="datum-spalte">
+            <div class="datum-spalte-head">
+              <div class="datum-spalte-tag">Ohne Datum</div>
+              <div class="datum-spalte-meta"><span>${ohneDatum.length} TEs</span></div>
+            </div>
+            <div class="datum-spalte-body">${ohneDatum.map(te => this._teKachelHTML(te)).join('')}</div>
+          </div>` : '';
+
+        grid.innerHTML = `<div class="datum-board">${spalten}${rest}</div>`;
+
       } else {
-        // ── Ungruppiert ──
         grid.innerHTML = tes.map(te => this._teKachelHTML(te)).join('');
       }
+
+      // Grid-Klasse steuert Kachel- vs. Spaltenlayout
+      grid.classList.toggle('board-modus', effModus === 'datum');
 
       // Klick-Handler: Delegation auf Grid-Ebene — ein Listener für alle Karten
       // (vorher jeden einzelnen click-handler pro Karte setzen würde bei vielen TEs
       //  zu O(n) Listener-Attachments führen)
       grid.onclick = (e) => {
+        // Klick auf die TE-Nummer öffnet EWM, nicht die Detailansicht.
+        const ewm = e.target.closest('[data-ewm]');
+        if (ewm) { e.stopPropagation(); return; }   // <a> übernimmt den Rest
         const card = e.target.closest('.te-card');
         if (card?.dataset.te) this._renderDetail(card.dataset.te);
       };
+
+      // ── Geteiltes Hover-Popup ──────────────────────────────────────────
+      // Ein einziges Popup-Element für alle Kacheln. Bei 300 TEs spart das
+      // 300 versteckte Detailblöcke im DOM.
+      grid.onmouseover = (e) => {
+        const card = e.target.closest('.te-card');
+        if (!card || card === this._popupCard) return;
+        const te = this._teMap.get(card.dataset.te);
+        if (!te) return;
+        this._popupCard = card;
+        this._zeigePopup(card, te);
+      };
+      grid.onmouseout = (e) => {
+        const card = e.target.closest('.te-card');
+        if (!card) return;
+        if (e.relatedTarget && card.contains(e.relatedTarget)) return;
+        this._popupCard = null;
+        this._versteckePopup();
+      };
+
     }
 
     // Ladestellen-Badge HTML
+    // ── Geteiltes Popup: anzeigen / verstecken ────────────────────────
+    _zeigePopup(card, te) {
+      const pop  = this._$('te-popup');
+      const host = pop?.parentElement;   // .body — der Positionierungskontext
+      if (!pop || !host) return;
+
+      pop.innerHTML = this._popupHTML(te);
+      pop.classList.add('visible');
+      pop.setAttribute('aria-hidden', 'false');
+
+      // Beide Rects sind Viewport-Koordinaten, die Scroll-Position ist darin
+      // bereits enthalten. Deshalb KEIN scrollTop/scrollLeft addieren —
+      // das Popup ist ein Kind von .body und scrollt nicht mit der View mit.
+      const cr = card.getBoundingClientRect();
+      const hr = host.getBoundingClientRect();
+      const pw = pop.offsetWidth  || 300;
+      const ph = pop.offsetHeight || 320;
+
+      let left = (cr.left - hr.left) + (cr.width / 2) - (pw / 2);
+      left = Math.max(6, Math.min(left, hr.width - pw - 6));
+
+      // Unter die Kachel, sofern darunter Platz ist — sonst darüber.
+      const nachOben = (cr.bottom + ph + 16) > hr.bottom;
+      let top = nachOben
+        ? (cr.top - hr.top) - ph - 8
+        : (cr.bottom - hr.top) + 8;
+      top = Math.max(4, Math.min(top, hr.height - ph - 4));
+
+      pop.style.left = `${left}px`;
+      pop.style.top  = `${top}px`;
+    }
+
+    _versteckePopup() {
+      const pop = this._$('te-popup');
+      if (!pop) return;
+      pop.classList.remove('visible');
+      pop.setAttribute('aria-hidden', 'true');
+    }
+
     // Badge zeigt die KURZE Kategorie (BSL / Container / Landverkehr / Eigendisposition).
     // Nimmt entweder die lange BW-Bezeichnung oder eine bereits kurze entgegen.
     _lsBadgeHTML(ladestelle) {
@@ -3303,140 +4009,155 @@
       return `<span class="ls-badge ${style.cls}">${style.icon} ${esc(kurz)}</span>`;
     }
 
-    // Baut das HTML für eine einzelne TE-Kachel (schlank + Hover-Popup)
+    // ── Kachel ────────────────────────────────────────────────────────
+    // Schlank gehalten: nur was der Lagerleiter beim Scannen braucht.
+    // Alle Details liegen im geteilten Hover-Popup (siehe _popupHTML).
     _teKachelHTML(te) {
       const status = te.status;
+      const badgeLabel = STATUS_LABEL[status] ?? status;
 
-      const badgeLabel = {
-        erwartet:    'Erwartet',
-        ankunft:     'Eingetroffen',
-        entladen:    'Wird entladen',
-        eingelagert: 'Eingelagert',
-        abgefahren:  'Abgefahren',
-        'verzögert': 'Verzögert',
-      }[status] ?? status;
+      // Warnleiste: max. 4 Icons, Rest als "+n"-Overflow.
+      let warnHTML = '';
+      if (te.warnungen.length) {
+        const sicht = te.warnungen.slice(0, 4);
+        const rest  = te.warnungen.slice(4);
+        const icons = sicht.map(w =>
+          `<span class="tc-warn w-${w.farbe}" title="${esc(w.tooltip)}">${w.icon}</span>`
+        ).join('');
+        const overflow = rest.length
+          ? `<span class="tc-warn w-more" title="${esc(rest.map(w => w.label + ': ' + w.tooltip).join('\n\n'))}">+${rest.length}</span>`
+          : '';
+        warnHTML = `<div class="tc-warnbar">${icons}${overflow}</div>`;
+      }
 
-      // ── Fortschrittsbalken (6 Pflicht-Schritte + optionale Abfahrt) ──
-      const schritte = this._fortschrittHTML(te);
-
-      // ── Meta fürs Popup ──
-      const anzahlProdukte = te.produkte.length;
-      const hallen = [...new Set(te.produkte.map(p => p.halle).filter(Boolean))];
-      const halleText = hallen.length > 0 ? hallen.join('/') : (te.halle ?? '–');
-      const lsKurz = ladestelleKurz(te.ladestelle);
-
-      // ── Δ-Zeit / Planabweichung (nur EIN Indikator, priorisiert) ──
+      // Ein einzelner Statushinweis, priorisiert.
       let statusHint = '';
       if (te.planabweichung) {
         const txt = te.abweichungGrund === 'überfällig'
-          ? `+${fmtDauer(te.ueberfaelligMin)}`
+          ? `${fmtDauer(te.ueberfaelligMin)}`
           : 'verzögert';
         statusHint = `<span class="tc-hint-badge warn">⚠ ${esc(txt)}</span>`;
       } else if (te.verzoegerungMin != null && te.verzoegerungMin > 0) {
-        statusHint = `<span class="tc-hint-badge warn">+${fmtDauer(te.verzoegerungMin)}</span>`;
+        statusHint = `<span class="tc-hint-badge warn">${fmtDauer(te.verzoegerungMin)}</span>`;
       } else if (status === 'eingelagert') {
         statusHint = `<span class="tc-hint-badge ok">pünktlich</span>`;
       }
 
-      // ── Zeit-Anker (kompakt) ──
-      const zeitText = te.tsAnkunft
-        ? `ab ${fmtTime(te.tsAnkunft)}`
-        : te.geplantStart
-          ? `geplant ${fmtTime(te.geplantStart)}`
-          : '';
-
-      const abwKlasse = te.planabweichung ? ' abweichung' : '';
-
-      // ── Hover-Popup mit ALLEN Details ──
-      const popRow = (label, value) => value && value !== '–'
-        ? `<div class="tc-pop-row"><span class="tc-pop-label">${esc(label)}</span><span class="tc-pop-val">${esc(value)}</span></div>`
-        : '';
-      const popTime = (label, ts) => `<div class="tc-pop-row"><span class="tc-pop-label">${esc(label)}</span><span class="tc-pop-val">${ts ? fmtDateTime(ts) : '–'}</span></div>`;
-
-      const popup = `
-        <div class="tc-popup">
-          <div class="tc-pop-head">
-            <span class="tc-pop-te">${esc(te.te)}</span>
-            <span class="tc-badge badge-${esc(status)}">${esc(badgeLabel)}</span>
-          </div>
-          ${popRow('Lieferant', te.lieferantName)}
-          ${popRow('Ladestelle', lsKurz)}
-          ${popRow('Tor', te.tor ?? 'noch nicht zugewiesen')}
-          ${popRow('Halle', halleText !== '–' ? 'H ' + halleText : '')}
-          ${popRow('Produkte', String(anzahlProdukte))}
-          <div class="tc-pop-sep"></div>
-          ${popTime('Geplanter Start', te.geplantStart)}
-          ${popTime('Ankunft', te.tsAnkunft)}
-          ${popTime('Angedockt', te.tsAngedockt)}
-          ${popTime('Entladen ab', te.tsEntladenStart)}
-          ${popTime('Entladen bis', te.tsEntladenEnde)}
-          ${popTime('WE gebucht', te.tsWeBuchung)}
-          ${popTime('Fertigstellung', te.tsEinlagerung)}
-          ${popTime('Abfahrt', te.tsAbfahrt)}
-          ${te.teHinweis ? `<div class="tc-pop-sep"></div><div class="tc-pop-hint">⚠ ${esc(te.teHinweis)}</div>` : ''}
-        </div>`;
+      // Frachtführer nur mit Klartext zeigen — eine nackte Key-Nummer hilft nicht.
+      const ff = te.frachtfuehrer;
+      const ffText = (ff && ff.text && ff.text !== ff.key) ? ff.text : '';
+      const zeitText = te.geplantStart ? `ab ${fmtTime(te.geplantStart)}` : '';
 
       return /* html */`
-        <div class="te-card s-${esc(status)}${abwKlasse}" data-te="${esc(te.te)}" role="button" tabindex="0"
-             aria-label="TE ${esc(te.te)}, Status: ${esc(badgeLabel)}${te.planabweichung ? ', Planabweichung' : ''}">
-          <div class="tc-header">
-            <div class="tc-meta">
-              <div class="tc-te-nr">${esc(te.te)}</div>
-              <div class="tc-supplier">${esc(te.lieferantName ?? '–')}</div>
-            </div>
+        <div class="te-card s-${esc(status)}${te.planabweichung ? ' abweichung' : ''}"
+             data-te="${esc(te.te)}" role="button" tabindex="0"
+             aria-label="TE ${esc(te.te)}, Status: ${esc(badgeLabel)}">
+          ${warnHTML}
+          <div class="tc-head">
+            <a class="tc-te-nr" data-ewm="${esc(te.te)}" href="${esc(ewmLink(te.te))}"
+               target="_blank" rel="noopener" title="In EWM öffnen">${esc(te.te)}<span class="tc-ext-ico">↗</span></a>
+            ${te.transportmittel ? `<span class="tc-tm">${esc(te.transportmittel)}</span>` : ''}
+            ${ffText ? `<span class="tc-ff">${esc(ffText)}</span>` : ''}
+            <div class="tc-spacer"></div>
             <span class="tc-badge badge-${esc(status)}">${esc(badgeLabel)}</span>
           </div>
-          <div class="tc-progress">${schritte}</div>
+          <div class="tc-sub">
+            ${te.teExt ? `<span class="tc-te-ext">${esc(te.teExt)}</span>` : ''}
+            <span class="tc-supplier">${esc(te.lieferantName ?? '–')}</span>
+          </div>
+          <div class="tc-progress">${this._fortschrittHTML(te)}</div>
           <div class="tc-footer">
             ${this._lsBadgeHTML(te.ladestelle ?? 'Landverkehr')}
+            <span class="tc-fact">${te.anzahlPositionen} Pos.</span>
+            ${te.halle ? `<span class="tc-fact">${esc(te.halle)}</span>` : ''}
             ${te.tor ? `<span class="tor-badge-card">${esc(te.tor)}</span>` : ''}
-            <div class="tc-footer-spacer"></div>
+            <div class="tc-spacer"></div>
             ${zeitText ? `<span class="tc-time">${esc(zeitText)}</span>` : ''}
             ${statusHint}
           </div>
-          ${popup}
         </div>
       `;
     }
 
-    // Baut den Fortschrittsbalken (6 Pflicht-Schritte + optionale Abfahrt)
-    // Bei geplanten TEs deren Zeit noch nicht erreicht ist: alle grau.
-    // Ist die geplante Zeit erreicht aber keine Ankunft: rot blinkend.
+    // Fortschrittsbalken: 6 Pflichtschritte + optionale Abfahrt.
+    // Geplante TE deren Zeit noch nicht erreicht ist → alles grau.
+    // Zeit erreicht, aber keine Ankunft → erster Balken blinkt rot.
+    // Jeder Balken trägt seinen Prozessnamen + Zeit als title (kostenloser Tooltip).
     _fortschrittHTML(te) {
       const jetzt = jetztWanduhr();
-      const tsFelder = [
+      const schrittTs = [
         te.tsAnkunft, te.tsAngedockt, te.tsEntladenStart,
         te.tsEntladenEnde, te.tsWeBuchung, te.tsEinlagerung,
       ];
       const isVerspaetet = te.status === 'verzögert';
-
-      // Geplante TE (noch keine Ankunft)
-      const nochNichtDa = !te.tsAnkunft;
+      const nochNichtDa  = !te.tsAnkunft;
       const planErreicht = te.geplantStart && jetzt >= te.geplantStart;
-      // Überfällig: geplante Zeit erreicht, aber keine Ankunft → rot blinkend
       const ueberfaellig = nochNichtDa && planErreicht;
 
-      let schritte = tsFelder.map((ts, i) => {
-        const isDone   = ts !== null;
-        const isActive = !isDone && i === te.fortschritt;
+      let html = schrittTs.map((ts, i) => {
+        const name  = PROZESS_SCHRITTE[i];
+        const isDone = ts !== null;
         let cls = 'tc-step';
         if (isDone) {
           cls += isVerspaetet ? ' late' : ' done';
         } else if (ueberfaellig && i === 0) {
-          // Erster Schritt (Ankunft) blinkt rot wenn überfällig
           cls += ' overdue';
-        } else if (isActive && !nochNichtDa) {
+        } else if (!isDone && i === te.fortschritt && !nochNichtDa) {
           cls += isVerspaetet ? ' active late' : ' active';
         }
-        // sonst: bleibt grau (Default)
-        return `<div class="${cls}"></div>`;
+        const tip = isDone
+          ? `${name}\n${fmtDateTime(ts)}`
+          : (ueberfaellig && i === 0)
+            ? `${name}\nÜberfällig — geplant ${fmtTime(te.geplantStart)}`
+            : `${name}\nnoch offen`;
+        return `<div class="${cls}" title="${esc(tip)}"></div>`;
       }).join('');
 
-      // Optionaler Abfahrt-Schritt (gestrichelt, abgesetzt)
-      const abfahrtCls = te.abgefahren ? 'tc-step-abfahrt done' : 'tc-step-abfahrt';
-      schritte += `<div class="tc-step-sep"></div><div class="${abfahrtCls}" title="${te.abgefahren ? 'Abgefahren' : 'Noch nicht abgefahren'}"></div>`;
+      const abTip = te.abgefahren
+        ? `Abfahrt vom Kontrollpunkt\n${fmtDateTime(te.tsAbfahrt)}`
+        : 'Abfahrt (optional)\nnoch nicht abgefahren';
+      html += `<div class="tc-step-sep"></div>`
+            + `<div class="tc-step-abfahrt${te.abgefahren ? ' done' : ''}" title="${esc(abTip)}"></div>`;
+      return html;
+    }
 
-      return schritte;
+    // Inhalt des geteilten Hover-Popups für eine TE.
+    _popupHTML(te) {
+      const row = (l, v) => (v && v !== '–')
+        ? `<div class="tc-pop-row"><span class="tc-pop-label">${esc(l)}</span><span class="tc-pop-val">${esc(v)}</span></div>` : '';
+      const time = (l, ts) =>
+        `<div class="tc-pop-row"><span class="tc-pop-label">${esc(l)}</span><span class="tc-pop-val">${ts ? fmtDateTime(ts) : '–'}</span></div>`;
+
+      const warn = te.warnungen.length
+        ? `<div class="tc-pop-warn">` + te.warnungen.map(w =>
+            `<div class="tc-pop-warn-row"><span class="w-${w.farbe}">${w.icon}</span> ${esc(w.tooltip.split('\n')[0])}</div>`
+          ).join('') + `</div><div class="tc-pop-sep"></div>` : '';
+
+      return `
+        <div class="tc-pop-head">
+          <span class="tc-pop-te">${esc(te.te)}</span>
+          <span class="tc-badge badge-${esc(te.status)}">${esc(STATUS_LABEL[te.status] ?? te.status)}</span>
+        </div>
+        ${warn}
+        ${row('Externe TE', te.teExt)}
+        ${row('Lieferant', te.lieferantName)}
+        ${row('Frachtführer', keyTextStr(te.frachtfuehrer))}
+        ${row('Transportmittel', te.transportmittel)}
+        ${row('Ladestelle', ladestelleKurz(te.ladestelle))}
+        ${row('Tor', te.tor ?? 'noch nicht zugewiesen')}
+        ${row('Halle', te.halle)}
+        ${row('Positionen', String(te.anzahlPositionen))}
+        ${row('Anlieferpaletten', String(te.anlieferpaletten))}
+        <div class="tc-pop-sep"></div>
+        ${time('Geplanter Start', te.geplantStart)}
+        ${time('Ankunft', te.tsAnkunft)}
+        ${time('Angedockt', te.tsAngedockt)}
+        ${te.andockVerspaetet ? `<div class="tc-pop-warn-row"><span class="w-warn">⚠</span> Andocken ${fmtDauer(te.andockVerzugMin)} nach geplantem Start</div>` : ''}
+        ${time('Entladen ab', te.tsEntladenStart)}
+        ${time('Entladen bis', te.tsEntladenEnde)}
+        ${time('WE gebucht', te.tsWeBuchung)}
+        ${time('Fertigstellung', te.tsEinlagerung)}
+        ${time('Abfahrt', te.tsAbfahrt)}`;
     }
 
     // ── Render: Detail ───────────────────────────────────────────────────
@@ -3456,7 +4177,7 @@
       const status = te.status;
       const isVerspaetet = status === 'verzögert';
 
-      // ── Header-Delta ──
+      // ── Kopf-Delta ──
       let deltaHTML = '';
       if (te.verzoegerungMin != null && te.verzoegerungMin > 0) {
         deltaHTML = `<span class="dh-delta pos">${fmtDauer(te.verzoegerungMin)} Verzögerung</span>`;
@@ -3464,139 +4185,125 @@
         deltaHTML = `<span class="dh-delta neg">Pünktlich abgewickelt</span>`;
       }
 
-      // ── Hinweis-Box ──
-      const hintHTML = te.teHinweis
-        ? `<div class="detail-hint">
-             <span class="detail-hint-icon">⚠</span>
-             <span><strong>TE-Hinweis:</strong> ${esc(te.teHinweis)}</span>
-           </div>`
+      // ── Warnleiste (dieselben Warnungen wie auf der Kachel) ──
+      const warnHTML = te.warnungen.length
+        ? `<div class="detail-warnbar">` + te.warnungen.map(w =>
+            `<div class="detail-warn w-${w.farbe}" title="${esc(w.tooltip)}">
+               <span class="detail-warn-ico">${w.icon}</span>
+               <span class="detail-warn-txt">${esc(w.tooltip.split('\n')[0])}</span>
+             </div>`).join('') + `</div>`
         : '';
 
-      // ── Metadaten (linke Spalte) ──
-      const metaLinks = [
-        ['Transporteinheit',  te.te],
-        ['Bestellnummer',     te.bestellnummer],
-        ['Liefernummer',      te.liefernummer],
-        ['Lieferant-Nr.',     te.lieferantNr],
-        ['Transportmittel',   te.transportmittel],
-        ['Einlagerungshalle', te.halle ?? ([...new Set(te.produkte.map(p => p.halle).filter(Boolean))].join(' / ') || '–')],
-        ['Geplant ab',        fmtTime(te.geplantStart)],
-        ['Geplant bis',       fmtTime(te.geplantEnde)],
-      ].filter(([, v]) => v != null);
+      // ── Kopf-Kacheln (TE-Kern + Kennzeichen) ──
+      const jaNein = (b) => b ? 'Ja' : 'Nein';
+      const andockHint = te.andockVerspaetet
+        ? ` <span class="dh-flag warn" title="Regel: Andocken max. 30 min nach geplantem Start">${fmtDauer(te.andockVerzugMin)}</span>` : '';
 
-      // ── Zeitdifferenzen (rechte Spalte) ──
-      const andockenMin   = diffMin(te.tsAnkunft, te.tsAngedockt);
-      const warteMin      = diffMin(te.tsAngedockt, te.tsEntladenStart);
-      const entladenMin   = diffMin(te.tsEntladenStart, te.tsEntladenEnde ?? te.tsEntladenTat);
-      const weBuchMin     = diffMin(te.tsEntladenEnde ?? te.tsEntladenTat, te.tsWeBuchung);
-      const abfahrtMin    = diffMin(te.tsWeBuchung, te.tsAbfahrt);
-      const gesamtMin     = diffMin(te.tsAnkunft, te.tsAbfahrt);
+      const kopfFakten = [
+        ['Interne TE',      esc(te.te)],
+        ['Externe TE',      esc(te.teExt ?? '–')],
+        ['Ankunft',         (te.tsAngedockt ? fmtDateTime(te.tsAngedockt) : '–') + andockHint],
+        ['Direktfahrt',     jaNein(te.direktfahrt)],
+        ['Shuttle',         jaNein(te.shuttle)],
+        ['Vorpalettierung', esc(te.vorpalettierung ?? '–')],
+        ['Priorität',       esc(keyTextStr(te.prioritaet) ?? '–')],
+        ['Container-Depot', esc(te.containerDepot ?? '–')],
+      ];
+      const kopfHTML = kopfFakten.map(([l, v]) =>
+        `<div class="dh-fact"><span class="dh-fact-l">${l}</span><span class="dh-fact-v">${v}</span></div>`
+      ).join('');
 
-      // Warte-Zeit ist kritisch wenn > VERZOEGERUNG_SCHWELLE_MIN
-      const warteKlasse = (warteMin != null && warteMin > VERZOEGERUNG_SCHWELLE_MIN) ? 'bad' : 'ok';
+      // ── Sendungsinfo ──
+      const sendung = [
+        ['Anlieferung (Liefernr.)', esc(te.liefernummer ?? '–')],
+        ['Bestellnummer',           esc(te.bestellnummer ?? '–')],
+        ['Frachtführer',            esc(keyTextStr(te.frachtfuehrer) ?? '–')],
+        ['Lieferant',               esc(keyTextStr(te.lieferant) ?? te.lieferantName ?? '–')],
+        ['Ladestelle',              esc(ladestelleKurz(te.ladestelle))],
+        ['Tor',                     esc(te.tor ?? 'nicht zugewiesen')],
+        ['Halle',                   esc(te.halle ?? '–')],
+        ['Positionen',              String(te.anzahlPositionen)],
+        ['Anlieferpaletten',        String(te.anlieferpaletten)],
+      ];
+      const sendungHTML = sendung.map(([l, v]) =>
+        `<div class="detail-row"><span class="detail-row-l">${l}</span><span class="detail-row-v">${v}</span></div>`
+      ).join('');
 
-      const zeitDiffs = [
-        ['Ankunft → Andocken',     andockenMin,  false],
-        ['Andocken → Entladestart', warteMin,    warteMin != null && warteMin > VERZOEGERUNG_SCHWELLE_MIN],
-        ['Entladen Dauer',          entladenMin, false],
-        ['Entladen → WE-Buchung',   weBuchMin,   false],
-        ['WE-Buchung → Abfahrt',    abfahrtMin,  false],
-        ['Gesamtdurchlaufzeit',     gesamtMin,   false],
-      ].filter(([, v]) => v != null);
-
-      // ── Zeitstrahl ──
-      const tlHTML = this._zeitstrahlHTML(te, isVerspaetet);
-
-      // ── Produkt-Tabelle ──
-      const prodHTML = this._produktTabelleHTML(te);
+      // ── Zeitvergleiche (die neun geforderten Paare) ──
+      const tatEnde = te.tsEntladenTat ?? te.tsEntladenEnde;
+      const vergleiche = [
+        ['Geplanter Start → Geplantes Ende', te.geplantStart,   te.geplantEnde,     false],
+        ['Ist-Start → Ist-Ende',             te.istStart,       te.istEnde,         false],
+        ['Ankunft → Am Tor angedockt',       te.tsAnkunft,      te.tsAngedockt,     te.andockVerspaetet],
+        ['Angedockt → Entladen gestartet',   te.tsAngedockt,    te.tsEntladenStart, null],
+        ['Entladen gestartet → beendet',     te.tsEntladenStart, te.tsEntladenEnde, false],
+        ['Entladen beendet → Tats. Ende',    te.tsEntladenEnde, tatEnde,            false],
+        ['WE gebucht → Fertigstellung',      te.tsWeBuchung,    te.tsEinlagerung,   false],
+        ['Ankunft → Fertigstellung',         te.tsAnkunft,      te.tsEinlagerung,   false],
+        ['Angedockt → Fertigstellung',       te.tsAngedockt,    te.tsEinlagerung,   false],
+      ];
+      const vglHTML = vergleiche.map(([label, von, bis, warn]) => {
+        const min = diffMin(von, bis);
+        const hat = von && bis && min != null;
+        // Schwellwert-Automatik nur wo nicht explizit gesetzt
+        const kritisch = warn === true
+          || (warn == null && hat && min > VERZOEGERUNG_SCHWELLE_MIN);
+        const wertTxt = hat ? fmtDauer(min) : '–';
+        const zeitTxt = (von && bis)
+          ? `${fmtTime(von)} → ${fmtTime(bis)}`
+          : (von ? `${fmtTime(von)} → …` : '…');
+        return `
+          <div class="vgl-row${!hat ? ' leer' : ''}">
+            <div class="vgl-label">${esc(label)}</div>
+            <div class="vgl-zeit">${zeitTxt}</div>
+            <div class="vgl-dauer ${kritisch ? 'bad' : (hat ? 'ok' : '')}">${wertTxt}</div>
+          </div>`;
+      }).join('');
 
       return /* html */`
-        <div class="detail-panel">
-
-          <!-- Header -->
-          <div class="detail-header">
+        <div class="detail-head s-${esc(status)}">
+          <div class="dh-top">
             <div>
-              <div class="dh-te-nr">${esc(te.te)}</div>
-              <div class="dh-supplier">${esc(te.lieferantName ?? '–')}${te.transportmittel ? ` · ${esc(te.transportmittel)}` : ''}</div>
+              <div class="dh-te">${esc(te.te)}</div>
+              <div class="dh-sub">${esc(te.teExt ?? '')}${te.teExt ? ' · ' : ''}${esc(te.lieferantName ?? '')}</div>
             </div>
-            <span class="tc-badge badge-${esc(status)}" style="margin-left:4px">${esc({
-              erwartet: 'Erwartet', ankunft: 'Eingetroffen',
-              entladen: 'Wird entladen', eingelagert: 'Eingelagert',
-              abgefahren: 'Abgefahren', 'verzögert': 'Verzögert',
-            }[status] ?? status)}</span>
-            <div class="dh-spacer"></div>
+            <a class="dh-ewm" href="${esc(ewmLink(te.te))}" target="_blank" rel="noopener">In EWM öffnen ↗</a>
+            <span class="tc-badge badge-${esc(status)}">${esc(STATUS_LABEL[status] ?? status)}</span>
             ${deltaHTML}
           </div>
+          ${warnHTML}
+          <div class="dh-facts">${kopfHTML}</div>
+        </div>
 
-          <!-- Body -->
-          <div class="detail-body">
-
-            ${hintHTML}
-
-            <!-- Zeitstrahl -->
-            <div class="d-section">
-              <div class="d-section-title">Prozess-Zeitstrahl</div>
-              <div class="tl-legend">
-                <div class="tl-legend-item">
-                  <div class="tl-legend-swatch" style="background: repeating-linear-gradient(90deg,var(--c-text3) 0,var(--c-text3) 5px,transparent 5px,transparent 10px);opacity:0.5"></div>
-                  Soll-Zeitfenster
-                </div>
-                <div class="tl-legend-item">
-                  <div class="tl-legend-swatch" style="background:var(--c-green)"></div>
-                  Ist-Verlauf (pünktlich)
-                </div>
-                <div class="tl-legend-item">
-                  <div class="tl-legend-swatch" style="background:var(--c-red)"></div>
-                  Verzögert
-                </div>
-                <div class="tl-legend-item">
-                  <div class="tl-legend-swatch" style="border:1px dashed var(--c-text2);height:9px;width:9px;border-radius:50%"></div>
-                  Abfahrt (optional)
-                </div>
-              </div>
-              ${tlHTML}
-            </div>
-
-            <!-- Metadaten + Zeitdifferenzen -->
-            <div class="d-cols">
-              <div>
-                <div class="d-section-title">Sendungsinfo</div>
-                <div class="d-info-list">
-                  ${metaLinks.map(([k, v]) =>
-                    `<div class="d-info-row">
-                       <span class="d-info-key">${esc(k)}</span>
-                       <span class="d-info-val">${esc(v)}</span>
-                     </div>`
-                  ).join('')}
-                </div>
-              </div>
-              <div>
-                <div class="d-section-title">Zeitdifferenzen</div>
-                <div class="d-info-list">
-                  ${zeitDiffs.map(([k, v, warn]) => {
-                    const cls = warn ? 'bad' : (v != null && v > 0 ? '' : 'ok');
-                    const warnIcon = warn ? ' ⚠' : '';
-                    return `<div class="d-info-row">
-                       <span class="d-info-key">${esc(k)}</span>
-                       <span class="d-info-val ${cls}">${esc(fmtDauer(v))}${warnIcon}</span>
-                     </div>`;
-                  }).join('')}
-                </div>
-              </div>
-            </div>
-
-            <!-- Produkte -->
-            <div class="d-section">
-              <div class="d-section-title">Produkte (${te.produkte.length})</div>
-              ${prodHTML}
-            </div>
-
+        <div class="detail-section">
+          <div class="d-section-title">Prozess-Zeitstrahl</div>
+          <div class="tl-legend">
+            <div class="tl-legend-item"><div class="tl-legend-swatch" style="background:repeating-linear-gradient(90deg,var(--c-text3) 0,var(--c-text3) 5px,transparent 5px,transparent 10px);opacity:0.5"></div>Soll-Zeitfenster</div>
+            <div class="tl-legend-item"><div class="tl-legend-swatch" style="background:var(--c-green)"></div>Ist-Verlauf</div>
+            <div class="tl-legend-item"><div class="tl-legend-swatch" style="background:var(--c-red)"></div>Verzögert</div>
+            <div class="tl-legend-item"><div style="width:9px;height:9px;border:1px dashed var(--c-text2);border-radius:50%"></div>Abfahrt (optional)</div>
           </div>
+          ${this._zeitstrahlHTML(te, isVerspaetet)}
+        </div>
+
+        <div class="d-cols">
+          <div class="detail-section">
+            <div class="d-section-title">Sendungsinfo</div>
+            ${sendungHTML}
+          </div>
+          <div class="detail-section">
+            <div class="d-section-title">Zeitvergleiche</div>
+            <div class="vgl-table">${vglHTML}</div>
+          </div>
+        </div>
+
+        <div class="detail-section">
+          <div class="d-section-title">Positionen (${te.anzahlPositionen})</div>
+          ${this._produktTabelleHTML(te)}
         </div>
       `;
     }
 
-    // Baut den SVG-freien CSS-Zeitstrahl
     _zeitstrahlHTML(te, isVerspaetet) {
       // Punkte: 6 Pflicht-Schritte + Abfahrt (optional)
       const punkteRaw = [
@@ -3704,34 +4411,67 @@
         return `<div class="view-placeholder" style="min-height:60px;">Keine Produktdaten</div>`;
       }
 
-      const rows = te.produkte.map(p => {
-        const eingelagert = p.tsEinlagerung
-          ? `<span class="pt-time">${fmtTime(p.tsEinlagerung)}</span>`
-          : `<span class="pt-time open">–</span>`;
+      // Ja/Nein-Zelle mit farblicher Betonung wenn "Ja" operativ relevant ist.
+      const flag = (b, betonung) =>
+        b ? `<span class="pt-flag ${betonung ? 'on' : ''}">Ja</span>`
+          : `<span class="pt-flag off">–</span>`;
+      const val = (v) => (v == null || v === '' || v === '#') ? '<span class="pt-muted">–</span>' : esc(String(v));
+      const kt  = (o) => { const s = keyTextStr(o); return s ? esc(s) : '<span class="pt-muted">–</span>'; };
+
+      const zeilen = te.produkte.map(p => {
+        const krit = (p.kritKategorie && p.kritKategorie.key)
+          ? `<span class="pt-krit" title="${esc((keyTextStr(p.kritKategorie) ?? '') + (p.kritFreitext ? ' — ' + p.kritFreitext : ''))}">⚠ ${esc(keyTextStr(p.kritKategorie))}</span>`
+          : '<span class="pt-muted">–</span>';
+        const bestand = (p.bestand == null || p.bestand === 0)
+          ? `<span class="pt-warn">${p.bestand == null ? '–' : '0'}</span>`
+          : esc(String(p.bestand));
 
         return `
           <tr>
-            <td class="pt-nr">${esc(p.nr)}</td>
-            <td class="pt-name">${esc(p.name)}</td>
-            <td class="pt-menge">${fmtNum(p.menge)} ${esc(p.einheit)}</td>
-            <td><span class="pt-halle">${esc(p.halle || te.halle || '–')}</span></td>
-            <td>${eingelagert}</td>
+            <td class="pt-sticky">
+              <div class="pt-prod-nr">${esc(p.nr)}</div>
+              <div class="pt-prod-name">${esc(p.name)}</div>
+            </td>
+            <td class="pt-num">${esc(String(p.menge ?? 0))} ${esc(p.einheit ?? '')}</td>
+            <td class="pt-num">${p.anlieferpaletten ?? 0}</td>
+            <td>${val(p.halle)}</td>
+            <td>${kt(p.hwg)}</td>
+            <td>${kt(p.packmittel)}</td>
+            <td>${val(p.einlagersteuerkz)}</td>
+            <td>${bestand}</td>
+            <td class="pt-center">${flag(p.fotoErstellt, false)}</td>
+            <td class="pt-center">${flag(p.baender, true)}</td>
+            <td class="pt-center">${flag(p.sperrgut, true)}</td>
+            <td class="pt-center">${val(p.qpGruppe)}</td>
+            <td>${krit}</td>
+            <td class="pt-time-cell">${p.tsEinlagerung ? fmtTime(p.tsEinlagerung) : '<span class="pt-muted">offen</span>'}</td>
           </tr>`;
       }).join('');
 
       return `
-        <table class="prod-table">
-          <thead>
-            <tr>
-              <th>Produkt-Nr.</th>
-              <th>Bezeichnung</th>
-              <th style="text-align:right">Menge</th>
-              <th>Halle</th>
-              <th>Eingelagert</th>
-            </tr>
-          </thead>
-          <tbody>${rows}</tbody>
-        </table>`;
+        <div class="pt-scroll">
+          <table class="pt-table">
+            <thead>
+              <tr>
+                <th class="pt-sticky">Produkt</th>
+                <th class="pt-num">Menge</th>
+                <th class="pt-num">Pal.</th>
+                <th>Halle</th>
+                <th>HWG</th>
+                <th>Packmittel</th>
+                <th>Einl.-KZ</th>
+                <th>Bestand</th>
+                <th class="pt-center">Foto</th>
+                <th class="pt-center">Bänder</th>
+                <th class="pt-center">Sperrgut</th>
+                <th class="pt-center">QP</th>
+                <th>Kritisch</th>
+                <th>Fertigst.</th>
+              </tr>
+            </thead>
+            <tbody>${zeilen}</tbody>
+          </table>
+        </div>`;
     }
 
     // ── Render: Gantt ────────────────────────────────────────────────────
@@ -4054,6 +4794,178 @@
             ${labelHTML}
           </div>
         </div>`;
+    }
+
+    // ── Render: Palettenplanung ──────────────────────────────────────────
+    // Kreuztabelle: Halle (Zeilen) × Packmittel (Unterzeilen) × Tag (Spalten).
+    // Zelle = Summe der benötigten Anlieferpaletten. Aggregiert über die
+    // Positionen aller TEs, deren geplanter Start in den Zeitraum fällt.
+    _renderPaletten() {
+      const host = this._$('pp-content');
+      if (!host) return;
+
+      const { von, bis, tage, label } = this._ppBereich();
+      const sub = this._$('pp-sub');
+      if (sub) sub.textContent = label;
+
+      // Tage als Spalten-Schlüssel vorbereiten
+      const tagKeys = [];
+      for (let t = 0; t < tage; t++) {
+        const d = new Date(von.getTime() + t * 86400000);
+        tagKeys.push(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+      }
+      const tagKey = (d) => Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+
+      // Aggregation: halle → packmittelLabel → tagKey → Summe
+      const daten = new Map();     // halle → Map(packmittel → Map(tag → paletten))
+      const packmittelSet = new Map(); // halle → Set(packmittelLabel) für stabile Reihenfolge
+      let gesamtPaletten = 0;
+
+      for (const te of this._teMap.values()) {
+        const anker = te.geplantStart ?? te.tsAnkunft;
+        if (!anker || anker < von || anker >= bis) continue;
+        const tk = tagKey(anker);
+
+        for (const p of te.produkte) {
+          const paletten = p.anlieferpaletten || 0;
+          if (paletten <= 0) continue;
+          const halle = normHalle(p.halle) ?? te.halle ?? '–';
+          // Packmittel: "#"/leer → "nicht definiert"
+          const pmLabel = (p.packmittel && p.packmittel.key)
+            ? keyTextStr(p.packmittel)
+            : 'nicht definiert';
+
+          if (!daten.has(halle)) { daten.set(halle, new Map()); packmittelSet.set(halle, new Set()); }
+          const perPack = daten.get(halle);
+          packmittelSet.get(halle).add(pmLabel);
+          if (!perPack.has(pmLabel)) perPack.set(pmLabel, new Map());
+          const perTag = perPack.get(pmLabel);
+          perTag.set(tk, (perTag.get(tk) || 0) + paletten);
+          gesamtPaletten += paletten;
+        }
+      }
+
+      if (daten.size === 0) {
+        host.innerHTML = `<div class="pp-empty">Keine Palettenbedarfe im gewählten Zeitraum.</div>`;
+        return;
+      }
+
+      // Spaltenköpfe (Tage)
+      const heuteK = tagKey(jetztWanduhr());
+      const tagHeader = tagKeys.map(tk => {
+        const d = new Date(tk);
+        const istHeute = tk === heuteK;
+        return `<th class="pp-tag${istHeute ? ' heute' : ''}">
+          <div class="pp-tag-wd">${d.toLocaleDateString('de-DE', { weekday: 'short', timeZone: 'UTC' })}</div>
+          <div class="pp-tag-dm">${d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', timeZone: 'UTC' })}</div>
+        </th>`;
+      }).join('');
+
+      // Tagessummen über alle Hallen
+      const tagSumme = new Map(tagKeys.map(tk => [tk, 0]));
+
+      // Hallen sortiert (numerisch wo möglich)
+      const hallen = [...daten.keys()].sort((a, b) => {
+        const na = parseInt(a, 10), nb = parseInt(b, 10);
+        if (!isNaN(na) && !isNaN(nb)) return na - nb;
+        return String(a).localeCompare(String(b));
+      });
+
+      const halleBloecke = hallen.map(halle => {
+        const perPack = daten.get(halle);
+        // Packmittel sortiert: "nicht definiert" ans Ende
+        const packmittel = [...packmittelSet.get(halle)].sort((a, b) => {
+          if (a === 'nicht definiert') return 1;
+          if (b === 'nicht definiert') return -1;
+          return a.localeCompare(b);
+        });
+
+        let halleSumme = 0;
+        const halleTagSumme = new Map(tagKeys.map(tk => [tk, 0]));
+
+        const packZeilen = packmittel.map(pm => {
+          const perTag = perPack.get(pm);
+          const zellen = tagKeys.map(tk => {
+            const v = perTag.get(tk) || 0;
+            halleSumme += v;
+            halleTagSumme.set(tk, halleTagSumme.get(tk) + v);
+            tagSumme.set(tk, tagSumme.get(tk) + v);
+            return `<td class="pp-cell${v ? '' : ' leer'}">${v || '·'}</td>`;
+          }).join('');
+          const undef = pm === 'nicht definiert';
+          return `<tr class="pp-pack-row${undef ? ' undef' : ''}">
+            <td class="pp-pack-name">${undef ? '⚠ ' : ''}${esc(pm)}</td>
+            ${zellen}
+          </tr>`;
+        }).join('');
+
+        const summenZellen = tagKeys.map(tk =>
+          `<td class="pp-cell pp-sum">${halleTagSumme.get(tk) || '·'}</td>`).join('');
+
+        return `
+          <tbody class="pp-halle-block">
+            <tr class="pp-halle-row">
+              <td class="pp-halle-name">Halle ${esc(halle)}</td>
+              <td class="pp-halle-total" colspan="${tage}">${halleSumme} Paletten gesamt</td>
+            </tr>
+            ${packZeilen}
+            <tr class="pp-halle-sum">
+              <td class="pp-pack-name">Summe Halle ${esc(halle)}</td>
+              ${summenZellen}
+            </tr>
+          </tbody>`;
+      }).join('');
+
+      // Fußzeile: Tagessummen gesamt
+      const footZellen = tagKeys.map(tk =>
+        `<td class="pp-cell pp-grand">${tagSumme.get(tk) || '·'}</td>`).join('');
+
+      host.innerHTML = `
+        <div class="pp-kpis">
+          <div class="pp-kpi"><span class="pp-kpi-val">${gesamtPaletten}</span><span class="pp-kpi-lbl">Paletten gesamt</span></div>
+          <div class="pp-kpi"><span class="pp-kpi-val">${hallen.length}</span><span class="pp-kpi-lbl">Hallen</span></div>
+          <div class="pp-kpi"><span class="pp-kpi-val">${tage}</span><span class="pp-kpi-lbl">Tage</span></div>
+        </div>
+        <div class="pp-scroll">
+          <table class="pp-table">
+            <thead>
+              <tr>
+                <th class="pp-corner">Halle / Packmittel</th>
+                ${tagHeader}
+              </tr>
+            </thead>
+            ${halleBloecke}
+            <tfoot>
+              <tr class="pp-foot">
+                <td class="pp-pack-name">Tagesbedarf gesamt</td>
+                ${footZellen}
+              </tr>
+            </tfoot>
+          </table>
+        </div>`;
+    }
+
+    // Zeitbereich der Palettenplanung (eigener Zustand, unabhängig von der Übersicht).
+    _ppBereich() {
+      const jetzt = jetztWanduhr();
+      const heute = new Date(Date.UTC(jetzt.getUTCFullYear(), jetzt.getUTCMonth(), jetzt.getUTCDate()));
+      const tag = 86400000;
+      switch (this._ppZeitraum) {
+        case 'gestern':
+          return { von: new Date(heute.getTime() - tag), bis: heute, tage: 1, label: 'Gestern' };
+        case 'morgen':
+          return { von: new Date(heute.getTime() + tag), bis: new Date(heute.getTime() + 2 * tag), tage: 1, label: 'Morgen' };
+        case 'woche': {
+          const wd = heute.getUTCDay();
+          const diff = (wd === 0 ? -6 : 1 - wd);
+          const mo = new Date(heute.getTime() + diff * tag);
+          return { von: mo, bis: new Date(mo.getTime() + 7 * tag), tage: 7, label: 'Diese Woche (Mo–So)' };
+        }
+        case 'geplant':
+          return { von: heute, bis: new Date(heute.getTime() + 14 * tag), tage: 14, label: 'Kommende 14 Tage' };
+        default: // 'heute'
+          return { von: heute, bis: new Date(heute.getTime() + tag), tage: 1, label: 'Heute' };
+      }
     }
 
     // ── Render: Tore (Hallen-Accordion, Engpass-priorisiert) ──────────────
