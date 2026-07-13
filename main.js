@@ -29,6 +29,9 @@
   // BW liefert die lange Bezeichnung. Für Filter + Badges brauchen wir eine
   // kurze Kategorie, für Gruppierung + Zeitstrahl die volle Bezeichnung.
   // LADESTELLE_KURZ ordnet jede lange Bezeichnung einer der 4 Kategorien zu.
+  // Drei Ladestellen. Jede hat einen Kurznamen (Filter) und einen vollen Namen
+  // (Gruppierung). "Eigendisposition" ist KEINE eigene Ladestelle, sondern
+  // gehört zu BSL (ILW Krefeld BSL / Eigendisposition).
   const LADESTELLE_KURZ = {
     // BW-Schlüssel (Key) — so kommen die Werte real an
     'ILW KREFELD BSL':                     'BSL',
@@ -39,31 +42,42 @@
     'ILW Krefeld BSL':                     'BSL',
     'ILW Krefeld BSL / Eigendisposition':  'BSL',
     'ILW Krefeld Frei Haus / DDP':         'Landverkehr',
-    'Eigendisposition':                    'Eigendisposition',
+  };
+
+  // Voller Name je Kurzname — für die Gruppierungs-Header.
+  const LADESTELLE_LANG = {
+    BSL:         'ILW Krefeld BSL / Eigendisposition',
+    Container:   'ILW Krefeld Container',
+    Landverkehr: 'ILW Krefeld Frei Haus / DDP',
   };
 
   // Gibt die kurze Kategorie zu einer (Schlüssel-, langen oder kurzen) Bezeichnung.
   function ladestelleKurz(wert) {
-    if (!wert) return 'Eigendisposition';
-    const w = String(wert).trim();
+    const w = wert == null ? '' : String(wert).trim();
     if (LADESTELLE_KURZ[w]) return LADESTELLE_KURZ[w];
     // Fallback: per Schlüsselwort raten (case-insensitive)
-    if (/container|containe/i.test(w)) return 'Container';
-    if (/bsl/i.test(w))                return 'BSL';
+    if (/container|containe/i.test(w))     return 'Container';
     if (/frei haus|ddp|landverk/i.test(w)) return 'Landverkehr';
-    if (/eigendispo/i.test(w))         return 'Eigendisposition';
-    return w;
+    // Eigendisposition zählt zu BSL
+    if (/bsl|eigendispo/i.test(w))         return 'BSL';
+    // Unbekannt/leer → BSL (Sammelkategorie für Eigendisposition)
+    return 'BSL';
   }
 
+  // Voller Anzeigename einer Ladestelle (für Gruppierungs-Header).
+  const ladestelleLang = (wert) => {
+    const kurz = ladestelleKurz(wert);
+    return LADESTELLE_LANG[kurz] ?? kurz;
+  };
+
   // Die 4 Kategorien in fester Reihenfolge (für Filter + Gruppierung)
-  const LADESTELLE_KATEGORIEN = ['BSL', 'Container', 'Landverkehr', 'Eigendisposition'];
+  const LADESTELLE_KATEGORIEN = ['BSL', 'Container', 'Landverkehr'];
 
   // Icon + Farbe je Kategorie
   const LADESTELLE_STYLE = {
-    BSL:             { icon: '🚛', cls: 'ls-bsl',  col: 'rgba(142,68,173,0.85)' },
-    Container:       { icon: '🏗', cls: 'ls-cont', col: 'rgba(230,126,34,0.85)' },
-    Landverkehr:     { icon: '🚚', cls: 'ls-land', col: 'rgba(39,174,96,0.85)'  },
-    Eigendisposition:{ icon: '🏭', cls: 'ls-eigen',col: 'rgba(93,109,126,0.85)' },
+    BSL:         { icon: '🚛', cls: 'ls-bsl',  col: 'rgba(142,68,173,0.85)' },
+    Container:   { icon: '🏗', cls: 'ls-cont', col: 'rgba(230,126,34,0.85)' },
+    Landverkehr: { icon: '🚚', cls: 'ls-land', col: 'rgba(39,174,96,0.85)'  },
   };
 
   // Echte Tor→Hallen-Zuordnung (T001–T999, nicht fortlaufend)
@@ -464,7 +478,7 @@
           te:              teNr,
           teHinweis:       readDim(row, 'dimension_te_hinweis', 'TE_HINWEIS'),
           // Ladestelle: BW liefert lange Bezeichnung (z.B. "ILW Krefeld Container")
-          ladestelle:      readDim(row, 'dimension_ladestelle', 'LADESTELLE') ?? 'Eigendisposition',
+          ladestelle:      readDim(row, 'dimension_ladestelle', 'LADESTELLE'),
           // Tor: "#" bedeutet noch kein Tor zugewiesen
           tor:             normTor(readDim(row, 'dimension_tor', 'TOR')),
           liefernummer:    ohneNullen(readDim(row, 'dimension_liefernummer', 'LIFNR')),
@@ -1553,12 +1567,14 @@
       }
 
       .tc-supplier {
-        font-size:      12px;
+        font-size:      13px;
+        font-weight:    600;
         color:          var(--c-text);
         white-space:    nowrap;
         overflow:       hidden;
         text-overflow:  ellipsis;
-        max-width:      220px;
+        flex:           1;
+        min-width:      0;
       }
 
       /* Status-Badge */
@@ -1585,21 +1601,22 @@
       .tc-progress {
         display:       flex;
         align-items:   center;
-        gap:           2px;
+        gap:           3px;
         padding:       0 4px 0 6px;
         margin-bottom: 11px;
       }
 
       .tc-step {
         flex:          1;
-        height:        4px;
+        height:        6px;
         background:    var(--c-bg4);
-        border-radius: 2px;
+        border-radius: 3px;
         transition:    background 0.25s;
       }
 
       .tc-step.done    { background: var(--c-green); }
       .tc-step.active  { background: var(--c-blue);
+                         box-shadow: 0 0 6px var(--c-blue);
                          animation: step-pulse 1.6s ease-in-out infinite; }
       .tc-step.late    { background: var(--c-red); }
       .tc-step.active.late { background: var(--c-red);
@@ -1619,15 +1636,16 @@
       .tc-step-sep {
         width:       1px;
         flex-shrink: 0;
-        align-self:  stretch;
+        height:      10px;
+        align-self:  center;
         background:  var(--c-border2);
-        margin:      -2px 4px;
+        margin:      0 5px;
       }
       .tc-step-abfahrt {
-        width:         18px;
+        width:         20px;
         flex-shrink:   0;
-        height:        4px;
-        border-radius: 2px;
+        height:        6px;
+        border-radius: 3px;
         border:        1px dashed var(--c-text3);
         background:    transparent;
         position:      relative;
@@ -1635,12 +1653,14 @@
       .tc-step-abfahrt::after {
         content:    '🚛';
         position:   absolute;
-        top:        -13px;
-        right:      0;
-        font-size:  9px;
-        opacity:    0.35;
+        top:        -14px;
+        left:       50%;
+        transform:  translateX(-50%);
+        font-size:  10px;
+        opacity:    0.4;
         filter:     grayscale(1);
       }
+      .tc-step-abfahrt.done::after { opacity: 1; filter: none; }
       .tc-step-abfahrt.done {
         background:   var(--c-green);
         border-style: solid;
@@ -1788,9 +1808,13 @@
         padding-left:  2px;
       }
       .tc-te-ext {
-        font-family: var(--font-mono);
-        font-size:   10px;
-        color:       var(--c-text2);
+        font-family:  var(--font-mono);
+        font-size:    9px;
+        color:        var(--c-text3);
+        background:   var(--c-bg3);
+        border-radius: 3px;
+        padding:      1px 5px;
+        flex-shrink:  0;
       }
       .tc-te-ext::after { content: ' ·'; color: var(--c-text3); }
       .tc-supplier {
@@ -1820,6 +1844,8 @@
         position:      absolute;
         width:         300px;
         max-width:     92vw;
+        max-height:    calc(100% - 12px);
+        overflow-y:    auto;
         background:    var(--c-bg3);
         border:        1px solid var(--c-border2);
         border-radius: var(--r-md);
@@ -2013,7 +2039,6 @@
       .ls-chip-bsl.active  { background: rgba(142,68,173,.2);  border-color: rgba(142,68,173,.5); color: #c39bd3; }
       .ls-chip-cont.active { background: rgba(230,126,34,.2);  border-color: rgba(230,126,34,.5); color: #f0a500; }
       .ls-chip-land.active { background: var(--c-green-dim);   border-color: rgba(39,174,96,.4);  color: #58d68d; }
-      .ls-chip-eigen.active { background: rgba(93,109,126,.2); border-color: rgba(93,109,126,.5); color: #aab7b8; }
 
       /* Gruppierungs-Umschalter (3-Wege) */
       .group-mode-switch {
@@ -2094,7 +2119,6 @@
       .ls-bsl  { background: rgba(142,68,173,.15); color: #c39bd3; }
       .ls-cont { background: rgba(230,126,34,.15);  color: #f0a500; }
       .ls-land { background: var(--c-green-dim);    color: #58d68d; }
-      .ls-eigen { background: rgba(93,109,126,.18); color: #aab7b8; }
 
       .tor-badge-card {
         font-family:    var(--font-mono);
@@ -2323,11 +2347,20 @@
       .vgl-table { display: flex; flex-direction: column; }
       .vgl-row {
         display: grid;
-        grid-template-columns: 1fr auto auto;
-        gap: 12px; align-items: center;
+        grid-template-columns: minmax(140px, 1.4fr) auto 64px auto;
+        gap: 10px; align-items: center;
         padding: 6px 0; border-bottom: 1px solid var(--c-border);
         font-size: 12px;
       }
+      /* Proportionaler Dauer-Balken */
+      .vgl-bar {
+        height: 5px; border-radius: 3px;
+        background: var(--c-bg4);
+        overflow: hidden;
+      }
+      .vgl-bar-fill { height: 100%; border-radius: 3px; }
+      .vgl-bar-fill.ok  { background: var(--c-blue); opacity: 0.7; }
+      .vgl-bar-fill.bad { background: var(--c-red); }
       .vgl-row.leer { opacity: 0.4; }
       .vgl-label { color: var(--c-text); font-size: 12px; }
       .vgl-zeit  { font-family: var(--font-mono); font-size: 10px; color: var(--c-text2); white-space: nowrap; }
@@ -2609,19 +2642,22 @@
         background:    var(--c-bg2);
         border:        1px solid var(--c-border2);
         border-radius: var(--r-lg);
-        overflow:      hidden;
+        /* KEIN overflow:hidden — das würde die sticky-Kopfzeile brechen.
+           Der abgerundete obere Rand wird über die Kopfzeile selbst geklippt. */
       }
 
       .gantt-inner { min-width: 700px; }
 
       /* ── Kopfzeile ── */
       .gantt-head {
-        display:       flex;
-        border-bottom: 1px solid var(--c-border);
-        background:    var(--c-bg3);
-        position:      sticky;
-        top:           0;
-        z-index:       5;
+        display:          flex;
+        border-bottom:    1px solid var(--c-border2);
+        background:       var(--c-bg3);
+        position:         sticky;
+        top:              0;
+        z-index:          10;
+        border-radius:    var(--r-lg) var(--r-lg) 0 0;
+        box-shadow:       0 2px 6px rgba(0,0,0,0.25);
       }
 
       .gantt-label-col {
@@ -3139,6 +3175,47 @@
       }
     
       /* ══ Palettenplanung (Etappe 4) ══ */
+      /* ── Übersichtsmatrix: Paletten pro Tag & Halle ── */
+      .ppu-title, .ppd-title {
+        font-size: 13px; font-weight: 700; color: var(--c-text);
+        margin: 0 0 10px;
+      }
+      .ppd-title { margin-top: 26px; padding-top: 18px; border-top: 1px solid var(--c-border); }
+      .ppu-scroll { margin-bottom: 4px; }
+      .ppu-table { border-collapse: separate; border-spacing: 0; width: 100%; font-size: 12px; }
+      .ppu-table th, .ppu-table td { padding: 8px 12px; white-space: nowrap; text-align: center; }
+      .ppu-corner {
+        position: sticky; left: 0; z-index: 3;
+        background: var(--c-bg3); color: var(--c-text2);
+        font-family: var(--font-mono); font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em;
+        text-align: left; min-width: 110px;
+        border-bottom: 1px solid var(--c-border2);
+      }
+      .ppu-tag {
+        background: var(--c-bg3); color: var(--c-text2);
+        border-bottom: 1px solid var(--c-border2); border-left: 1px solid var(--c-border);
+      }
+      .ppu-tag.heute { background: var(--c-red-dim); }
+      .ppu-tag.ppu-sumhead { color: var(--c-text); border-left: 2px solid var(--c-border2); }
+      .ppu-tag-wd { font-family: var(--font-mono); font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em; }
+      .ppu-tag-dm { font-family: var(--font-mono); font-size: 12px; font-weight: 700; color: var(--c-text); margin-top: 1px; }
+      .ppu-halle {
+        position: sticky; left: 0; z-index: 1;
+        background: var(--c-bg2); color: var(--c-text); font-weight: 600;
+        text-align: left; border-right: 1px solid var(--c-border2);
+        border-bottom: 1px solid var(--c-border);
+      }
+      .ppu-cell {
+        font-family: var(--font-mono); font-size: 13px; color: var(--c-text);
+        border-left: 1px solid var(--c-border); border-bottom: 1px solid var(--c-border);
+      }
+      .ppu-cell.leer { color: var(--c-text3); }
+      .ppu-rowsum { font-weight: 700; background: var(--c-bg3); border-left: 2px solid var(--c-border2); }
+      .ppu-foot td { border-top: 2px solid var(--c-border2); background: var(--c-bg3); }
+      .ppu-foot .ppu-halle { background: var(--c-bg3); font-weight: 700; }
+      .ppu-colsum { font-weight: 700; color: var(--c-text); }
+      .ppu-grand { font-weight: 700; color: var(--c-red-light); background: var(--c-bg4); border-left: 2px solid var(--c-border2); }
+
       .pp-ctrl {
         display: flex; align-items: center; justify-content: space-between;
         gap: 16px; flex-wrap: wrap; margin-bottom: 16px;
@@ -3159,11 +3236,19 @@
 
       .pp-kpis { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
       .pp-kpi {
-        display: flex; flex-direction: column; gap: 2px;
+        display: flex; flex-direction: column; gap: 3px;
         background: var(--c-bg2); border: 1px solid var(--c-border);
-        border-radius: var(--r-md); padding: 10px 16px; min-width: 90px;
+        border-radius: var(--r-md); padding: 12px 18px; min-width: 96px;
+        position: relative; overflow: hidden;
       }
-      .pp-kpi-val { font-family: var(--font-mono); font-size: 20px; font-weight: 700; color: var(--c-text); }
+      /* Primär-KPI mit rotem Akzentbalken links */
+      .pp-kpi.primary { border-color: var(--c-red-border); }
+      .pp-kpi.primary::before {
+        content: ''; position: absolute; left: 0; top: 0; bottom: 0;
+        width: 3px; background: var(--c-red);
+      }
+      .pp-kpi.primary .pp-kpi-val { color: var(--c-red-light); }
+      .pp-kpi-val { font-family: var(--font-mono); font-size: 24px; font-weight: 700; color: var(--c-text); line-height: 1; }
       .pp-kpi-lbl { font-size: 10px; color: var(--c-text2); }
 
       .pp-empty {
@@ -3364,7 +3449,6 @@
               <button class="ls-filter-chip ls-chip-bsl" data-ls="BSL">🚛 BSL</button>
               <button class="ls-filter-chip ls-chip-cont" data-ls="Container">🏗 Container</button>
               <button class="ls-filter-chip ls-chip-land" data-ls="Landverkehr">🚚 Landverkehr</button>
-              <button class="ls-filter-chip ls-chip-eigen" data-ls="Eigendisposition">🏭 Eigendisp.</button>
             </div>
             <div class="group-mode-switch" role="group" aria-label="Gruppierung">
               <button class="group-mode-btn active" data-gruppe="status" title="Nach Status gruppieren">Status</button>
@@ -3972,22 +4056,18 @@
           }).join('');
 
       } else if (effModus === 'ladestelle') {
-        const LS_LANG = {
-          BSL:              'ILW Krefeld BSL',
-          Container:        'ILW Krefeld Container',
-          Landverkehr:      'ILW Krefeld Frei Haus / DDP',
-          Eigendisposition: 'Eigendisposition',
-        };
         const byLS = {};
         for (const te of tes) (byLS[ladestelleKurz(te.ladestelle)] ??= []).push(te);
 
         grid.innerHTML = LADESTELLE_KATEGORIEN
           .filter(ls => byLS[ls]?.length)
           .map(ls => {
-            const st = LADESTELLE_STYLE[ls] ?? LADESTELLE_STYLE.Eigendisposition;
+            const st = LADESTELLE_STYLE[ls] ?? LADESTELLE_STYLE.BSL;
             const gr = byLS[ls];
             const vz = gr.filter(t => t.planabweichung).length;
-            return gruppenHeader(st.icon, LS_LANG[ls] ?? ls, st.col, gr.length, vz)
+            // Header zeigt Kurz + Lang: "BSL — ILW Krefeld BSL / Eigendisposition"
+            const titel = `${ls} — ${ladestelleLang(ls)}`;
+            return gruppenHeader(st.icon, titel, st.col, gr.length, vz)
                  + gr.map(te => this._teKachelHTML(te)).join('');
           }).join('');
 
@@ -4099,15 +4179,39 @@
       const pw = pop.offsetWidth  || 300;
       const ph = pop.offsetHeight || 320;
 
-      let left = (cr.left - hr.left) + (cr.width / 2) - (pw / 2);
-      left = Math.max(6, Math.min(left, hr.width - pw - 6));
+      // Kachel-Position relativ zum Positionierungskontext (.body)
+      const cLeft   = cr.left   - hr.left;
+      const cRight  = cr.right  - hr.left;
+      const cTop    = cr.top    - hr.top;
+      const cBottom = cr.bottom - hr.top;
+      const gap = 8;
 
-      // Unter die Kachel, sofern darunter Platz ist — sonst darüber.
-      const nachOben = (cr.bottom + ph + 16) > hr.bottom;
-      let top = nachOben
-        ? (cr.top - hr.top) - ph - 8
-        : (cr.bottom - hr.top) + 8;
-      top = Math.max(4, Math.min(top, hr.height - ph - 4));
+      // Verfügbarer Platz in jede Richtung
+      const platzUnten  = hr.height - cBottom;
+      const platzOben   = cTop;
+      const platzRechts = hr.width - cRight;
+      const platzLinks  = cLeft;
+
+      let left, top;
+
+      // Strategie: erst unten/oben (bevorzugt, Popup unter/über der Kachel),
+      // aber NUR wenn dort genug Platz ist. Sonst seitlich daneben, damit die
+      // Kachel selbst frei bleibt und nicht verdeckt wird (kleine Bildschirme).
+      if (platzUnten >= ph + gap || platzOben >= ph + gap) {
+        // vertikal: unter die Kachel, sonst darüber
+        top = (platzUnten >= ph + gap) ? cBottom + gap : cTop - ph - gap;
+        left = cLeft + (cr.width / 2) - (pw / 2);
+        left = Math.max(6, Math.min(left, hr.width - pw - 6));
+      } else if (platzRechts >= pw + gap || platzLinks >= pw + gap) {
+        // seitlich: rechts daneben, sonst links daneben
+        left = (platzRechts >= pw + gap) ? cRight + gap : cLeft - pw - gap;
+        top = cTop + (cr.height / 2) - (ph / 2);
+        top = Math.max(4, Math.min(top, hr.height - ph - 4));
+      } else {
+        // Notfall (sehr kleiner Kontext): zentriert, halbtransparenter Rahmen
+        left = Math.max(6, (hr.width - pw) / 2);
+        top  = Math.max(4, (hr.height - ph) / 2);
+      }
 
       pop.style.left = `${left}px`;
       pop.style.top  = `${top}px`;
@@ -4120,11 +4224,11 @@
       pop.setAttribute('aria-hidden', 'true');
     }
 
-    // Badge zeigt die KURZE Kategorie (BSL / Container / Landverkehr / Eigendisposition).
+    // Badge zeigt die KURZE Kategorie (BSL / Container / Landverkehr).
     // Nimmt entweder die lange BW-Bezeichnung oder eine bereits kurze entgegen.
     _lsBadgeHTML(ladestelle) {
       const kurz  = ladestelleKurz(ladestelle);
-      const style = LADESTELLE_STYLE[kurz] ?? LADESTELLE_STYLE.Eigendisposition;
+      const style = LADESTELLE_STYLE[kurz] ?? LADESTELLE_STYLE.BSL;
       return `<span class="ls-badge ${style.cls}">${style.icon} ${esc(kurz)}</span>`;
     }
 
@@ -4182,8 +4286,8 @@
             <span class="tc-badge badge-${esc(status)}">${esc(badgeLabel)}</span>
           </div>
           <div class="tc-sub">
-            ${te.teExt ? `<span class="tc-te-ext">${esc(te.teExt)}</span>` : ''}
             <span class="tc-supplier">${esc(te.lieferantName ?? '–')}</span>
+            ${te.teExt ? `<span class="tc-te-ext" title="Externe TE">${esc(te.teExt)}</span>` : ''}
           </div>
           <div class="tc-progress">${this._fortschrittHTML(te)}</div>
           <div class="tc-footer">
@@ -4365,6 +4469,10 @@
         ['Ankunft → Fertigstellung',         te.tsAnkunft,      te.tsEinlagerung,   false],
         ['Angedockt → Fertigstellung',       te.tsAngedockt,    te.tsEinlagerung,   false],
       ];
+      // Maximale Dauer für die proportionale Balkenbreite
+      const maxDauer = Math.max(1, ...vergleiche
+        .map(([, von, bis]) => { const m = diffMin(von, bis); return (von && bis && m != null) ? Math.abs(m) : 0; }));
+
       const vglHTML = vergleiche.map(([label, von, bis, warn]) => {
         const min = diffMin(von, bis);
         const hat = von && bis && min != null;
@@ -4375,10 +4483,16 @@
         const zeitTxt = (von && bis)
           ? `${fmtTime(von)} → ${fmtTime(bis)}`
           : (von ? `${fmtTime(von)} → …` : '…');
+        // Proportionaler Balken: zeigt die Dauer relativ zur längsten Phase.
+        const breite = hat ? Math.max(3, (Math.abs(min) / maxDauer) * 100) : 0;
+        const balken = hat
+          ? `<div class="vgl-bar"><div class="vgl-bar-fill ${kritisch ? 'bad' : 'ok'}" style="width:${breite.toFixed(0)}%"></div></div>`
+          : `<div class="vgl-bar"></div>`;
         return `
           <div class="vgl-row${!hat ? ' leer' : ''}">
             <div class="vgl-label">${esc(label)}</div>
             <div class="vgl-zeit">${zeitTxt}</div>
+            ${balken}
             <div class="vgl-dauer ${kritisch ? 'bad' : (hat ? 'ok' : '')}">${wertTxt}</div>
           </div>`;
       }).join('');
@@ -4753,12 +4867,6 @@
         : '';
 
       // ── Zeilen nach Ladestelle gruppiert ──
-      const LS_LANG = {
-        BSL:              'ILW Krefeld BSL',
-        Container:        'ILW Krefeld Container',
-        Landverkehr:      'ILW Krefeld Frei Haus / DDP',
-        Eigendisposition: 'Eigendisposition',
-      };
       const byLS = {};
       for (const te of tesFuerGantt) {
         const ls = ladestelleKurz(te.ladestelle);
@@ -4768,12 +4876,12 @@
       const zeilenHTML = LADESTELLE_KATEGORIEN
         .filter(ls => byLS[ls]?.length > 0)
         .map(ls => {
-          const m  = LADESTELLE_STYLE[ls] ?? LADESTELLE_STYLE.Eigendisposition;
+          const m  = LADESTELLE_STYLE[ls] ?? LADESTELLE_STYLE.BSL;
           const gr = byLS[ls];
           const vz = gr.filter(t => t.status === 'verzögert').length;
           const gh = `<div class="gantt-group-header">
             <div class="gantt-group-accent" style="background:${m.col}"></div>
-            <span class="gantt-group-title" style="color:${m.col}">${m.icon} ${esc(LS_LANG[ls] ?? ls)}</span>
+            <span class="gantt-group-title" style="color:${m.col}">${m.icon} ${esc(ls + ' — ' + ladestelleLang(ls))}</span>
             <span class="gantt-group-count">${gr.length} TE${gr.length !== 1 ? 's' : ''}</span>
             ${vz ? `<span class="gantt-group-count" style="background:var(--c-red-dim);color:#e74c3c">${vz} verzögert</span>` : ''}
             <div style="flex:1"></div>
@@ -5025,6 +5133,86 @@
         return String(a).localeCompare(String(b));
       });
 
+      // Halle → Tag → Gesamtpaletten (über alle Packmittel) vorab aggregieren.
+      // Damit bauen wir die kompakte Übersicht "Paletten pro Tag & Halle".
+      const halleTagGesamt = new Map();  // halle → Map(tag → summe)
+      const halleGesamt    = new Map();  // halle → summe gesamt
+      for (const halle of hallen) {
+        const perPack = daten.get(halle);
+        const perTag = new Map(tagKeys.map(tk => [tk, 0]));
+        let summe = 0;
+        for (const [, tagMap] of perPack) {
+          for (const tk of tagKeys) {
+            const v = tagMap.get(tk) || 0;
+            perTag.set(tk, perTag.get(tk) + v);
+            summe += v;
+          }
+        }
+        halleTagGesamt.set(halle, perTag);
+        halleGesamt.set(halle, summe);
+      }
+
+      // Spitzenwert für farbliche Hervorhebung (höchster Tagesbedarf einer Halle)
+      let maxZelle = 0;
+      for (const perTag of halleTagGesamt.values())
+        for (const v of perTag.values()) if (v > maxZelle) maxZelle = v;
+
+      // ── Übersichtsmatrix: Halle (Zeilen) × Tag (Spalten), Gesamtpaletten ──
+      const uebersichtZeilen = hallen.map(halle => {
+        const perTag = halleTagGesamt.get(halle);
+        const zellen = tagKeys.map(tk => {
+          const v = perTag.get(tk) || 0;
+          // Intensität 0..1 für Heatmap-Einfärbung
+          const intensitaet = maxZelle > 0 ? (v / maxZelle) : 0;
+          const stil = v > 0
+            ? ` style="background:rgba(192,57,43,${(0.08 + intensitaet * 0.35).toFixed(2)})"`
+            : '';
+          return `<td class="ppu-cell${v ? '' : ' leer'}"${stil}>${v || '·'}</td>`;
+        }).join('');
+        return `<tr>
+          <td class="ppu-halle">Halle ${esc(halle)}</td>
+          ${zellen}
+          <td class="ppu-cell ppu-rowsum">${halleGesamt.get(halle)}</td>
+        </tr>`;
+      }).join('');
+
+      const uebersichtTagSummen = tagKeys.map(tk => {
+        let s = 0;
+        for (const perTag of halleTagGesamt.values()) s += perTag.get(tk) || 0;
+        return `<td class="ppu-cell ppu-colsum">${s || '·'}</td>`;
+      }).join('');
+
+      const uebersichtHeader = tagKeys.map(tk => {
+        const d = new Date(tk);
+        const istHeute = tk === tagKey(jetztWanduhr());
+        return `<th class="ppu-tag${istHeute ? ' heute' : ''}">
+          <div class="ppu-tag-wd">${d.toLocaleDateString('de-DE', { weekday: 'short', timeZone: 'UTC' })}</div>
+          <div class="ppu-tag-dm">${d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', timeZone: 'UTC' })}</div>
+        </th>`;
+      }).join('');
+
+      const uebersichtHTML = `
+        <div class="ppu-title">Paletten pro Tag &amp; Halle</div>
+        <div class="pp-scroll ppu-scroll">
+          <table class="ppu-table">
+            <thead>
+              <tr>
+                <th class="ppu-corner">Halle</th>
+                ${uebersichtHeader}
+                <th class="ppu-tag ppu-sumhead">Σ Halle</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${uebersichtZeilen}
+              <tr class="ppu-foot">
+                <td class="ppu-halle">Σ Tag</td>
+                ${uebersichtTagSummen}
+                <td class="ppu-cell ppu-grand">${gesamtPaletten}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>`;
+
       const halleBloecke = hallen.map(halle => {
         const perPack = daten.get(halle);
         // Packmittel sortiert: "nicht definiert" ans Ende
@@ -5076,10 +5264,13 @@
 
       host.innerHTML = `
         <div class="pp-kpis">
-          <div class="pp-kpi"><span class="pp-kpi-val">${gesamtPaletten}</span><span class="pp-kpi-lbl">Paletten gesamt</span></div>
+          <div class="pp-kpi primary"><span class="pp-kpi-val">${gesamtPaletten}</span><span class="pp-kpi-lbl">Paletten gesamt</span></div>
           <div class="pp-kpi"><span class="pp-kpi-val">${hallen.length}</span><span class="pp-kpi-lbl">Hallen</span></div>
-          <div class="pp-kpi"><span class="pp-kpi-val">${tage}</span><span class="pp-kpi-lbl">Tage</span></div>
+          <div class="pp-kpi"><span class="pp-kpi-val">${tage}</span><span class="pp-kpi-lbl">${tage === 1 ? 'Tag' : 'Tage'}</span></div>
+          <div class="pp-kpi"><span class="pp-kpi-val">${maxZelle || '·'}</span><span class="pp-kpi-lbl">Spitzenbedarf / Halle·Tag</span></div>
         </div>
+        ${uebersichtHTML}
+        <div class="ppd-title">Aufschlüsselung nach Packmittel</div>
         <div class="pp-scroll">
           <table class="pp-table">
             <thead>
