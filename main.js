@@ -611,15 +611,17 @@
     // Abfahrt separat als Flag (optionaler Schritt hinter "fertig")
     te.abgefahren = te.tsAbfahrt !== null;
 
-    // ── Verzögerung: Differenz Soll-Start zu Ist-Entladen-Start ──
-    // Kernfrage: Wie lange stand der LKW am Tor bevor entladen wurde?
-    if (te.geplantStart && te.tsEntladenStart) {
-      te.verzoegerungMin = diffMin(te.geplantStart, te.tsEntladenStart);
-      if (te.verzoegerungMin < 0) te.verzoegerungMin = 0;
-    } else if (te.geplantStart && !te.tsEntladenStart && te.tsAngedockt) {
-      te.verzoegerungMin = diffMin(te.geplantStart, jetzt);
-      if (te.verzoegerungMin < 0) te.verzoegerungMin = 0;
+    // ── Verzögerung: Geplanter Start → Ankunft am Kontrollpunkt ──
+    // Maßgeblich ist die Pünktlichkeit des Transports, also wann der LKW am
+    // Kontrollpunkt eintraf — NICHT wie lange die Abwicklung danach dauerte.
+    // (Die Zeit zwischen Ankunft und Entladung ist normale Prozesszeit.)
+    te.verzoegerungMin = null;
+    if (te.geplantStart && te.tsAnkunft) {
+      const dm = diffMin(te.geplantStart, te.tsAnkunft);
+      te.verzoegerungMin = dm < 0 ? 0 : dm;
     }
+    // Wenn noch nicht eingetroffen, aber geplanter Start liegt schon zurück:
+    // laufende Verspätung gegen "jetzt" (wird für Überfälligkeit genutzt).
 
     // ── Prozess-Status ── (rein aus dem Prozessfortschritt, "am weitesten"
     // erreichter Schritt zuerst geprüft). Der Status beschreibt NUR, WO die TE
@@ -4330,22 +4332,24 @@
 
       // ── Einheitliche Zeitbewertung (unten rechts) ──────────────────────
       // Fasst Pünktlichkeit, Verzögerung und Überfälligkeit in EINEM Indikator
-      // zusammen. Schwelle: Erst ab VERZOEGERUNG_SCHWELLE_MIN (30 min) gilt
-      // etwas als verzögert/überfällig — darunter ist alles "pünktlich".
+      // zusammen. Bezug ist die ANKUNFT am Kontrollpunkt gegenüber dem
+      // geplanten Start. Schwelle: erst ab VERZOEGERUNG_SCHWELLE_MIN (30 min)
+      // gilt etwas als verzögert/überfällig — darunter "pünktlich".
       let statusHint = '';
       if (te.abweichungGrund === 'überfällig') {
         // Geplanter Start ≥30 min überschritten, noch nicht eingetroffen
         statusHint = `<span class="tc-hint-badge warn" title="Geplanter Start überschritten, noch nicht am Kontrollpunkt">⚠ Überfällig ${fmtDauer(te.ueberfaelligMin)}</span>`;
       } else if (te.abweichungGrund === 'verzögert') {
-        // Wartezeit/Abwicklung ≥30 min hinter Plan
-        const dm = te.verzoegerungMin != null ? te.verzoegerungMin : null;
-        const txt = dm != null ? `Verzögert ${fmtDauer(dm)}` : 'Verzögert';
-        statusHint = `<span class="tc-hint-badge warn" title="Abwicklung mehr als 30 min hinter dem geplanten Start">⚠ ${esc(txt)}</span>`;
-      } else if (te.geplantStart) {
-        // Innerhalb der 30-Minuten-Toleranz → schlicht "Pünktlich".
-        // (Keine Delta-Zahl, um Verwechslung mit dem Verzögerungswert zu vermeiden.)
-        statusHint = `<span class="tc-hint-badge ok" title="Innerhalb der 30-Minuten-Toleranz">Pünktlich</span>`;
+        // Ankunft ≥30 min nach geplantem Start
+        const dm = te.verzoegerungMin;
+        const txt = dm != null ? `Verspätet ${fmtDauer(dm)}` : 'Verspätet';
+        statusHint = `<span class="tc-hint-badge warn" title="Ankunft mehr als 30 min nach dem geplanten Start">⚠ ${esc(txt)}</span>`;
+      } else if (te.tsAnkunft && te.geplantStart) {
+        // Bereits eingetroffen und innerhalb der 30-Minuten-Toleranz → pünktlich.
+        statusHint = `<span class="tc-hint-badge ok" title="Ankunft innerhalb der 30-Minuten-Toleranz">Pünktlich</span>`;
       }
+      // Sonst (noch nicht eingetroffen, geplanter Start noch nicht überschritten):
+      // KEIN Indikator — der Transport ist einfach noch planmäßig unterwegs.
 
       // Frachtführer nur mit Klartext zeigen — eine nackte Key-Nummer hilft nicht.
       const ff = te.frachtfuehrer;
@@ -4485,10 +4489,12 @@
 
       // ── Kopf-Delta ──
       let deltaHTML = '';
-      if (te.verzoegerungMin != null && te.verzoegerungMin > 0) {
-        deltaHTML = `<span class="dh-delta pos">${fmtDauer(te.verzoegerungMin)} Verzögerung</span>`;
-      } else if (status === 'eingelagert') {
-        deltaHTML = `<span class="dh-delta neg">Pünktlich abgewickelt</span>`;
+      if (te.abweichungGrund === 'überfällig') {
+        deltaHTML = `<span class="dh-delta pos">Überfällig ${fmtDauer(te.ueberfaelligMin)}</span>`;
+      } else if (te.abweichungGrund === 'verzögert') {
+        deltaHTML = `<span class="dh-delta pos">Verspätet ${fmtDauer(te.verzoegerungMin)}</span>`;
+      } else if (te.tsAnkunft) {
+        deltaHTML = `<span class="dh-delta neg">Pünktlich</span>`;
       }
 
       // ── Warnleiste (dieselben Warnungen wie auf der Kachel) ──
