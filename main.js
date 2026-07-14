@@ -1530,7 +1530,36 @@
       }
       /* Warnleiste immer präsent (ggf. leer) mit fester Höhe, damit alle
          Kacheln denselben vertikalen Aufbau haben und der Balken nicht springt. */
-      .tc-warnbar { min-height: 20px; }
+      .tc-warnbar {
+        min-height:  22px;
+        display:     flex;
+        align-items: center;
+        gap:         7px;
+        margin-bottom: 9px;
+      }
+      .tc-warn-icons { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+      /* Status-Tag (aktueller Status) — nutzt die badge-*-Farben */
+      .tc-status-tag {
+        flex-shrink:    0;
+        padding:        3px 9px;
+        border-radius:  var(--r-sm);
+        font-family:    var(--font-mono);
+        font-size:      10px;
+        font-weight:    700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        white-space:    nowrap;
+      }
+      /* Ankunfts-Pünktlichkeit (Geplanter Start → Ankunft) */
+      .tc-ankunft {
+        font-size:   10px;
+        font-weight: 600;
+        white-space: nowrap;
+        padding:     2px 6px;
+        border-radius: var(--r-sm);
+      }
+      .tc-ankunft.ok  { color: var(--c-green);     background: var(--c-green-dim); }
+      .tc-ankunft.bad { color: var(--c-red-light); background: var(--c-red-dim); }
       /* Akzentstreifen darf nicht rauslaufen, Popup aber schon */
       .te-card::before { border-radius: var(--r-lg) 0 0 var(--r-lg); }
 
@@ -1809,11 +1838,11 @@
       }
       .tc-te-ext {
         font-family:  var(--font-mono);
-        font-size:    9px;
-        color:        var(--c-text3);
+        font-size:    11px;
+        color:        var(--c-text2);
         background:   var(--c-bg3);
         border-radius: 3px;
-        padding:      1px 5px;
+        padding:      2px 7px;
         flex-shrink:  0;
       }
       .tc-te-ext::after { content: ' ·'; color: var(--c-text3); }
@@ -3941,14 +3970,30 @@
       const { von, bis } = this._zeitraumBereich();
       const jetzt = jetztWanduhr();
 
+      // Eine TE gilt als "noch live", wenn sie weder eingelagert noch vom
+      // Kontrollpunkt abgefahren ist — sie wird also noch aktiv abgewickelt.
+      const nochLive = (te) => te.status !== 'eingelagert' && !te.abgefahren;
+
       return alle.filter(te => {
         const anker = te.geplantStart ?? te.tsAnkunft;
-        if (!anker || anker < von || anker >= bis) return false;
+
         // "Geplant" zeigt nur TEs, deren geplanter Start noch bevorsteht.
         if (this._activeZeitraum === 'geplant') {
           return te.geplantStart != null && te.geplantStart > jetzt;
         }
-        return true;
+
+        // Im Fenster? Dann normal einschließen.
+        if (anker && anker >= von && anker < bis) return true;
+
+        // Übertrag: Bei den tagesbezogenen Ansichten (heute/gestern) auch
+        // TEs zeigen, die VOR dem Fenster geplant waren, aber noch live sind
+        // — sonst verschwinden gestern gestartete, noch laufende Transporte.
+        if ((this._activeZeitraum === 'heute' || this._activeZeitraum === 'gestern')
+            && anker && anker < von && nochLive(te)) {
+          return true;
+        }
+
+        return false;
       });
     }
 
@@ -4239,8 +4284,7 @@
       const status = te.status;
       const badgeLabel = STATUS_LABEL[status] ?? status;
 
-      // Warnleiste: max. 4 Icons, Rest als "+n"-Overflow.
-      // Immer gerendert (ggf. leer) → alle Kacheln gleich hoch.
+      // Warn-Icons: max. 4, Rest als "+n"-Overflow.
       let warnInner = '';
       if (te.warnungen.length) {
         const sicht = te.warnungen.slice(0, 4);
@@ -4252,7 +4296,35 @@
           warnInner += `<span class="tc-warn w-more" title="${esc(rest.map(w => w.label + ': ' + w.tooltip).join('\n\n'))}">+${rest.length}</span>`;
         }
       }
-      const warnHTML = `<div class="tc-warnbar">${warnInner}</div>`;
+
+      // Ankunfts-Pünktlichkeit: Geplanter Start → Ankunft am Kontrollpunkt.
+      // Nur relevant, sobald die TE eingetroffen ist. Negativ/0 = pünktlich.
+      let ankunftHint = '';
+      if (te.tsAnkunft && te.geplantStart) {
+        const dm = diffMin(te.geplantStart, te.tsAnkunft);
+        if (dm != null) {
+          if (dm <= 0) {
+            ankunftHint = `<span class="tc-ankunft ok" title="Ankunft am Kontrollpunkt gegenüber geplantem Start">Pünktlich ${fmtDauer(dm)}</span>`;
+          } else {
+            ankunftHint = `<span class="tc-ankunft bad" title="Ankunft am Kontrollpunkt gegenüber geplantem Start">Verzögert ${fmtDauer(dm)}</span>`;
+          }
+        }
+      } else if (!te.tsAnkunft && te.geplantStart) {
+        // Noch nicht eingetroffen: geplante Ankunft anzeigen (neutral)
+        const jetzt = jetztWanduhr();
+        if (jetzt >= te.geplantStart) {
+          const dm = diffMin(te.geplantStart, jetzt);
+          ankunftHint = `<span class="tc-ankunft bad" title="Noch nicht am Kontrollpunkt eingetroffen">Überfällig ${fmtDauer(dm)}</span>`;
+        }
+      }
+
+      // Warnzeile: aktueller Status (links) + Ankunfts-Pünktlichkeit + Warn-Icons (rechts).
+      const warnHTML = `<div class="tc-warnbar">
+        <span class="tc-status-tag badge-${esc(status)}">${esc(badgeLabel)}</span>
+        ${ankunftHint}
+        <div class="tc-spacer"></div>
+        <div class="tc-warn-icons">${warnInner}</div>
+      </div>`;
 
       // Ein einzelner Statushinweis, priorisiert.
       let statusHint = '';
@@ -4283,7 +4355,6 @@
             ${te.transportmittel ? `<span class="tc-tm">${esc(te.transportmittel)}</span>` : ''}
             ${ffText ? `<span class="tc-ff">${esc(ffText)}</span>` : ''}
             <div class="tc-spacer"></div>
-            <span class="tc-badge badge-${esc(status)}">${esc(badgeLabel)}</span>
           </div>
           <div class="tc-sub">
             <span class="tc-supplier">${esc(te.lieferantName ?? '–')}</span>
