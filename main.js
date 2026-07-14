@@ -132,12 +132,17 @@
   ];
 
   // Anzeigenamen der Status
+  // Prozess-Status = WO steht die TE in der Kette. Dies ist bewusst getrennt
+  // von der Zeit-Bewertung (pünktlich/verzögert/überfällig), die separat im
+  // Pünktlichkeits-Hinweis dargestellt wird — nie als Status.
   const STATUS_LABEL = {
-    erwartet:    'Erwartet',
-    ankunft:     'Eingetroffen',
-    entladen:    'Wird entladen',
-    eingelagert: 'Eingelagert',
-    'verzögert': 'Verzögert',
+    erwartet:        'Erwartet',
+    ankunft:         'Eingetroffen',
+    angedockt:       'Angedockt',
+    entladen:        'Wird entladen',
+    entladen_fertig: 'Entladen',
+    fertigstellung:  'Wird fertiggestellt',
+    eingelagert:     'Eingelagert',
   };
 
   // EWM-Deeplink. Platzhalter bis die echte URL feststeht.
@@ -454,7 +459,7 @@
   //   tsWeBuchung: Date, tsAbfahrt: Date,
   //   produkte: [ { nr, name, menge, einheit, halle, tsEinlagerung: Date } ],
   //   // Berechnete Felder (nach parseTEs() befüllt):
-  //   status: 'erwartet'|'ankunft'|'entladen'|'eingelagert'|'abgefahren'|'verzögert'
+  //   status: 'erwartet'|'ankunft'|'angedockt'|'entladen'|'entladen_fertig'|'fertigstellung'|'eingelagert'
   //   verzoegerungMin: Number|null,
   //   fortschritt: 0–6 (Anzahl abgeschlossener Schritte)
 
@@ -616,45 +621,50 @@
       if (te.verzoegerungMin < 0) te.verzoegerungMin = 0;
     }
 
-    // ── Status ── (von "am weitesten" nach "am frühesten")
-    // WICHTIG: Abfahrt bestimmt NICHT mehr den Status. Eine TE ist "eingelagert"
-    // (fertig) sobald Fertigstellung ODER WE-Buchung vorliegt. Ob der LKW schon
-    // abgefahren ist, wird über das separate Flag te.abgefahren dargestellt.
+    // ── Prozess-Status ── (rein aus dem Prozessfortschritt, "am weitesten"
+    // erreichter Schritt zuerst geprüft). Der Status beschreibt NUR, WO die TE
+    // in der Kette steht — nie ob sie verzögert ist. Die Zeit-Bewertung
+    // (pünktlich/verzögert/überfällig) läuft komplett getrennt über
+    // te.planabweichung / den Pünktlichkeits-Hinweis in der Kachel.
+    // Abfahrt bestimmt den Status NICHT (separates Flag te.abgefahren).
     if (te.alleFertiggestellt) {
-      te.status = 'eingelagert';
+      te.status = 'eingelagert';           // 6 Fertigstellung
+    } else if (te.tsWeBuchung) {
+      te.status = 'fertigstellung';        // 5 WE gebucht → Einlagerung läuft
+    } else if (te.tsEntladenEnde) {
+      te.status = 'entladen_fertig';       // 4 Entladen beendet
     } else if (te.tsEntladenStart) {
-      te.status = te.verzoegerungMin >= VERZOEGERUNG_SCHWELLE_MIN
-        ? 'verzögert'
-        : 'entladen';
-    } else if (te.tsAnkunft || te.tsAngedockt) {
-      // Am Tor aber Entladen noch nicht gestartet – prüfe Verzögerung
-      if (te.verzoegerungMin != null && te.verzoegerungMin >= VERZOEGERUNG_SCHWELLE_MIN) {
-        te.status = 'verzögert';
-      } else {
-        te.status = 'ankunft';
-      }
+      te.status = 'entladen';              // 3 Wird entladen
+    } else if (te.tsAngedockt) {
+      te.status = 'angedockt';             // 2 Am Tor angedockt
+    } else if (te.tsAnkunft) {
+      te.status = 'ankunft';               // 1 Eingetroffen
     } else {
-      te.status = 'erwartet';
+      te.status = 'erwartet';              // 0 noch nicht da
     }
 
-    // ── Planabweichung ──────────────────────────────────────────────────
+    // ── Planabweichung (Zeit-Bewertung, getrennt vom Prozess-Status) ─────
     // Eine TE weicht von der Planung ab wenn:
     //  a) sie überfällig ist: geplanter Start liegt >Schwelle in der
-    //     Vergangenheit, aber sie ist noch gar nicht angekommen, ODER
-    //  b) sie bereits als verzögert erkannt wurde (Wartezeit am Tor).
+    //     Vergangenheit, aber sie ist noch gar nicht eingetroffen, ODER
+    //  b) sie verzögert ist: sie steht am Tor / wird abgewickelt, aber die
+    //     Wartezeit gegenüber dem geplanten Start liegt über der Schwelle,
+    //     und sie ist noch nicht fertig eingelagert.
     te.planabweichung = false;
     te.abweichungGrund = null;
     te.ueberfaelligMin = null;
-    if (te.status === 'verzögert') {
-      te.planabweichung = true;
-      te.abweichungGrund = 'verzögert';
-    } else if (te.status === 'erwartet' && te.geplantStart) {
+    if (te.status === 'erwartet' && te.geplantStart) {
       const ueberfaellig = diffMin(te.geplantStart, jetzt);
       if (ueberfaellig >= VERZOEGERUNG_SCHWELLE_MIN) {
         te.planabweichung = true;
         te.abweichungGrund = 'überfällig';
         te.ueberfaelligMin = ueberfaellig;
       }
+    } else if (te.status !== 'eingelagert'
+               && te.verzoegerungMin != null
+               && te.verzoegerungMin >= VERZOEGERUNG_SCHWELLE_MIN) {
+      te.planabweichung = true;
+      te.abweichungGrund = 'verzögert';
     }
 
     // ── Andock-Regel ────────────────────────────────────────────────────
@@ -1579,12 +1589,13 @@
         border-radius:  var(--r-lg) 0 0 var(--r-lg);
       }
 
-      .te-card.s-erwartet::before   { background: var(--c-text3); }
-      .te-card.s-ankunft::before    { background: var(--c-yellow); }
-      .te-card.s-entladen::before   { background: var(--c-blue); }
-      .te-card.s-eingelagert::before{ background: var(--c-green); }
-      .te-card.s-abgefahren::before { background: var(--c-text3); opacity: 0.4; }
-      .te-card.s-verzögert::before  { background: var(--c-red); }
+      .te-card.s-erwartet::before        { background: var(--c-text3); }
+      .te-card.s-ankunft::before         { background: var(--c-yellow); }
+      .te-card.s-angedockt::before       { background: var(--c-yellow); }
+      .te-card.s-entladen::before        { background: var(--c-blue); }
+      .te-card.s-entladen_fertig::before { background: var(--c-blue); }
+      .te-card.s-fertigstellung::before  { background: #16a085; }
+      .te-card.s-eingelagert::before     { background: var(--c-green); }
 
       .tc-te-nr {
         font-family:    var(--font-mono);
@@ -1619,12 +1630,14 @@
         white-space:    nowrap;
       }
 
-      .badge-erwartet   { background: var(--c-bg4);         color: var(--c-text3); }
-      .badge-ankunft    { background: var(--c-yellow-dim);  color: #f0b429; }
-      .badge-entladen   { background: var(--c-blue-dim);    color: #5dade2; }
-      .badge-eingelagert{ background: var(--c-green-dim);   color: #58d68d; }
-      .badge-abgefahren { background: var(--c-bg4);         color: var(--c-text3); }
-      .badge-verzögert  { background: var(--c-red-dim);     color: #e74c3c; }
+      .badge-erwartet        { background: var(--c-bg4);         color: var(--c-text3); }
+      .badge-ankunft         { background: var(--c-yellow-dim);  color: #f0b429; }
+      .badge-angedockt       { background: var(--c-yellow-dim);  color: #f0b429; }
+      .badge-entladen        { background: var(--c-blue-dim);    color: #5dade2; }
+      .badge-entladen_fertig { background: var(--c-blue-dim);    color: #5dade2; }
+      .badge-fertigstellung  { background: rgba(22,160,133,.18); color: #1abc9c; }
+      .badge-eingelagert     { background: var(--c-green-dim);   color: #58d68d; }
+      .badge-abgefahren      { background: var(--c-bg4);         color: var(--c-text3); }
 
       /* ── Fortschrittsbalken ── */
       .tc-progress {
@@ -2171,6 +2184,24 @@
         background: var(--c-yellow) !important;
       }
 
+      /* Überfällig: geplanter Start überschritten, TE noch nicht eingetroffen.
+         Der Kachelrahmen pulsiert dezent rot, um Aufmerksamkeit zu ziehen. */
+      .te-card.ueberfaellig {
+        border-color: rgba(231,76,60,0.55);
+        animation: card-overdue-blink 1.6s ease-in-out infinite;
+      }
+      .te-card.ueberfaellig::before {
+        background: var(--c-red) !important;
+      }
+      @keyframes card-overdue-blink {
+        0%, 100% { box-shadow: inset 3px 0 0 var(--c-red), 0 0 0 1px rgba(231,76,60,0.15); }
+        50%      { box-shadow: inset 3px 0 0 var(--c-red), 0 0 0 2px rgba(231,76,60,0.55); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .te-card.ueberfaellig { animation: none;
+          box-shadow: inset 3px 0 0 var(--c-red), 0 0 0 2px rgba(231,76,60,0.4); }
+      }
+
       /* Leerer-State innerhalb Grid */
       .te-grid-empty {
         grid-column:   1 / -1;
@@ -2306,11 +2337,13 @@
         content: ''; position: absolute; left: 0; top: 0; bottom: 0;
         width: 3px; border-radius: var(--r-lg) 0 0 var(--r-lg);
       }
-      .detail-head.s-eingelagert::before { background: var(--c-green); }
-      .detail-head.s-verzögert::before   { background: var(--c-red); }
-      .detail-head.s-entladen::before    { background: var(--c-blue); }
-      .detail-head.s-ankunft::before     { background: var(--c-yellow); }
-      .detail-head.s-erwartet::before    { background: var(--c-text3); }
+      .detail-head.s-eingelagert::before     { background: var(--c-green); }
+      .detail-head.s-fertigstellung::before  { background: #16a085; }
+      .detail-head.s-entladen::before        { background: var(--c-blue); }
+      .detail-head.s-entladen_fertig::before { background: var(--c-blue); }
+      .detail-head.s-angedockt::before       { background: var(--c-yellow); }
+      .detail-head.s-ankunft::before         { background: var(--c-yellow); }
+      .detail-head.s-erwartet::before        { background: var(--c-text3); }
 
       .dh-top { display: flex; align-items: center; gap: 12px; }
       .dh-te {
@@ -4011,7 +4044,7 @@
     _updateKPIs() {
       const tes        = this._tesFuerZeitraum();
       const aktiv      = tes.filter(t => ['ankunft', 'entladen'].includes(t.status)).length;
-      const verzoegert = tes.filter(t => t.status === 'verzögert').length;
+      const verzoegert = tes.filter(t => t.planabweichung).length;
       const abgefahren = tes.filter(t => t.abgefahren).length;
 
       this._$('kpi-gesamt').textContent     = tes.length;
@@ -4040,7 +4073,7 @@
       const statusMatch = (te) => {
         switch (this._activeFilter) {
           case 'aktiv':      return ['ankunft', 'entladen'].includes(te.status);
-          case 'verzögert':  return te.status === 'verzögert';
+          case 'verzögert':  return te.planabweichung === true;
           case 'abgefahren': return te.abgefahren === true;
           case 'erwartet':   return te.status === 'erwartet';
           default:           return true; // 'alle'
@@ -4304,7 +4337,8 @@
         const dm = diffMin(te.geplantStart, te.tsAnkunft);
         if (dm != null) {
           if (dm <= 0) {
-            ankunftHint = `<span class="tc-ankunft ok" title="Ankunft am Kontrollpunkt gegenüber geplantem Start">Pünktlich ${fmtDauer(dm)}</span>`;
+            const txt = dm === 0 ? 'Pünktlich' : `Pünktlich ${fmtDauer(dm)}`;
+            ankunftHint = `<span class="tc-ankunft ok" title="Ankunft am Kontrollpunkt gegenüber geplantem Start">${txt}</span>`;
           } else {
             ankunftHint = `<span class="tc-ankunft bad" title="Ankunft am Kontrollpunkt gegenüber geplantem Start">Verzögert ${fmtDauer(dm)}</span>`;
           }
@@ -4345,7 +4379,7 @@
       const zeitText = te.geplantStart ? `ab ${fmtTime(te.geplantStart)}` : '';
 
       return /* html */`
-        <div class="te-card s-${esc(status)}${te.planabweichung ? ' abweichung' : ''}"
+        <div class="te-card s-${esc(status)}${te.planabweichung ? ' abweichung' : ''}${te.abweichungGrund === 'überfällig' ? ' ueberfaellig' : ''}"
              data-te="${esc(te.te)}" role="button" tabindex="0"
              aria-label="TE ${esc(te.te)}, Status: ${esc(badgeLabel)}">
           ${warnHTML}
@@ -4387,7 +4421,7 @@
         te.tsAnkunft, te.tsAngedockt, te.tsEntladenStart,
         te.tsEntladenEnde, te.tsWeBuchung, te.tsEinlagerung,
       ];
-      const isVerspaetet = te.status === 'verzögert';
+      const isVerspaetet = te.planabweichung === true;
       const nochNichtDa  = !te.tsAnkunft;
       const planErreicht = te.geplantStart && jetzt >= te.geplantStart;
       const ueberfaellig = nochNichtDa && planErreicht;
@@ -4473,7 +4507,7 @@
     // Baut das komplette HTML für den Detail-View einer TE
     _detailHTML(te) {
       const status = te.status;
-      const isVerspaetet = status === 'verzögert';
+      const isVerspaetet = te.planabweichung === true;
 
       // ── Kopf-Delta ──
       let deltaHTML = '';
@@ -4949,7 +4983,7 @@
         .map(ls => {
           const m  = LADESTELLE_STYLE[ls] ?? LADESTELLE_STYLE.BSL;
           const gr = byLS[ls];
-          const vz = gr.filter(t => t.status === 'verzögert').length;
+          const vz = gr.filter(t => t.planabweichung).length;
           const gh = `<div class="gantt-group-header">
             <div class="gantt-group-accent" style="background:${m.col}"></div>
             <span class="gantt-group-title" style="color:${m.col}">${m.icon} ${esc(ls + ' — ' + ladestelleLang(ls))}</span>
@@ -5411,7 +5445,7 @@
           return te.produkte.some(p => p.halle === h);
         });
         const belegt = teInHalle.filter(te => !['abgefahren', 'erwartet'].includes(te.status));
-        const verz   = teInHalle.filter(te => te.status === 'verzögert');
+        const verz   = teInHalle.filter(te => te.planabweichung);
         // Tore dieser Halle mit Belegungsstatus
         const torStatus = [...toreDieserHalle].map(tor => {
           const belegteTE = belegt.find(te => te.tor === tor);
@@ -5524,7 +5558,7 @@
 
     // Baut eine Tor-Karte für die Hallen-Ansicht
     _torKarteHTML(te) {
-      const isV = te.status === 'verzögert';
+      const isV = te.planabweichung === true;
 
       // Restzeit-Schätzung (Platzhalter-Logik bis echte Sollwerte vorliegen)
       let restzeit, rzCls;
@@ -5536,8 +5570,11 @@
         restzeit = 'läuft'; rzCls = 'rz-ok';
       }
 
-      // Fortschritt (5 Stufen)
-      const fp = { ankunft: 1, entladen: 3, eingelagert: 5, 'verzögert': 2 }[te.status] || 0;
+      // Fortschritt (6 Prozessstufen → auf 5 Balken gemappt)
+      const fp = {
+        erwartet: 0, ankunft: 1, angedockt: 2, entladen: 3,
+        entladen_fertig: 3, fertigstellung: 4, eingelagert: 5,
+      }[te.status] || 0;
       const steps = [0,1,2,3,4].map(i => {
         let cls = 'tc2-step';
         if (i < fp) cls += isV ? ' late' : ' done';
