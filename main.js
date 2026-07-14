@@ -1561,15 +1561,6 @@
         white-space:    nowrap;
       }
       /* Ankunfts-Pünktlichkeit (Geplanter Start → Ankunft) */
-      .tc-ankunft {
-        font-size:   10px;
-        font-weight: 600;
-        white-space: nowrap;
-        padding:     2px 6px;
-        border-radius: var(--r-sm);
-      }
-      .tc-ankunft.ok  { color: var(--c-green);     background: var(--c-green-dim); }
-      .tc-ankunft.bad { color: var(--c-red-light); background: var(--c-red-dim); }
       /* Akzentstreifen darf nicht rauslaufen, Popup aber schon */
       .te-card::before { border-radius: var(--r-lg) 0 0 var(--r-lg); }
 
@@ -4330,47 +4321,30 @@
         }
       }
 
-      // Ankunfts-Pünktlichkeit: Geplanter Start → Ankunft am Kontrollpunkt.
-      // Nur relevant, sobald die TE eingetroffen ist. Negativ/0 = pünktlich.
-      let ankunftHint = '';
-      if (te.tsAnkunft && te.geplantStart) {
-        const dm = diffMin(te.geplantStart, te.tsAnkunft);
-        if (dm != null) {
-          if (dm <= 0) {
-            const txt = dm === 0 ? 'Pünktlich' : `Pünktlich ${fmtDauer(dm)}`;
-            ankunftHint = `<span class="tc-ankunft ok" title="Ankunft am Kontrollpunkt gegenüber geplantem Start">${txt}</span>`;
-          } else {
-            ankunftHint = `<span class="tc-ankunft bad" title="Ankunft am Kontrollpunkt gegenüber geplantem Start">Verzögert ${fmtDauer(dm)}</span>`;
-          }
-        }
-      } else if (!te.tsAnkunft && te.geplantStart) {
-        // Noch nicht eingetroffen: geplante Ankunft anzeigen (neutral)
-        const jetzt = jetztWanduhr();
-        if (jetzt >= te.geplantStart) {
-          const dm = diffMin(te.geplantStart, jetzt);
-          ankunftHint = `<span class="tc-ankunft bad" title="Noch nicht am Kontrollpunkt eingetroffen">Überfällig ${fmtDauer(dm)}</span>`;
-        }
-      }
-
-      // Warnzeile: aktueller Status (links) + Ankunfts-Pünktlichkeit + Warn-Icons (rechts).
+// Warnzeile: aktueller Status (links) + Ankunfts-Pünktlichkeit + Warn-Icons (rechts).
       const warnHTML = `<div class="tc-warnbar">
         <span class="tc-status-tag badge-${esc(status)}">${esc(badgeLabel)}</span>
-        ${ankunftHint}
         <div class="tc-spacer"></div>
         <div class="tc-warn-icons">${warnInner}</div>
       </div>`;
 
-      // Ein einzelner Statushinweis, priorisiert.
+      // ── Einheitliche Zeitbewertung (unten rechts) ──────────────────────
+      // Fasst Pünktlichkeit, Verzögerung und Überfälligkeit in EINEM Indikator
+      // zusammen. Schwelle: Erst ab VERZOEGERUNG_SCHWELLE_MIN (30 min) gilt
+      // etwas als verzögert/überfällig — darunter ist alles "pünktlich".
       let statusHint = '';
-      if (te.planabweichung) {
-        const txt = te.abweichungGrund === 'überfällig'
-          ? `${fmtDauer(te.ueberfaelligMin)}`
-          : 'verzögert';
-        statusHint = `<span class="tc-hint-badge warn">⚠ ${esc(txt)}</span>`;
-      } else if (te.verzoegerungMin != null && te.verzoegerungMin > 0) {
-        statusHint = `<span class="tc-hint-badge warn">${fmtDauer(te.verzoegerungMin)}</span>`;
-      } else if (status === 'eingelagert') {
-        statusHint = `<span class="tc-hint-badge ok">pünktlich</span>`;
+      if (te.abweichungGrund === 'überfällig') {
+        // Geplanter Start ≥30 min überschritten, noch nicht eingetroffen
+        statusHint = `<span class="tc-hint-badge warn" title="Geplanter Start überschritten, noch nicht am Kontrollpunkt">⚠ Überfällig ${fmtDauer(te.ueberfaelligMin)}</span>`;
+      } else if (te.abweichungGrund === 'verzögert') {
+        // Wartezeit/Abwicklung ≥30 min hinter Plan
+        const dm = te.verzoegerungMin != null ? te.verzoegerungMin : null;
+        const txt = dm != null ? `Verzögert ${fmtDauer(dm)}` : 'Verzögert';
+        statusHint = `<span class="tc-hint-badge warn" title="Abwicklung mehr als 30 min hinter dem geplanten Start">⚠ ${esc(txt)}</span>`;
+      } else if (te.geplantStart) {
+        // Innerhalb der 30-Minuten-Toleranz → schlicht "Pünktlich".
+        // (Keine Delta-Zahl, um Verwechslung mit dem Verzögerungswert zu vermeiden.)
+        statusHint = `<span class="tc-hint-badge ok" title="Innerhalb der 30-Minuten-Toleranz">Pünktlich</span>`;
       }
 
       // Frachtführer nur mit Klartext zeigen — eine nackte Key-Nummer hilft nicht.
