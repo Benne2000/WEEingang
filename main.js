@@ -756,7 +756,7 @@
     // 6) TE-Hinweis — Freitext.
     if (!isNull(te.teHinweis)) {
       w.push({
-        typ: 'hinweis', icon: '📌', farbe: 'info',
+        typ: 'hinweis', icon: '📝', farbe: 'info',
         label: 'Hinweis',
         tooltip: te.teHinweis,
       });
