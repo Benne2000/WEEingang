@@ -1,5 +1,5 @@
 /* =========================================================================
- * WE-Prozess-Cockpit – SAC Custom Widget (v0.9.2) · Entwickler: Benne
+ * WE-Prozess-Cockpit – SAC Custom Widget (v0.12.0) · Entwickler: Benne
  * Segment-/Schluesselabgleich mit dem Wareneingang-Tracker.
  * ========================================================================= */
 /* =========================================================================
@@ -34,10 +34,10 @@
   function parseTs(v) {
     if (isNullDim(v)) return null;
     if (v instanceof Date) return isNaN(v) ? null : v;
-    const s = String(v).trim();
-    // dd.mm.yyyy hh:mm  (CSV-Export)
-    let m = s.match(/^(\d{2})\.(\d{2})\.(\d{4})[ T](\d{2}):(\d{2})/);
-    if (m) return new Date(+m[3], +m[2] - 1, +m[1], +m[4], +m[5]);
+    const s = String(v).trim().replace(/\s+/g, " "); // mehrfache Leerzeichen -> eins (Januar-Export: "dd.mm.yyyy  hh:mm:ss")
+    // dd.mm.yyyy hh:mm(:ss)  — ein oder mehrere Trennzeichen, Sekunden optional
+    let m = s.match(/^(\d{2})\.(\d{2})\.(\d{4})[ T](\d{2}):(\d{2})(?::(\d{2}))?/);
+    if (m) return new Date(+m[3], +m[2] - 1, +m[1], +m[4], +m[5], +(m[6] || 0));
     m = s.match(/^(\d{2})\.(\d{2})\.(\d{4})$/); // nur Datum
     if (m) return new Date(+m[3], +m[2] - 1, +m[1]);
     // SAP-intern: "20250520073700" (YYYYMMDDHHmmss)
@@ -202,7 +202,17 @@
       r.paletten = (r.menge_ist != null && r.pa1 > 0) ? r.menge_ist / r.pa1 : null;
       // Business-geflaggte Sonderfälle (keine statistischen Ausreißer, sondern im SAP markiert)
       r.isDiffLieferung = !isNull(r.processcode);
-      r.isKritArt = !isNull(r.kategorie_krit_art) || !isNull(r.freitext_krit_art);
+      // BSL-Prozess (Belegart PDI/ZBLE bzw. Ladestelle/Transportmittel BSL):
+      // hier darf die WE-Buchung VOR dem Entladeende liegen (legitime
+      // Prozessabwandlung, kein Datenfehler). Belegart ist das zuverlässigste
+      // Merkmal, weil die Ladestelle bei BSL oft nicht gesetzt ist.
+      r.isBSL = /ZBLE/i.test(String(r.belegart || "")) ||
+                String(r.transportmittel || "").toUpperCase() === "BSL" ||
+                r.segment === "BSL";
+      // "Nicht zugeordnet" ist hier der Normalfall (kein kritischer Artikel),
+      // nicht ein gesetztes Kennzeichen - daher wie leer behandeln.
+      const kritLeer = (v) => isNullDim(v) || String(v).trim() === "Nicht zugeordnet";
+      r.isKritArt = !kritLeer(r.kategorie_krit_art) || !kritLeer(r.freitext_krit_art);
       r.qty_dev = (r.menge_ist != null && r.menge_soll != null) ? r.menge_ist - r.menge_soll : null;
       r.qty_dev_pct = (r.qty_dev != null && r.menge_soll) ? (100 * r.qty_dev) / r.menge_soll : null;
       positions.push(r);
@@ -228,6 +238,16 @@
           sh_andocken: p.sh_andocken, sh_entl_start: p.sh_entl_start, sh_unload_eff: p.sh_unload_eff,
           team_entl: p.team_entl, sh_entl: p.sh_entl, kw_entl: p.kw_entl,
           isDiffLieferung: p.isDiffLieferung, isKritArt: p.isKritArt,
+          // Neue Felder auf Anlieferungsebene
+          belegart: p.belegart, lagertor: p.lagertor, containerdepot: p.containerdepot,
+          depotspediteur: p.depotspediteur, isBSL: p.isBSL,
+          ts_verschifft: p.ts_verschifft, ts_hafen: p.ts_hafen, ts_verzollung: p.ts_verzollung,
+          ts_depot: p.ts_depot, ts_depot_anf: p.ts_depot_anf,
+          ts_we_pos: p.ts_we_pos, ts_einlagerung: p.ts_einlagerung,
+          sap_otif: p.sap_otif, sap_puenktlich: p.sap_puenktlich, sap_vollstaendig: p.sap_vollstaendig,
+          knz_shuttle: p.knz_shuttle, knz_direktfahrt: p.knz_direktfahrt, knz_qualitaet: p.knz_qualitaet,
+          // Summen über Positionen (unten aufaddiert)
+          sum_gewicht: 0, sum_volumen: 0, sum_wert: 0, sum_kollis: 0, sum_menge: 0,
           nPos: 0,
         });
       }
@@ -235,6 +255,11 @@
       d.nPos++;
       d.isDiffLieferung = d.isDiffLieferung || p.isDiffLieferung;
       d.isKritArt = d.isKritArt || p.isKritArt;
+      if (p.gewicht != null) d.sum_gewicht += p.gewicht;
+      if (p.volumen != null) d.sum_volumen += p.volumen;
+      if (p.wert_eur != null) d.sum_wert += p.wert_eur;
+      if (p.anzahl_kollis != null) d.sum_kollis += p.anzahl_kollis;
+      if (p.menge_ist != null) d.sum_menge += p.menge_ist;
     }
     const deliveries = [...dmap.values()];
 
@@ -247,6 +272,10 @@
         const h = hoursBetween(rec, ph.from, ph.to);
         if (h == null) { rec.phases[k] = null; continue; }
         if (k !== "delay" && h < 0) {
+          // BSL-Prozess: negativer Buchungsverzug UND negative Einlagerung sind
+          // erlaubt - Buchung/Einlagerung dürfen vor dem jeweiligen Vorgänger
+          // liegen (legitime Prozessabwandlung). Als 0 werten statt Datenfehler.
+          if ((k === "booking" || k === "putaway") && rec.isBSL) { rec.phases[k] = 0; continue; }
           dataErrors.push({ ctx, key: rec.belegnr + (rec.pos ? "/" + rec.pos : ""), phase: ph.label, hours: h, rec });
           rec.phases[k] = null;                    // aus Statistik ausschließen
           rec.hasError = true;
@@ -546,7 +575,7 @@
       tone: otD.better ? "ok" : "warn",
     });
     if (kpis.nErrors > 0) findings.push({
-      text: `${kpis.nErrors} Datensätze mit unplausibler Zeitstempel-Reihenfolge — im Tab „Muster & Schicht" gelistet.`,
+      text: `${kpis.nErrors} Datensätze mit unplausibler Zeitstempel-Reihenfolge — als Datenfehler ausgeschlossen.`,
       tone: "err",
     });
 
@@ -633,12 +662,10 @@
     }`;
 
   const MODES = [
-    { id: "ueberblick", label: "Überblick", metric: null, level: null, phases: [], unit: "", desc: "Engpass, Trends und Kurzbefund" },
-    { id: "hof",    label: "Hofprozess",  metric: "dwell",   level: "delivery", phases: ["wait_gate", "reaction", "unload"], unit: "h", desc: "Standzeit Ankunft → Abfahrt" },
-    { id: "lager",  label: "Lagerprozess", metric: "putaway", level: "position", phases: ["booking", "putaway"], unit: "h", desc: "WE-Buchung → Einlagerung" },
-    { id: "termin", label: "Termintreue", metric: "delay",   level: "delivery", phases: [], unit: "h", desc: "Ankunft vs. geplante Lieferung" },
-    { id: "mengen", label: "Mengen",      metric: "qty",     level: "position", phases: [], unit: "%", desc: "IST vs. SOLL Anlieferungsmenge" },
-    { id: "muster", label: "Muster & Schicht", metric: null, level: null, phases: [], unit: "", desc: "Anliefermuster und Team-Vergleich" },
+    { id: "puls",         label: "Puls",         desc: "Zustand der Periode auf einen Blick" },
+    { id: "prozesskette", label: "Prozesskette", desc: "Zeitstrahl je Anlieferung inkl. Seetransport" },
+    { id: "ausreisser",   label: "Ausreißer",    desc: "Auffällige Anlieferungen mit Detail-Drill" },
+    { id: "treiber",      label: "Treiber",      desc: "Aufschlüsselung nach Tor, Frachtführer, Ware" },
   ];
 
   const TPL = `
@@ -697,6 +724,18 @@
     .kpi svg.spark{ display:block; width:100%; height:26px;}
     .kpi.err .val b{ color:${C.error};}
     /* Tabs */
+    /* Kontext-Banner (Kopplung aus dem Strategie-Widget) */
+    .ctxbar{ display:flex; align-items:center; gap:10px; padding:7px 16px;
+      background:color-mix(in srgb, var(--accent) 12%, ${C.panel}); border-bottom:1px solid var(--border, rgba(255,255,255,.08));
+      font-family:var(--font-mono, 'Consolas',monospace); font-size:11px; color:${C.ink};
+      animation:ctx-in .35s cubic-bezier(.16,1,.3,1); }
+    @keyframes ctx-in{ from{ opacity:0; transform:translateY(-6px);} to{ opacity:1; transform:translateY(0);} }
+    .ctxbar .ctx-dot{ width:7px; height:7px; border-radius:50%; background:var(--accent); flex:none;
+      box-shadow:0 0 8px var(--accent); }
+    .ctxbar b{ color:var(--accent); }
+    .ctxbar button{ margin-left:auto; font:inherit; font-size:10px; padding:3px 9px; cursor:pointer;
+      border:1px solid var(--border2, rgba(255,255,255,.13)); border-radius:4px; background:transparent; color:${C.ink2}; }
+    .ctxbar button:hover{ border-color:var(--accent); color:${C.ink}; }
     nav{ display:flex; gap:2px; padding:0 14px; height:44px; background:${C.panel};
       border-bottom:1px solid ${C.border}; overflow-x:auto; scrollbar-width:none; flex:none;}
     nav::-webkit-scrollbar{ display:none;}
@@ -784,11 +823,25 @@
        sonst wächst die Schrift (Teil des viewBox) bei breiter Einbettung mit und
        wird riesig. max-width deckelt die Skalierung; Diagramm bleibt linksbündig. */
     #waterfall svg{ max-width:440px; }
-    #scatter svg, #qsc svg{ max-width:520px; }
+    #scatter svg{ width:100%; max-width:100%; }
+    #gantt svg{ width:100%; max-width:100%; }
+    #qsc svg{ max-width:520px; }
     #ribbon svg, #cmp svg{ max-width:400px; }
     #heat svg{ max-width:420px; }
     #teams svg{ max-width:400px; }
-    #tl svg{ max-width:560px; }
+    #tl svg{ max-width:100%; }
+    /* Einblend-Animationen (modernes Aufbauen) */
+    @keyframes pk-grow{ from{ transform:scaleX(0); opacity:.3;} to{ transform:scaleX(1); opacity:.92;} }
+    @keyframes sc-in{ to{ opacity:var(--o,.6);} }
+    .sc-pt{ cursor:pointer; transition:r .1s; }
+    .sc-pt:hover{ r:5; }
+    @keyframes card-rise{ from{ opacity:0; transform:translateY(10px);} to{ opacity:1; transform:translateY(0);} }
+    #main .card{ animation:card-rise .45s cubic-bezier(.16,1,.3,1) both; }
+    #main .row .card:nth-child(2){ animation-delay:.07s; }
+    #main .row .card:nth-child(3){ animation-delay:.14s; }
+    #main .findings .finding{ animation:card-rise .4s cubic-bezier(.16,1,.3,1) both; }
+    #main .finding:nth-child(2){ animation-delay:.05s; } #main .finding:nth-child(3){ animation-delay:.1s; }
+    #main .finding:nth-child(4){ animation-delay:.15s; }
     .card.grow{ flex:2 1 460px;}
     .card h3{ font-family:var(--font-mono); font-size:9px; font-weight:600; color:${C.muted};
       margin:0 0 12px; text-transform:uppercase; letter-spacing:.15em;
@@ -804,15 +857,102 @@
     .finding.err i{ background:${C.error};}
     .finding span{ color:${C.ink};}
     /* Einstiegsliste auffälliger Anlieferungen */
-    .outrow{ display:flex; align-items:center; gap:10px; padding:8px 4px; border-bottom:1px solid ${C.border}; cursor:pointer;}
+    .outrow{ display:flex; align-items:center; gap:10px; padding:8px 6px; border-bottom:1px solid ${C.border}; cursor:pointer; border-radius:6px; transition:background .12s, transform .1s;}
     .outrow:last-child{ border-bottom:0;}
-    .outrow:hover{ background:${C.band};}
+    .outrow:hover{ background:${C.band}; transform:translateX(2px);}
+    .outrow:focus-visible{ outline:2px solid ${C.accent}; outline-offset:1px;}
     .outrow .seg{ width:4px; height:30px; border-radius:2px; flex:none;}
     .outrow .oi{ flex:1; min-width:0;}
     .outrow .oi b{ font-size:12.5px; display:block;}
     .outrow .oi small,.outrow .ov small{ font-size:10.5px; color:${C.muted}; display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
     .outrow .ov{ text-align:right;}
     .outrow .ov b{ font-size:13px; color:${C.accent}; font-variant-numeric:tabular-nums;}
+    .outrow-chev{ font-size:20px; color:${C.muted}; flex:none; transition:color .12s, transform .12s; line-height:1;}
+    .outrow:hover .outrow-chev{ color:${C.accent}; transform:translateX(3px);}
+    .outrow-hint{ font-family:var(--font-mono); font-size:9px; color:${C.muted}; text-transform:uppercase; letter-spacing:.08em; margin-bottom:6px;}
+    /* ══ TE-Seite im Monitoring-Stil ══ */
+    .detail-head{ background:${C.card}; border:1px solid ${C.border}; border-radius:var(--r-md);
+      padding:16px 18px; margin-bottom:16px; position:relative; overflow:hidden;
+      animation:card-rise .4s cubic-bezier(.16,1,.3,1) both;}
+    .detail-head::before{ content:''; position:absolute; left:0; top:0; bottom:0; width:3px; background:${C.muted};}
+    .detail-head.s-eingelagert::before{ background:${C.container||"#27ae60"};}
+    .detail-head.s-gebucht::before{ background:#16a085;}
+    .detail-head.s-entladen_fertig::before,.detail-head.s-entladen::before{ background:#3d9ad6;}
+    .detail-head.s-angedockt::before,.detail-head.s-ankunft::before{ background:#f5b041;}
+    .dh-top{ display:flex; align-items:center; gap:12px;}
+    .dh-te{ font-family:var(--font-mono); font-size:22px; font-weight:700; letter-spacing:.02em; color:${C.ink};}
+    .dh-sub{ font-size:12px; color:${C.ink2}; margin-top:2px;}
+    .dh-status{ margin-left:auto; font-family:var(--font-mono); font-size:11px; font-weight:600;
+      padding:5px 12px; border-radius:20px; border:1px solid;}
+    /* Meilenstein-Kette */
+    .ms-chain{ display:flex; align-items:center; gap:0; margin:16px 0 4px; flex-wrap:wrap;}
+    .ms-step{ display:flex; flex-direction:column; align-items:center; gap:5px; flex:none;}
+    .ms-dot{ width:13px; height:13px; border-radius:50%; border:2px solid ${C.border2||C.border}; background:${C.bg};
+      box-sizing:border-box; transition:all .3s;}
+    .ms-step.active .ms-dot{ animation:ms-pulse 1.6s ease-in-out infinite;}
+    @keyframes ms-pulse{ 0%,100%{ box-shadow:0 0 0 0 currentColor;} 50%{ box-shadow:0 0 0 4px transparent;} }
+    .ms-lbl{ font-size:10px; color:${C.ink2}; font-family:var(--font-mono);}
+    .ms-step.done .ms-lbl{ color:${C.ink};}
+    .ms-sep{ flex:1; height:2px; min-width:24px; background:${C.border}; margin:0 4px 18px; border-radius:1px; transition:background .3s;}
+    .ms-sep.done{ background:${C.container||"#27ae60"};}
+    .detail-warnbar{ display:flex; flex-wrap:wrap; gap:7px; margin:14px 0 4px;}
+    .dwarn{ display:inline-flex; align-items:center; gap:5px; font-size:11px; padding:4px 9px; border-radius:6px; border:1px solid transparent;}
+    .dwarn.w-warn{ background:${C.yellowDim||"rgba(245,176,65,.14)"}; border-color:rgba(245,176,65,.35); color:#f5b041;}
+    .dwarn.w-krit{ background:${C.redDim||"rgba(231,76,60,.14)"}; border-color:rgba(231,76,60,.4); color:${C.accent};}
+    .dwarn.w-info{ background:${C.band}; border-color:${C.border2||C.border}; color:${C.ink2};}
+    .dh-facts{ display:grid; grid-template-columns:repeat(4,1fr); gap:11px 18px; margin-top:15px; padding-top:14px; border-top:1px solid ${C.border};}
+    @media (max-width:720px){ .dh-facts{ grid-template-columns:repeat(2,1fr);} }
+    .dh-fact{ display:flex; flex-direction:column; gap:2px;}
+    .dh-fact-l{ font-size:9px; text-transform:uppercase; letter-spacing:.08em; color:${C.muted};}
+    .dh-fact-v{ font-size:13px; color:${C.ink}; font-family:var(--font-mono);}
+    /* Puls: Bewertungs-Kacheln (eigene Rechnung vs. SAP) */
+    .gauges{ display:grid; grid-template-columns:repeat(2,1fr); gap:10px;}
+    /* Vorjahresvergleich */
+    .yoy-card{ flex:1 1 100%; width:100%; }
+    .yoy-grid{ display:grid; grid-template-columns:repeat(auto-fit, minmax(150px,1fr)); gap:10px; }
+    .yoy-item{ background:${C.band}; border:1px solid ${C.border}; border-radius:9px; padding:10px 12px; }
+    .yoy-lbl{ font-family:var(--font-mono); font-size:8.5px; text-transform:uppercase; letter-spacing:.1em; color:${C.text3||C.muted}; }
+    .yoy-vals{ display:flex; align-items:baseline; gap:5px; margin-top:4px; }
+    .yoy-vals b{ font-size:20px; font-weight:700; font-variant-numeric:tabular-nums; color:${C.ink}; }
+    .yoy-u{ font-size:11px; color:${C.ink2}; font-family:var(--font-mono); }
+    .yoy-d{ font-family:var(--font-mono); font-size:10px; font-weight:600; margin-left:auto; }
+    .yoy-d.up{ color:${C.good||"#27ae60"}; } .yoy-d.down{ color:${C.bad||"#e74c3c"}; }
+    .yoy-prev{ font-size:10px; color:${C.muted}; margin-top:3px; font-family:var(--font-mono); }
+    .gauge{ background:${C.band}; border:1px solid ${C.border}; border-radius:10px; padding:12px 10px; text-align:center;}
+    .gauge .gv{ font-size:24px; font-weight:700; font-variant-numeric:tabular-nums; color:${C.ink}; line-height:1;}
+    .gauge .gv span{ font-size:13px; font-weight:500; margin-left:1px;}
+    .gauge .gl{ font-size:11px; color:${C.ink}; margin-top:5px; font-weight:600;}
+    .gauge .gs{ font-size:9px; color:${C.muted}; margin-top:2px; font-family:var(--font-mono); text-transform:uppercase; letter-spacing:.06em;}
+    /* Puls: Durchsatz */
+    .tp-kpis{ display:flex; flex-wrap:wrap; gap:8px; margin-bottom:12px;}
+    .tp-k{ flex:1 1 80px; background:${C.band}; border-radius:8px; padding:9px 11px;}
+    .tp-k b{ font-size:19px; font-weight:700; font-variant-numeric:tabular-nums; display:block; line-height:1.1;}
+    .tp-k small{ font-size:9.5px; color:${C.muted}; text-transform:uppercase; letter-spacing:.05em;}
+    .tp-segs{ display:flex; flex-direction:column; gap:6px;}
+    .tp-seg{ display:flex; align-items:center; gap:9px; font-size:11.5px;}
+    .tp-seg .tp-lbl{ width:88px; flex:none; color:${C.ink2};}
+    .tp-seg .tp-bar{ flex:1; height:8px; background:${C.band}; border-radius:4px; overflow:hidden;}
+    .tp-seg .tp-bar i{ display:block; height:100%; border-radius:4px;}
+    .tp-seg .tp-n{ width:34px; text-align:right; font-variant-numeric:tabular-nums; color:${C.muted}; font-size:11px;}
+    /* Prozesskette: Legende */
+    .pk-legend{ display:flex; flex-wrap:wrap; gap:14px; margin-bottom:12px; align-items:center;}
+    .pk-lg{ display:flex; align-items:center; gap:5px; font-size:10.5px; color:${C.ink2}; font-family:var(--font-mono);}
+    .pk-lg i{ width:11px; height:9px; border-radius:2px;}
+    .pk-hint{ margin-left:auto; font-size:10px; color:${C.outlier};}
+    .pk-hit:hover{ fill:${C.band} !important; }
+    /* Treiber: Balkenzeilen */
+    .drv-row{ display:flex; align-items:center; gap:9px; padding:5px 0; font-size:11.5px;}
+    .drv-lbl{ width:130px; flex:none; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:${C.ink};}
+    .drv-bar{ flex:1; height:9px; background:${C.band}; border-radius:5px; overflow:hidden;}
+    .drv-bar i{ display:block; height:100%; background:${C.accent}; border-radius:5px; opacity:.75;}
+    .drv-med{ width:52px; text-align:right; font-variant-numeric:tabular-nums; color:${C.ink}; font-weight:600;}
+    .drv-n{ width:78px; text-align:right; font-size:10px; color:${C.muted};}
+    /* Detail-Zeitstrahl */
+    .tl-span{ font-size:11px; color:${C.ink2}; margin-top:8px;}
+    .tl-span b{ color:${C.ink};}
+    .tl-chips{ display:flex; flex-wrap:wrap; gap:8px 14px; margin-top:8px;}
+    .tl-chip{ display:flex; align-items:center; gap:5px; font-size:10px; color:${C.ink2}; font-family:var(--font-mono);}
+    .tl-chip i{ width:9px; height:9px; border-radius:2px; flex:none;}
     svg text{ font-family:inherit;}
     /* Tabelle */
     table{ width:100%; border-collapse:collapse; font-size:11.5px; margin-top:6px;}
@@ -1012,6 +1152,8 @@
       frachtfuehrer:      readDim(row, "dimension_frachtfuehrer"),
       transportmittel:    readDim(row, "dimension_transportmittel"),
       ladestelle:         readDim(row, "dimension_ladestelle"),
+      belegart:           readCode(row, "dimension_belegart"),
+      lagertor:           readDim(row, "dimension_lagertor"),
       abw_mengeneinheit:  readDim(row, "dimension_abw_mengeneinheit"),
       standard_packmittel:readDim(row, "dimension_standard_packmittel"),
       processcode:        readCode(row, "dimension_processcode"),
@@ -1056,6 +1198,31 @@
       menge_soll:         readVal(row, "value_menge_soll"),
       pa1:                readVal(row, "value_pa1"),
       anzahl_mitarbeiter: readVal(row, "value_anzahl_mitarbeiter"),
+      // Neue Januar-Felder ------------------------------------------------
+      belegart:           readCode(row, "dimension_belegart"),
+      containerdepot:     readDim(row, "dimension_containerdepot"),
+      depotspediteur:     readDim(row, "dimension_depotspediteur"),
+      // Seetransport-Vorkette (nur Container befüllt)
+      ts_verschifft:      readCode(row, "dimension_ts_verschifft"),
+      ts_hafen:           readCode(row, "dimension_ts_hafen"),
+      ts_verzollung:      readCode(row, "dimension_ts_verzollung"),
+      ts_depot:           readCode(row, "dimension_ts_depot"),
+      ts_depot_anf:       readCode(row, "dimension_ts_depot_anf"),
+      // Fertige SAP-Bewertungen (Gegenprobe, nicht Rechenbasis)
+      sap_otif:           readCode(row, "dimension_sap_otif"),
+      sap_puenktlich:     readCode(row, "dimension_sap_puenktlich"),
+      sap_vollstaendig:   readCode(row, "dimension_sap_vollstaendig"),
+      // Business-Kennzeichen
+      knz_container:      readCode(row, "dimension_knz_container"),
+      knz_shuttle:        readCode(row, "dimension_knz_shuttle"),
+      knz_direktfahrt:    readCode(row, "dimension_knz_direktfahrt"),
+      knz_qualitaet:      readCode(row, "dimension_knz_qualitaet"),
+      // Neue Messgrößen
+      gewicht:            readVal(row, "value_gewicht"),
+      volumen:            readVal(row, "value_volumen"),
+      wert_eur:           readVal(row, "value_wert_eur"),
+      anzahl_kollis:      readVal(row, "value_anzahl_kollis"),
+      ep_tauschfaehig:    readVal(row, "value_ep_tauschfaehig"),
     }));
   }
 
@@ -1066,9 +1233,9 @@
       this._shadow.innerHTML = TPL;
       this._props = {
         madThreshold: 3.5, teamEvenFrueh: "Team A", teamOddFrueh: "Team B",
-        baselineMode: "segment", toleranzMin: 30, theme: "dark", defaultView: "ueberblick",
+        baselineMode: "segment", toleranzMin: 30, theme: "dark", defaultView: "puls",
       };
-      this._rows = null; this._model = null; this._mode = "ueberblick"; this._detail = null;
+      this._rows = null; this._model = null; this._mode = "puls"; this._detail = null;
       this._loaderTimer = null;
       this._applyTheme();
       this._startLoaderSteps(); // Ladeanimation läuft ab dem ersten Moment
@@ -1156,6 +1323,79 @@
       this._rebuild();
     }
 
+    /* ── Kopplung mit dem Strategie-Widget ────────────────────────────────
+       Wird vom Story-Skript aufgerufen, NACHDEM der Datenquellen-Filter auf
+       den gewählten Zeitraum gesetzt wurde. Zeigt einen Kontext-Banner und
+       merkt sich Periode/Segment für die Anzeige. Das eigentliche Filtern
+       (schnelles Nachladen nur dieser Periode) passiert in SAC an der
+       Datenquelle — nicht hier im Widget. */
+    setPeriodContext(periode, segment, vorjahr) {
+      this._periodContext = { periode: periode || "", segment: segment || "", vorjahr: vorjahr || "" };
+      this._renderContextBanner();
+      if (this._model && this._mode === "puls") this._render();
+    }
+    /** Vorjahresvergleich setzen (Array oder JSON-String aus dem Strategie-Widget). */
+    setYoYComparison(data) {
+      try { this._yoy = typeof data === "string" ? JSON.parse(data) : (data || []); }
+      catch (e) { this._yoy = []; }
+      if (this._model && this._mode === "puls") this._render();
+    }
+    /** Kontext entfernen (zurück zur Default-/Vortagsansicht). */
+    clearPeriodContext() {
+      this._periodContext = null;
+      this._yoy = null;
+      this._renderContextBanner();
+    }
+    /** Für SAC-Scripting lesbar. */
+    getPeriodContext() {
+      return this._periodContext ? this._periodContext.periode : "";
+    }
+
+    /* Eintritts-Animation: wird aufgerufen, wenn das Widget als Detail-Ansicht
+       sichtbar wird (aus dem Strategie-Widget heraus). Der Inhalt baut sich
+       gestaffelt auf. In SAC ruft das Story-Skript dies nach setVisible(true). */
+    enterDetail() {
+      const root = this._shadow.querySelector(".wrap, .root");
+      if (root) {
+        root.classList.remove("enter");
+        void root.getBoundingClientRect(); // Reflow
+        root.classList.add("enter");
+      }
+      // Inhaltsblöcke gestaffelt einblenden
+      const blocks = this._shadow.querySelectorAll("#kpis .kpi, #views > *");
+      blocks.forEach((el, i) => {
+        el.style.opacity = "0";
+        el.style.transform = "translateY(8px)";
+        el.style.transition = `opacity .4s ease ${i * 55}ms, transform .5s cubic-bezier(.16,1,.3,1) ${i * 55}ms`;
+        requestAnimationFrame(() => { el.style.opacity = ""; el.style.transform = ""; });
+      });
+    }
+
+    _renderContextBanner() {
+      let bar = this._shadow.getElementById("ctxbar");
+      const ctx = this._periodContext;
+      if (!ctx) { if (bar) bar.remove(); return; }
+      if (!bar) {
+        bar = document.createElement("div");
+        bar.id = "ctxbar";
+        bar.className = "ctxbar";
+        const nav = this._shadow.getElementById("tabs");
+        if (nav && nav.parentNode) nav.parentNode.insertBefore(bar, nav.nextSibling);
+        else this._shadow.querySelector(".wrap, .root, body")?.prepend(bar);
+      }
+      const seg = ctx.segment && ctx.segment !== "Gesamt" ? ` · ${esc(ctx.segment)}` : "";
+      bar.innerHTML = `<span class="ctx-dot"></span>
+        <span>Zeitraum aus Strategie: <b>${esc(ctx.periode)}</b>${seg}</span>
+        <button id="ctxclear" title="Filter zurücksetzen">Zurücksetzen ✕</button>`;
+      const btn = this._shadow.getElementById("ctxclear");
+      if (btn) btn.onclick = () => {
+        this.clearPeriodContext();
+        // Story-Skript kann zusätzlich den Datenquellen-Filter zurücksetzen;
+        // dafür feuern wir ein Event, auf das die Story hören kann.
+        try { this.dispatchEvent(new CustomEvent("onContextClear", { detail: {} })); } catch (e) {}
+      };
+    }
+
     /** Lässt die Prozess-Schritte der Ladeanimation nacheinander aufleuchten
      *  (Logik aus dem Wareneingang-Tracker übernommen). */
     _startLoaderSteps() {
@@ -1218,11 +1458,12 @@
       if (!hasData) { main.innerHTML = ""; return; }
       main.innerHTML = "";
       if (this._detail) { this._renderDetail(main); return; }
-      const mode = MODES.find((m) => m.id === this._mode);
-      if (mode.id === "ueberblick") { this._viewUeberblick(main); return; }
-      if (mode.id === "muster") { this._viewMuster(main); return; }
-      if (mode.id === "mengen") { this._viewMengen(main); return; }
-      this._viewMetric(main, mode);
+      const mode = MODES.find((m) => m.id === this._mode) || MODES[0];
+      if (mode.id === "puls")         { this._viewPuls(main); return; }
+      if (mode.id === "prozesskette") { this._viewProzesskette(main); return; }
+      if (mode.id === "ausreisser")   { this._viewAusreisser(main); return; }
+      if (mode.id === "treiber")      { this._viewTreiber(main); return; }
+      this._viewPuls(main);
     }
 
     _renderKpis() {
@@ -1270,19 +1511,186 @@
     }
 
     /* ---- Überblick: Engpass-Wasserfall + Befunde + Einstieg ---- */
-    _viewUeberblick(main) {
+    /* ═══ 1) PULS — Zustand der Periode auf einen Blick ═══ */
+    _viewPuls(main) {
       const M = this._model;
+      const hasYoY = this._yoy && this._yoy.length;
       const wrap = document.createElement("div");
       wrap.innerHTML = `
         <div class="findings" id="findings"></div>
+        ${hasYoY ? `<div class="card yoy-card"><h3>Vorjahresvergleich · ${esc(this._periodContext?.periode||"")} vs. ${esc(this._periodContext?.vorjahr||"Vorjahr")}</h3><div id="yoy"></div></div>` : ""}
         <div class="row">
           <div class="card grow"><h3>Engpass-Analyse · Median-Zeit je Prozessphase</h3><div id="waterfall"></div></div>
+          <div class="card"><h3>Bewertung · eigene Rechnung vs. SAP</h3><div id="gauges"></div></div>
+        </div>
+        <div class="row">
           <div class="card"><h3>Auffällige Anlieferungen</h3><div id="topout"></div></div>
+          <div class="card grow"><h3>Durchsatz dieser Periode</h3><div id="throughput"></div></div>
         </div>`;
       main.appendChild(wrap);
       this._renderFindings(wrap.querySelector("#findings"));
+      if (hasYoY) this._renderYoY(wrap.querySelector("#yoy"));
       this._svgWaterfall(wrap.querySelector("#waterfall"));
+      this._pulsGauges(wrap.querySelector("#gauges"));
       this._topOutliers(wrap.querySelector("#topout"));
+      this._pulsThroughput(wrap.querySelector("#throughput"));
+    }
+
+    /* Vorjahresvergleich: je Kennzahl aktuelle Periode, Vorjahr und Delta */
+    _renderYoY(el) {
+      const rows = this._yoy || [];
+      el.innerHTML = `<div class="yoy-grid">` + rows.map((r) => {
+        let deltaHtml = "<span class='yoy-d'>–</span>";
+        if (r.cur != null && r.prev != null && r.prev !== 0) {
+          const rel = (r.cur - r.prev) / Math.abs(r.prev);
+          const better = r.lowerBetter ? rel < 0 : rel > 0;
+          deltaHtml = `<span class="yoy-d ${better ? "up" : "down"}">${rel >= 0 ? "▲" : "▼"} ${Math.abs(rel*100).toFixed(0)}%</span>`;
+        }
+        return `<div class="yoy-item">
+          <div class="yoy-lbl">${esc(r.label)}</div>
+          <div class="yoy-vals"><b>${esc(r.curTxt)}</b><span class="yoy-u">${esc(r.unit)}</span> ${deltaHtml}</div>
+          <div class="yoy-prev">Vorjahr: ${esc(r.prevTxt)} ${esc(r.unit)}</div>
+        </div>`;
+      }).join("") + `</div>`;
+    }
+
+    /* Bewertungs-Kacheln: eigene Termintreue/Quote + SAP-Gegenprobe */
+    _pulsGauges(el) {
+      const M = this._model, D = M.deliveries;
+      // eigene Termintreue (aus KPIs)
+      const ownOnTime = M.kpis.onTime != null ? M.kpis.onTime * 100 : null;
+      // SAP-Kennzeichen zählen
+      const cnt = (f, ok) => D.filter((d) => d[f] === ok).length;
+      const sapBase = (f, a, b) => { const n = cnt(f, a) + cnt(f, b); return n ? cnt(f, a) / n * 100 : null; };
+      const otif = sapBase("sap_otif", "O", "N");
+      const pkt = sapBase("sap_puenktlich", "P", "N");
+      const vol = sapBase("sap_vollstaendig", "V", "N");
+      const gauge = (label, val, sub) => {
+        if (val == null) return `<div class="gauge"><div class="gv">–</div><div class="gl">${label}</div><div class="gs">${sub}</div></div>`;
+        const col = val >= 90 ? C.good : val >= 75 ? C.warn : C.bad;
+        return `<div class="gauge"><div class="gv" style="color:${col}">${val.toFixed(1)}<span>%</span></div>
+          <div class="gl">${label}</div><div class="gs">${sub}</div></div>`;
+      };
+      el.innerHTML = `<div class="gauges">
+        ${gauge("Termintreue", ownOnTime, "eigene Rechnung")}
+        ${gauge("OTIF", otif, "SAP-Kennzeichen")}
+        ${gauge("Pünktlichkeit", pkt, "SAP-Kennzeichen")}
+        ${gauge("Vollständigkeit", vol, "SAP-Kennzeichen")}
+      </div>`;
+    }
+
+    /* Durchsatz: Mengen/Volumen/Wert/Kollis + Segmentverteilung */
+    _pulsThroughput(el) {
+      const M = this._model, D = M.deliveries;
+      const sum = (f) => { let s = 0, any = false; for (const d of D) { const v = d[f]; if (typeof v === "number" && !isNaN(v)) { s += v; any = true; } } return any ? s : null; };
+      const menge = sum("sum_menge"), vol = sum("sum_volumen"), koll = sum("sum_kollis");
+      const fmt = (v) => (v == null || !v) ? "–" : (v >= 1000 ? (v/1000).toFixed(1)+"k" : Math.round(v).toString());
+      // Segmentverteilung (Anteil Anlieferungen)
+      const bySeg = {};
+      for (const d of D) bySeg[d.segment] = (bySeg[d.segment] || 0) + 1;
+      const total = D.length || 1;
+      const bars = Object.entries(bySeg).sort((a,b)=>b[1]-a[1]).map(([s, n]) =>
+        `<div class="tp-seg"><span class="tp-lbl">${esc(s)}</span>
+          <div class="tp-bar"><i style="width:${(n/total*100).toFixed(0)}%;background:${SEGC[s]||C.sonst}"></i></div>
+          <span class="tp-n">${n}</span></div>`).join("");
+      el.innerHTML = `
+        <div class="tp-kpis">
+          <div class="tp-k"><b>${D.length}</b><small>Anlieferungen</small></div>
+          <div class="tp-k"><b>${M.kpis.nPositions}</b><small>Positionen</small></div>
+          <div class="tp-k"><b>${fmt(menge)}</b><small>Menge (Stück)</small></div>
+          <div class="tp-k"><b>${fmt(vol)}</b><small>Volumen</small></div>
+          <div class="tp-k"><b>${fmt(koll)}</b><small>Kollis</small></div>
+        </div>
+        <div class="tp-segs">${bars}</div>`;
+    }
+
+    /* ═══ 2) PROZESSKETTE — Zeitstrahl je Anlieferung inkl. Seetransport ═══ */
+    _viewProzesskette(main) {
+      const M = this._model;
+      const wrap = document.createElement("div");
+      wrap.innerHTML = `
+        <div class="pk-legend" id="pklegend"></div>
+        <div class="card"><h3>Zeitstrahl je Anlieferung · Container inkl. Seetransport-Vorkette</h3>
+          <div id="gantt"></div></div>`;
+      main.appendChild(wrap);
+      this._pkLegend(wrap.querySelector("#pklegend"));
+      this._svgGantt(wrap.querySelector("#gantt"));
+    }
+
+    _pkLegend(el) {
+      const segs = [
+        ["Seetransport", C.sonst], ["Wartezeit Tor", "#5d6d7e"], ["Reaktion", "#2980b9"],
+        ["Entladen", "#27ae60"], ["Buchung", "#f39c12"], ["Einlagerung", C.accent],
+      ];
+      el.innerHTML = segs.map(([l, c]) => `<span class="pk-lg"><i style="background:${c}"></i>${l}</span>`).join("") +
+        `<span class="pk-hint">→ Zeile anklicken für Detail</span>`;
+    }
+
+    /* ═══ 3) AUSREISSER — auffällige Anlieferungen + Drill ═══ */
+    _viewAusreisser(main) {
+      const M = this._model;
+      const wrap = document.createElement("div");
+      wrap.innerHTML = `
+        <div class="legend">
+          ${[...new Set(M.deliveries.map((d) => d.segment))].sort()
+            .map((s) => `<span><i style="background:${SEGC[s] || C.sonst}"></i>${esc(s)}</span>`).join("")}
+          <span><i style="background:${C.outlier}"></i>Ausreißer</span>
+          <span style="margin-left:auto">→ Zeile anklicken für vollständige TE-Details</span>
+        </div>
+        <div class="card" style="flex:1 1 100%; width:100%"><h3>Standzeit über Zeit · MAD-Grenze je Segment</h3><div id="scatter"></div></div>
+        <div class="card" style="flex:1 1 100%; width:100%"><h3>Auffällige Anlieferungen (Top nach z-Score)</h3><div id="tbl"></div></div>`;
+      main.appendChild(wrap);
+      const mode = { metric: "dwell", level: "delivery", label: "Standzeit", unit: "h", phases: ["wait_gate","reaction","unload"] };
+      this._svgScatter(wrap.querySelector("#scatter"), M.deliveries, "dwell", mode);
+      this._tblOutliers(wrap.querySelector("#tbl"), M.deliveries, "dwell", mode);
+    }
+
+    /* ═══ 4) TREIBER — Aufschlüsselung nach Dimensionen ═══ */
+    _viewTreiber(main) {
+      const M = this._model;
+      const wrap = document.createElement("div");
+      wrap.innerHTML = `
+        <div class="row">
+          <div class="card"><h3>Lagertor</h3><div id="drv-tor"></div></div>
+          <div class="card"><h3>Frachtführer</h3><div id="drv-ff"></div></div>
+        </div>
+        <div class="row">
+          <div class="card"><h3>Lieferant</h3><div id="drv-lief"></div></div>
+          <div class="card"><h3>Hauptwarengruppe</h3><div id="drv-hwg"></div></div>
+          <div class="card"><h3>Ursprungsland</h3><div id="drv-land"></div></div>
+        </div>`;
+      main.appendChild(wrap);
+      this._treiberPanel(wrap.querySelector("#drv-tor"), "lagertor");
+      this._treiberPanel(wrap.querySelector("#drv-ff"), "frachtfuehrer");
+      this._treiberPanel(wrap.querySelector("#drv-lief"), "lieferant");
+      this._treiberPanel(wrap.querySelector("#drv-hwg"), "hwg");
+      this._treiberPanel(wrap.querySelector("#drv-land"), "land");
+    }
+
+    /* Treiber-Panel: je Dimensionswert Median-Standzeit + Ausreißer-Anteil */
+    _treiberPanel(el, dim) {
+      const M = this._model;
+      const groups = {};
+      for (const d of M.deliveries) {
+        const key = d[dim];
+        if (isNull(key)) continue;
+        (groups[key] ||= []).push(d);
+      }
+      const rows = Object.entries(groups).map(([k, ds]) => {
+        const dwells = ds.map((d) => d.phases && d.phases.dwell).filter((v) => v != null);
+        const med = WEEngine.median(dwells);
+        const nOut = ds.filter((d) => d.outlier && d.outlier.dwell).length;
+        return { k, n: ds.length, med, outRate: ds.length ? nOut / ds.length : 0 };
+      }).filter((r) => r.n >= 2).sort((a, b) => (b.med || 0) - (a.med || 0)).slice(0, 8);
+      if (!rows.length) { el.innerHTML = `<div class="empty">Keine Ausprägungen mit ≥2 Anlieferungen.</div>`; return; }
+      const maxMed = Math.max(...rows.map((r) => r.med || 0)) || 1;
+      el.innerHTML = rows.map((r) => `
+        <div class="drv-row">
+          <span class="drv-lbl" title="${esc(r.k)}">${esc(String(r.k).slice(0, 22))}</span>
+          <div class="drv-bar"><i style="width:${((r.med||0)/maxMed*100).toFixed(0)}%"></i></div>
+          <span class="drv-med">${fmtH(r.med)}</span>
+          <span class="drv-n">n=${r.n}${r.outRate > 0 ? ` · <b style="color:${C.outlier}">${(r.outRate*100).toFixed(0)}%</b>` : ""}</span>
+        </div>`).join("");
     }
 
     _renderFindings(el) {
@@ -1340,11 +1748,12 @@
         .map((d) => ({ d, z: Math.max(d.z.dwell || 0, d.z.unload || 0, d.z.wait_gate || 0) }))
         .sort((a, b) => b.z - a.z).slice(0, 6);
       if (!scored.length) { el.innerHTML = `<div class="empty">Keine auffälligen Anlieferungen im Zeitraum.</div>`; return; }
-      el.innerHTML = scored.map(({ d, z }) => `
-        <div class="outrow" data-drill="${esc(d.belegnr)}" title="Details zu TE ${esc(d.belegnr)}">
+      el.innerHTML = `<div class="outrow-hint">Zeile anklicken öffnet die TE-Seite ▸</div>` + scored.map(({ d, z }) => `
+        <div class="outrow" data-drill="${esc(d.belegnr)}" title="TE-Seite zu ${esc(d.belegnr)} öffnen" role="button" tabindex="0">
           <span class="seg" style="background:${SEGC[d.segment] || C.sonst}"></span>
           <div class="oi"><b>TE ${esc(d.belegnr)}</b><small>${esc((d.lieferant || "–").slice(0, 26))}</small></div>
           <div class="ov"><b>${fmtH(d.phases.dwell)}</b><small>z ${z.toFixed(1)}</small></div>
+          <span class="outrow-chev">›</span>
         </div>`).join("");
     }
 
@@ -1374,6 +1783,76 @@
       this._svgScatter(wrap.querySelector("#scatter"), recs, metric, mode);
       if (hasDrivers) this._driverPanel(wrap.querySelector("#drv"), M.drivers[metric]);
       this._tblOutliers(wrap.querySelector("#tbl"), recs, metric, mode);
+    }
+
+    /* Zeitstrahl je Anlieferung: Phasen als Segmente, Container mit
+       Seetransport-Vorkette (Verschifft→Hafen→Verzollung→Depot→Ankunft).
+       Skaliert auf die gesamte Zeitspanne der Periode. */
+    _svgGantt(el) {
+      const M = this._model;
+      // Anlieferungen mit gültigem Zeitrahmen, nach Standzeit sortiert (auffälligste oben)
+      const items = M.deliveries
+        .filter((d) => d.ts_ankunft instanceof Date)
+        .map((d) => {
+          const start = d.ts_verschifft instanceof Date ? d.ts_verschifft : d.ts_ankunft;
+          const end = d.ts_einlagerung instanceof Date ? d.ts_einlagerung
+                    : (d.ts_abfahrt instanceof Date ? d.ts_abfahrt : d.ts_ankunft);
+          return { d, start, end, span: (end - start) };
+        })
+        .filter((x) => x.span >= 0)
+        .sort((a, b) => b.span - a.span)
+        .slice(0, 40); // die 40 mit der längsten Gesamtspanne
+      if (!items.length) { el.innerHTML = `<div class="empty">Keine Anlieferungen mit auswertbarem Zeitrahmen.</div>`; return; }
+
+      const t0 = Math.min(...items.map((x) => +x.start));
+      const t1 = Math.max(...items.map((x) => +x.end));
+      const span = (t1 - t0) || 1;
+      const W = 1000, padL = 118, padR = 16, rowH = 14, top = 22;
+      const H = items.length * rowH + top + 18;
+      const barW = W - padL - padR;
+      const X = (t) => padL + ((+t - t0) / span) * barW;
+
+      const PH = [
+        { from: "ts_verschifft", to: "ts_hafen", col: "#3d4658" },
+        { from: "ts_hafen", to: "ts_verzollung", col: "#4a5568" },
+        { from: "ts_verzollung", to: "ts_depot", col: "#5d6d7e" },
+        { from: "ts_depot", to: "ts_ankunft", col: "#6b7688" },
+        { from: "ts_ankunft", to: "ts_angedockt", col: "#5d6d7e" },
+        { from: "ts_angedockt", to: "ts_entladen_start", col: "#2980b9" },
+        { from: "ts_entladen_start", to: "ts_entladen_ende_eff", col: "#27ae60" },
+        { from: "ts_entladen_ende_eff", to: "ts_we_pos", col: "#f39c12" },
+        { from: "ts_we_pos", to: "ts_einlagerung", col: C.accent },
+      ];
+
+      let svg = `<svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Zeitstrahl je Anlieferung">`;
+      // Zeitachse (Datumsmarken)
+      const ticks = 6;
+      for (let i = 0; i <= ticks; i++) {
+        const t = t0 + span * i / ticks, x = padL + barW * i / ticks;
+        const dt = new Date(t);
+        svg += `<line x1="${x}" y1="${top-4}" x2="${x}" y2="${H-14}" stroke="${C.border}" stroke-dasharray="2 3" opacity=".6"/>
+          <text x="${x}" y="${top-7}" font-size="8" fill="${C.muted}" text-anchor="middle">${dt.toLocaleDateString("de-DE",{day:"2-digit",month:"2-digit"})}</text>`;
+      }
+      items.forEach((x, i) => {
+        const y = top + i * rowH;
+        const d = x.d;
+        // Zebra-Hintergrund je Zeile (dezent)
+        if (i % 2 === 0) svg += `<rect x="0" y="${y}" width="${W}" height="${rowH}" fill="${C.ink}" opacity="0.02"/>`;
+        svg += `<text x="0" y="${y + rowH/2 + 3}" font-size="8.5" fill="${C.ink2}" font-family="var(--font-mono)">${esc(String(d.belegnr).slice(0,11))}</text>`;
+        svg += `<rect class="pk-hit" data-drill="${esc(d.belegnr)}" x="${padL}" y="${y}" width="${barW}" height="${rowH}" fill="transparent" style="cursor:pointer"/>`;
+        for (const p of PH) {
+          const a = d[p.from], b = d[p.to];
+          if (!(a instanceof Date) || !(b instanceof Date) || b <= a) continue;
+          const xa = X(a), xb = X(b), w = Math.max(1.2, xb - xa);
+          svg += `<rect class="pk-seg" x="${xa}" y="${y+2}" width="${w}" height="${rowH-4}" rx="1.5" fill="${p.col}" opacity="0.92"
+            style="transform-origin:${padL}px center; animation:pk-grow .5s ${i*14}ms both cubic-bezier(.16,1,.3,1)">
+            <title>${esc(d.belegnr)} · ${((b-a)/3600000).toFixed(1)}h</title></rect>`;
+        }
+      });
+      svg += "</svg>";
+      el.innerHTML = svg;
+      el.querySelectorAll(".pk-hit").forEach((r) =>
+        r.addEventListener("click", () => { this._detail = r.dataset.drill; this._render(); }));
     }
 
     /** Kompakte Übersicht der restlichen Belegfelder (nur hier sichtbar). */
@@ -1467,34 +1946,36 @@
       const vals = pts.map((p) => p.phases[metric]);
       const yMaxData = quantileArr(vals, 0.99), yMin = Math.min(0, quantileArr(vals, 0.01));
       const yMax = yMaxData <= yMin ? yMin + 1 : yMaxData;
-      const W = 380, Hh = 210, padL = 40, padB = 20, padT = 8;
-      const X = (t) => padL + ((t - x0) / (x1 - x0)) * (W - padL - 8);
+      const W = 1000, Hh = 300, padL = 46, padB = 22, padT = 10;
+      const X = (t) => padL + ((t - x0) / (x1 - x0)) * (W - padL - 12);
       const Y = (v) => padT + (1 - (Math.min(v, yMax) - yMin) / (yMax - yMin)) * (Hh - padT - padB);
-      let svg = `<svg viewBox="0 0 ${W} ${Hh}" width="100%" role="img" aria-label="Streudiagramm">`;
+      let svg = `<svg viewBox="0 0 ${W} ${Hh}" width="100%" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Streudiagramm">`;
       // y-Gitter
       for (let i = 0; i <= 4; i++) {
         const v = yMin + (i / 4) * (yMax - yMin), y = Y(v);
-        svg += `<line x1="${padL}" x2="${W - 8}" y1="${y}" y2="${y}" stroke="${C.border}"/>
+        svg += `<line x1="${padL}" x2="${W - 12}" y1="${y}" y2="${y}" stroke="${C.border}" opacity=".6"/>
                 <text x="${padL - 6}" y="${y + 3}" font-size="9" fill="${C.muted}" text-anchor="end">${fmtH(v)}</text>`;
       }
-      // MAD-Grenzlinien je Segment (limitH/medH liegen im Originalraum)
+      // MAD-Grenzlinien je Segment
       const B = this._model.baselines[metric] || {};
       for (const [seg, b] of Object.entries(B)) {
         const col = SEGC[seg] || C.sonst;
         if (b.limitH <= yMax)
-          svg += `<line x1="${padL}" x2="${W - 8}" y1="${Y(b.limitH)}" y2="${Y(b.limitH)}" stroke="${col}" stroke-dasharray="4 3" opacity=".8">
+          svg += `<line x1="${padL}" x2="${W - 12}" y1="${Y(b.limitH)}" y2="${Y(b.limitH)}" stroke="${col}" stroke-dasharray="4 3" opacity=".8">
                     <title>Ausreißergrenze ${seg}: ${fmtH(b.limitH)} (Median ${fmtH(b.medH)}, |z| > ${this._model.cfg.madThreshold}${b.log ? ", log-MAD" : ""})</title></line>`;
         if (b.medH <= yMax)
-          svg += `<line x1="${padL}" x2="${W - 8}" y1="${Y(b.medH)}" y2="${Y(b.medH)}" stroke="${col}" opacity=".35"/>`;
+          svg += `<line x1="${padL}" x2="${W - 12}" y1="${Y(b.medH)}" y2="${Y(b.medH)}" stroke="${col}" opacity=".35"/>`;
       }
-      if (metric === "delay") svg += `<line x1="${padL}" x2="${W - 8}" y1="${Y(0)}" y2="${Y(0)}" stroke="${C.ink}" opacity=".4"/>`;
-      // Punkte (klickbar -> TE-Detail)
+      if (metric === "delay") svg += `<line x1="${padL}" x2="${W - 12}" y1="${Y(0)}" y2="${Y(0)}" stroke="${C.ink}" opacity=".4"/>`;
+      // Punkte (klickbar -> TE-Detail), dezent eingeblendet
+      let pi = 0;
       for (const p of pts) {
         const out = p.outlier[metric];
         const col = out ? C.outlier : (SEGC[p.segment] || C.sonst);
         const v = p.phases[metric];
-        svg += `<circle data-drill="${esc(p.belegnr)}" cx="${X(+p[tsField])}" cy="${Y(v)}" r="${out ? 3.4 : 2.2}" fill="${col}" opacity="${out ? 0.95 : 0.5}">
-          <title>${esc(p.belegnr)}${p.pos ? "/" + esc(p.pos) : ""} · ${esc(p.lieferant || "")}\n${fmtH(v)} (z=${p.z[metric] == null ? "–" : p.z[metric].toFixed(1)}) · ${p.segment}\nKlicken für Details</title></circle>`;
+        const delay = Math.min(600, pi * 1.2); pi++;
+        svg += `<circle class="sc-pt" data-drill="${esc(p.belegnr)}" cx="${X(+p[tsField])}" cy="${Y(v)}" r="${out ? 4 : 2.6}" fill="${col}" opacity="0"
+          style="animation:sc-in .4s ${delay}ms forwards"><title>${esc(p.belegnr)}${p.pos ? "/" + esc(p.pos) : ""} · ${esc(p.lieferant || "")}\n${fmtH(v)} (z=${p.z[metric] == null ? "–" : p.z[metric].toFixed(1)}) · ${p.segment}\nKlicken für Details</title></circle>`;
       }
       // x-Achse: Monatsmarken
       const d0 = new Date(x0); d0.setDate(1);
@@ -1503,8 +1984,10 @@
         svg += `<text x="${X(+d)}" y="${Hh - 5}" font-size="9" fill="${C.muted}">${d.toLocaleDateString("de-DE", { month: "short", year: "2-digit" })}</text>`;
       }
       if (yMaxData < Math.max(...vals))
-        svg += `<text x="${W - 8}" y="${padT + 8}" font-size="8.5" fill="${C.muted}" text-anchor="end">▲ gekappt bei P99, Extremwerte in Tabelle</text>`;
+        svg += `<text x="${W - 12}" y="${padT + 8}" font-size="8.5" fill="${C.muted}" text-anchor="end">▲ gekappt bei P99, Extremwerte in Tabelle</text>`;
       el.innerHTML = svg + "</svg>";
+      el.querySelectorAll(".sc-pt").forEach((c) =>
+        c.addEventListener("click", () => { this._detail = c.dataset.drill; this._render(); }));
     }
 
     /* ---- Ausreißer-Tabelle ---- */
@@ -1533,45 +2016,89 @@
     }
 
     /* ---- TE-Detailansicht (Drill-down) ---- */
+    // Prozess-Status einer TE aus dem weitesten erreichten Zeitstempel ableiten
+    _teStatus(d, pos) {
+      const has = (t) => t instanceof Date;
+      const einl = pos.some((p) => has(p.ts_einlagerung));
+      const web = pos.some((p) => has(p.ts_we_pos)) || has(d.ts_we_pos);
+      if (einl) return { key: "eingelagert", label: "Eingelagert", step: 5, col: C.container || "#27ae60" };
+      if (web) return { key: "gebucht", label: "WE gebucht", step: 4, col: "#16a085" };
+      if (has(d.ts_entladen_ende_eff)) return { key: "entladen_fertig", label: "Entladen", step: 3, col: "#3d9ad6" };
+      if (has(d.ts_entladen_start)) return { key: "entladen", label: "Wird entladen", step: 2, col: "#3d9ad6" };
+      if (has(d.ts_angedockt)) return { key: "angedockt", label: "Angedockt", step: 1, col: "#f5b041" };
+      if (has(d.ts_ankunft)) return { key: "ankunft", label: "Angekommen", step: 0, col: "#f5b041" };
+      return { key: "erwartet", label: "Erwartet", step: -1, col: C.muted };
+    }
+
+    // Meilenstein-Prozesskette (Ankunft→Andocken→Entladen→Buchen→Einlagern)
+    _milestoneChain(status) {
+      const steps = ["Ankunft", "Andocken", "Entladen", "Buchen", "Einlagern"];
+      return `<div class="ms-chain">` + steps.map((s, i) => {
+        const done = i <= status.step;
+        const active = i === status.step;
+        return `<div class="ms-step ${done ? "done" : ""} ${active ? "active" : ""}">
+          <span class="ms-dot" ${done ? `style="background:${status.col};border-color:${status.col}"` : ""}></span>
+          <span class="ms-lbl">${s}</span>
+        </div>${i < steps.length - 1 ? `<span class="ms-sep ${done ? "done" : ""}"></span>` : ""}`;
+      }).join("") + `</div>`;
+    }
+
     _renderDetail(main) {
       const M = this._model;
       const d = M.deliveries.find((x) => x.belegnr === this._detail);
       const pos = M.positions.filter((p) => p.belegnr === this._detail);
       if (!d) { main.innerHTML = `<div class="empty">TE ${esc(this._detail)} nicht gefunden.</div>`; return; }
-      const modeLabel = (MODES.find((m) => m.id === this._mode) || MODES[0]).label;
+      const status = this._teStatus(d, pos);
 
-      // Status-Chips: was ist an dieser TE auffällig?
-      const chips = [];
+      // Warnbadges
+      const warns = [];
       for (const k of ["dwell", "wait_gate", "unload", "delay"])
-        if (d.outlier && d.outlier[k]) chips.push(`<span class="chip out">Ausreißer ${PHASES[k].label}</span>`);
-      if (pos.some((p) => p.outlier && p.outlier.putaway)) chips.push(`<span class="chip out">Ausreißer Einlagerung</span>`);
-      if (pos.some((p) => p.outlier && p.outlier.qty)) chips.push(`<span class="chip out">Mengenabweichung</span>`);
-      if (d.isDiffLieferung) chips.push(`<span class="chip err">Differenzlieferung (Processcode)</span>`);
-      if (pos.some((p) => p.isKritArt)) chips.push(`<span class="chip err">Kritischer Artikel</span>`);
-      if (d.hasError || pos.some((p) => p.hasError)) chips.push(`<span class="chip err">Datenfehler</span>`);
-      if (!chips.length) chips.push(`<span class="chip ok">Prozess im Rahmen</span>`);
+        if (d.outlier && d.outlier[k]) warns.push(`<span class="dwarn w-warn">⚠ Ausreißer ${PHASES[k].label}</span>`);
+      if (pos.some((p) => p.outlier && p.outlier.putaway)) warns.push(`<span class="dwarn w-warn">⚠ Ausreißer Einlagerung</span>`);
+      if (pos.some((p) => p.outlier && p.outlier.qty)) warns.push(`<span class="dwarn w-warn">⚠ Mengenabweichung</span>`);
+      if (d.isDiffLieferung) warns.push(`<span class="dwarn w-krit">Differenzlieferung</span>`);
+      if (pos.some((p) => p.isKritArt)) warns.push(`<span class="dwarn w-krit">Kritischer Artikel</span>`);
+      if (d.hasError || pos.some((p) => p.hasError)) warns.push(`<span class="dwarn w-krit">Datenfehler</span>`);
+      if (d.isBSL) warns.push(`<span class="dwarn w-info">BSL-Prozess</span>`);
 
       const totalPaletten = pos.reduce((sum, p) => sum + (p.paletten || 0), 0);
+      const fmtTs = (t) => t instanceof Date ? t.toLocaleString("de-DE", { dateStyle: "medium", timeStyle: "short" }) : "–";
+      const sumVol = pos.reduce((a, p) => a + (p.volumen || 0), 0);
+      const sumKollis = pos.reduce((a, p) => a + (p.anzahl_kollis || 0), 0);
+
+      const fact = (l, v) => `<div class="dh-fact"><span class="dh-fact-l">${l}</span><span class="dh-fact-v">${v}</span></div>`;
 
       const wrap = document.createElement("div");
       wrap.innerHTML = `
         <div class="crumbs">
-          <button class="back" id="back">← Zurück</button>
-          <span class="path">${esc(modeLabel)} › <b>TE ${esc(d.belegnr)}</b></span>
-          <span style="margin-left:auto">${chips.join(" ")}</span>
+          <button class="back" id="back">← Zurück zur Übersicht</button>
         </div>
-        <div class="meta">
-          <span>Lieferant: <b>${esc(d.lieferant || "–")}</b></span>
-          <span><span class="tag" style="background:${SEGC[d.segment] || C.sonst}">${esc(d.segment)}</span></span>
-          <span>Ankunft: <b>${d.ts_ankunft ? d.ts_ankunft.toLocaleString("de-DE", { dateStyle: "medium", timeStyle: "short" }) : "–"}</b></span>
-          <span>Positionen: <b>${d.nPos}</b></span>
-          ${totalPaletten > 0 ? `<span>Paletten gesamt: <b>${totalPaletten.toFixed(1)}</b></span>` : ""}
-          ${d.lagernummer ? `<span>Lager: <b>${esc(d.lagernummer)}</b></span>` : ""}
-          ${d.land ? `<span>Ursprungsland: <b>${esc(d.land)}</b></span>` : ""}
-          ${d.sh_entl ? `<span>Schicht Entladen: <b>${d.sh_entl === "F" ? "Früh" : "Spät"}${d.kw_entl ? " · KW " + d.kw_entl.kw : ""}${d.team_entl ? " · " + esc(d.team_entl) : ""}</b></span>` : ""}
-          <span>Termintreue: <b>${d.phases.delay == null ? "–" : d.phases.delay <= 0 ? "pünktlich" : "+" + fmtH(d.phases.delay)}</b></span>
+        <div class="detail-head s-${status.key}">
+          <div class="dh-top">
+            <div>
+              <div class="dh-te">TE ${esc(d.belegnr)}</div>
+              <div class="dh-sub">${esc(d.lieferant || "–")}${d.te_extern ? " · " + esc(d.te_extern) : ""}</div>
+            </div>
+            <span class="dh-status" style="background:${status.col}22;color:${status.col};border-color:${status.col}66">${status.label}</span>
+          </div>
+          ${this._milestoneChain(status)}
+          ${warns.length ? `<div class="detail-warnbar">${warns.join("")}</div>` : ""}
+          <div class="dh-facts">
+            ${fact("Segment", `<span class="tag" style="background:${SEGC[d.segment]||C.sonst}">${esc(d.segment)}</span>`)}
+            ${fact("Ankunft", fmtTs(d.ts_ankunft))}
+            ${fact("Standzeit", d.phases.dwell != null ? fmtH(d.phases.dwell) : "–")}
+            ${fact("Termintreue", d.phases.delay == null ? "–" : d.phases.delay <= 0 ? "pünktlich" : "+" + fmtH(d.phases.delay))}
+            ${fact("Positionen", d.nPos)}
+            ${fact("Paletten", totalPaletten > 0 ? totalPaletten.toFixed(1) : "–")}
+            ${fact("Lagertor", d.lagertor ? esc(d.lagertor) : "–")}
+            ${fact("Ursprungsland", d.land ? esc(d.land) : "–")}
+            ${sumVol > 0 ? fact("Volumen", Math.round(sumVol)) : ""}
+            ${sumKollis > 0 ? fact("Kollis", sumKollis) : ""}
+            ${d.frachtfuehrer ? fact("Frachtführer", esc(d.frachtfuehrer)) : ""}
+            ${d.sh_entl ? fact("Schicht Entladen", `${d.sh_entl === "F" ? "Früh" : "Spät"}${d.team_entl ? " · " + esc(d.team_entl) : ""}`) : ""}
+          </div>
         </div>
-        <div class="card"><h3>Prozess-Zeitstrahl</h3><div id="tl"></div></div>
+        <div class="card"><h3>Prozess-Zeitstrahl${d.ts_verschifft ? " · inkl. Seetransport" : ""}</h3><div id="tl"></div></div>
         <div class="row">
           <div class="card"><h3>Phasen vs. Median ${esc(d.segment)}</h3><div id="cmp"></div></div>
           <div class="card" style="flex:2 1 420px"><h3>Produkte dieser TE</h3><div id="ptbl"></div></div>
@@ -1586,49 +2113,64 @@
     }
 
     _svgTimeline(el, d, pos) {
-      const events = [
-        ["Ankunft", d.ts_ankunft], ["Angedockt", d.ts_angedockt],
-        ["Entladen Start", d.ts_entladen_start], ["Entladen Ende", d.ts_entladen_ende_eff],
-        ["Abfahrt", d.ts_abfahrt],
-      ].filter((e) => e[1]);
-      const einl = pos.map((p) => p.ts_einlagerung).filter(Boolean);
-      const weB = pos.map((p) => p.ts_we_pos).filter(Boolean);
-      const all = [...events.map((e) => e[1]), ...einl, ...weB];
-      if (all.length < 2) { el.innerHTML = `<div class="empty">Zu wenige Zeitstempel für einen Zeitstrahl.</div>`; return; }
-      const t0 = Math.min(...all.map(Number)), t1 = Math.max(...all.map(Number));
-      const W = 460, Hh = 96, padL = 14, padR = 14, yL = 52;
-      const X = (t) => padL + ((+t - t0) / (t1 - t0 || 1)) * (W - padL - padR);
-      const col = SEGC[d.segment] || C.sonst;
-      let svg = `<svg viewBox="0 0 ${W} ${Hh}" width="100%" role="img" aria-label="Zeitstrahl TE ${esc(d.belegnr)}">`;
-      // Phasenbänder auf der Linie (gleiche Abstufung wie im Phasenband)
-      const bands = [
-        [d.ts_ankunft, d.ts_angedockt, 1, "Wartezeit Tor"],
-        [d.ts_angedockt, d.ts_entladen_start, 0.72, "Reaktionszeit"],
-        [d.ts_entladen_start, d.ts_entladen_ende_eff, 0.45, "Entladedauer"],
+      // Phasen-Definition inkl. Seetransport-Vorkette (Container)
+      const seaPhases = [
+        ["ts_verschifft", "ts_hafen", "Seetransport", "#3d4658"],
+        ["ts_hafen", "ts_verzollung", "Im Hafen", "#4a5568"],
+        ["ts_verzollung", "ts_depot", "Verzollung", "#5d6d7e"],
+        ["ts_depot", "ts_ankunft", "Depot → Anlieferung", "#6b7688"],
       ];
-      for (const [a, b, op, lbl] of bands)
-        if (a && b && b > a)
-          svg += `<rect x="${X(a)}" y="${yL - 5}" width="${Math.max(2, X(b) - X(a))}" height="10" rx="2" fill="${col}" opacity="${op}"><title>${lbl}: ${fmtH((b - a) / 36e5)}</title></rect>`;
-      svg += `<line x1="${padL}" x2="${W - padR}" y1="${yL}" y2="${yL}" stroke="${C.border}"/>`;
-      // Haupt-Ereignisse, Beschriftung abwechselnd oben/unten
-      events.forEach(([lbl, t], i) => {
-        const x = X(t), up = i % 2 === 0;
-        svg += `<circle cx="${x}" cy="${yL}" r="4" fill="${col}"/>
-          <line x1="${x}" x2="${x}" y1="${yL}" y2="${up ? yL - 16 : yL + 16}" stroke="${C.muted}" stroke-width="0.7"/>
-          <text x="${x}" y="${up ? yL - 21 : yL + 27}" font-size="9.5" fill="${C.ink}" text-anchor="middle">${lbl}</text>
-          <text x="${x}" y="${up ? yL - 31 : yL + 37}" font-size="9" fill="${C.muted}" text-anchor="middle">${t.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" })}</text>`;
-      });
-      // WE-Buchung (Raute) und Einlagerungen (Dreiecke) der Produkte
-      for (const t of weB)
-        svg += `<rect x="${X(t) - 3}" y="${yL - 3}" width="6" height="6" transform="rotate(45 ${X(t)} ${yL})" fill="${C.error}"><title>WE gebucht: ${t.toLocaleString("de-DE")}</title></rect>`;
-      for (const t of einl)
-        svg += `<path d="M ${X(t) - 4} ${yL + 9} L ${X(t) + 4} ${yL + 9} L ${X(t)} ${yL + 2} Z" fill="${C.container}"><title>Einlagerung: ${t.toLocaleString("de-DE")}</title></path>`;
-      // Spanne über mehrere Tage kennzeichnen
+      const landPhases = [
+        ["ts_ankunft", "ts_angedockt", "Wartezeit Tor", "#5d6d7e"],
+        ["ts_angedockt", "ts_entladen_start", "Reaktion", "#2980b9"],
+        ["ts_entladen_start", "ts_entladen_ende_eff", "Entladen", "#27ae60"],
+        ["ts_entladen_ende_eff", "ts_we_pos", "Buchung", "#f39c12"],
+        ["ts_we_pos", "ts_einlagerung", "Einlagerung", C.accent],
+      ];
+      // WE-Buchung/Einlagerung ggf. aus Positionen (Median-Zeitpunkt)
+      const firstTs = (arr) => { const v = arr.filter(Boolean).map(Number); return v.length ? new Date(Math.min(...v)) : null; };
+      const dd = Object.assign({}, d);
+      if (!dd.ts_we_pos) dd.ts_we_pos = firstTs(pos.map((p) => p.ts_we_pos));
+      if (!dd.ts_einlagerung) dd.ts_einlagerung = firstTs(pos.map((p) => p.ts_einlagerung));
+
+      const hasSea = dd.ts_verschifft instanceof Date;
+      const phases = (hasSea ? seaPhases : []).concat(landPhases)
+        .map(([a, b, lbl, col]) => ({ a: dd[a], b: dd[b], lbl, col }))
+        .filter((p) => p.a instanceof Date && p.b instanceof Date && p.b > p.a);
+      if (phases.length < 1) { el.innerHTML = `<div class="empty">Zu wenige Zeitstempel für einen Zeitstrahl.</div>`; return; }
+
+      const t0 = Math.min(...phases.map((p) => +p.a));
+      const t1 = Math.max(...phases.map((p) => +p.b));
+      const span = (t1 - t0) || 1;
+      const W = 620, padL = 12, padR = 12, barY = 40, barH = 26;
+      const X = (t) => padL + ((+t - t0) / span) * (W - padL - padR);
+
+      let svg = `<svg viewBox="0 0 ${W} 96" width="100%" role="img" aria-label="Zeitstrahl TE ${esc(d.belegnr)}">`;
+      // Zeitachse
+      const ticks = 4;
+      for (let i = 0; i <= ticks; i++) {
+        const t = t0 + span * i / ticks, x = padL + (W - padL - padR) * i / ticks;
+        svg += `<line x1="${x}" y1="${barY - 6}" x2="${x}" y2="${barY + barH + 6}" stroke="${C.border}" stroke-dasharray="2 3"/>
+          <text x="${x}" y="${barY - 10}" font-size="9" fill="${C.muted}" text-anchor="middle">${new Date(t).toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit" })}</text>`;
+      }
+      // Phasenbalken aneinandergereiht auf der echten Zeitachse
+      for (const p of phases) {
+        const x = X(p.a), w = Math.max(2, X(p.b) - X(p.a));
+        const hours = (p.b - p.a) / 36e5;
+        svg += `<rect x="${x}" y="${barY}" width="${w}" height="${barH}" rx="3" fill="${p.col}" opacity="0.92">
+          <title>${p.lbl}: ${fmtH(hours)}</title></rect>`;
+        // Label nur wenn Balken breit genug
+        if (w > 42) svg += `<text x="${x + w/2}" y="${barY + barH/2 + 3}" font-size="8.5" fill="#fff" text-anchor="middle" opacity=".9">${p.lbl}</text>`;
+      }
+      svg += "</svg>";
+      // Spanne + Legende der Phasen (mit Zeiten)
+      const total = (t1 - t0) / 36e5;
       const days = (t1 - t0) / 864e5;
-      if (days > 1) svg += `<text x="${W - padR}" y="12" font-size="9" fill="${C.outlier}" text-anchor="end">Spanne: ${days.toFixed(1)} Tage</text>`;
-      el.innerHTML = svg + `</svg>
-        <div class="legend"><span><i style="background:${C.error}"></i>WE-Buchung</span>
-        <span><i style="background:${C.container}"></i>Einlagerung (je Produkt)</span></div>`;
+      const chips = phases.map((p) =>
+        `<span class="tl-chip"><i style="background:${p.col}"></i>${esc(p.lbl)} · ${fmtH((p.b - p.a) / 36e5)}</span>`).join("");
+      el.innerHTML = svg +
+        `<div class="tl-span">Gesamtspanne: <b>${days >= 1 ? days.toFixed(1) + " Tage" : fmtH(total)}</b>${hasSea ? ` · davon Seetransport bis Anlieferung` : ""}</div>
+         <div class="tl-chips">${chips}</div>`;
     }
 
     _svgPhaseCompare(el, d, phaseMed) {
