@@ -1,5 +1,5 @@
 /* =========================================================================
- * WE Strategie-Cockpit – SAC Custom Widget (v0.6.0) · Entwickler: Benne
+ * WE Strategie-Cockpit – SAC Custom Widget (v0.10.0) · Entwickler: Benne
  * Strategische Langzeitsicht auf den Wareneingangsprozess.
  * Erwartet voraggregierte Perioden-Daten (je KW/Monat × Segment), wie sie
  * BW über SUM/MIN/MAX/COUNT liefert. Kein Median (BW-Einschränkung) — das
@@ -38,6 +38,97 @@
   };
   // Farben für die Jahreslinien im Jahresvergleich (jüngstes Jahr = kräftigstes Rot)
   const YEAR_COLORS = ["#8b90a0", "#5dade2", "#e67e22", "#c0392b"];
+
+  /* Ordnet einen Measure-Namen (wie im SAC-Modell benannt) dem internen
+     Feldnamen zu, den das Widget erwartet. Tolerant gegenüber Groß-/
+     Kleinschreibung, Umlauten, Leer-/Sonderzeichen. Der Nutzer benennt die
+     Measures im Modell erkennbar (z. B. "dwell_avg", "OTIF Quote",
+     "Standzeit Mittel"); die Zuordnung greift über Schlüsselwörter. */
+  // Periode normalisieren: "02.2026" (KW.Jahr) -> "2026-W02"; sonst unverändert.
+  function normPeriode(p) {
+    if (!p) return p;
+    const m = /^(\d{1,2})\.(\d{4})$/.exec(p.trim());
+    if (m) return `${m[2]}-W${String(+m[1]).padStart(2, "0")}`;
+    return p.trim();
+  }
+  // Segment aus Ladestelle ableiten (falls die Dimension die Ladestelle ist).
+  function normSegment(s) {
+    if (!s) return "Gesamt";
+    const u = s.toUpperCase();
+    if (u.includes("CONTAINER")) return "Container";
+    if (u.includes("FREI HAUS") || u.includes("DDP")) return "Landverkehr";
+    if (u.includes("BSL")) return "BSL";
+    if (u.includes("NICHT ZUGEORDNET")) return "Sonstige";
+    // schon ein sauberer Segmentname? dann durchreichen
+    if (["Container","BSL","Landverkehr","Sonstige","Gesamt"].includes(s.trim())) return s.trim();
+    return s.trim();
+  }
+
+  /* Ordnet einen Measure-Namen (interner Name ODER echter BW-Name) dem Feld zu.
+     Rückgabe: { field, durationSum?, scale? } oder null.
+       durationSum: Wert ist eine Summe von Stunden -> Ø = Summe/Anzahl.
+       scale:       Faktor (z. B. KG->t = 0.001, EUR->k€ = 0.001). */
+  function mapMeasureName(name) {
+    if (!name) return null;
+    const s = String(name).toLowerCase()
+      .replace(/ä/g,"a").replace(/ö/g,"o").replace(/ü/g,"u").replace(/ß/g,"ss")
+      .replace(/[^a-z0-9]+/g, "_");
+    const F = (field, extra) => Object.assign({ field }, extra || {});
+
+    // 1) exakte interne Namen (fertige Ø/Min/Max) direkt akzeptieren
+    const known = new Set([
+      "anzahl_pos","anzahl_anl","otif_quote","puenkt_quote","voll_quote",
+      "sum_menge","sum_gewicht_t","sum_wert_keur","sum_volumen",
+      ...PHASE_KEYS.flatMap(p => [`${p}_avg`,`${p}_min`,`${p}_max`,`${p}_n`]),
+      "dwell_avg","dwell_min","dwell_max","dwell_n",
+    ]);
+    if (known.has(s)) return F(s);
+
+    // 2) Echte BW-Dauer-Namen -> Phase (als SUMME, wird später /Anzahl gerechnet)
+    //    Reihenfolge wichtig: spezifische Muster zuerst.
+    const durMap = [
+      [["ankunft","einlagerung"], "dwell"],          // Dauer Ankunft Kontrollpunkt ... Einlagerung Ende
+      [["ankunft","andocken"], "wait_gate"],         // Dauer Ankunft Kontrollpunkt bis Andocken Tor
+      [["andocken","entladen"], "reaction"],         // Dauer Andocken Tor bis Entladen gestartet
+      [["entladen","beendet"], "unload"],            // Dauer Entladen gestartet Entladen beendet
+      [["ende_entladen","gebucht"], "booking"],      // Dauer Ende Entladen WE gebucht
+      [["entladen","gebucht"], "booking"],           // Fallback Buchung
+      [["einlagerung","gebucht"], "putaway"],        // Dauer Einlagerung bis WE gebucht
+      [["verweildauer"], "dwell"],                   // Verweildauer (falls als Dauer-Summe genutzt)
+    ];
+    if (s.includes("dauer") || s.includes("verweildauer")) {
+      for (const [needles, phase] of durMap)
+        if (needles.every(x => s.includes(x))) return F(`${phase}_avg`, { durationSum: true });
+    }
+
+    // 3) Phase + Aggregat generisch (fertige Werte, keine Summe)
+    const phaseSyn = {
+      wait_gate: ["wait_gate","wartezeit","tor"], reaction: ["reaction","reaktion"],
+      unload: ["unload","entlad"], booking: ["booking","buchung"],
+      putaway: ["putaway","einlager"], dwell: ["dwell","standzeit","durchlauf","verweil"],
+    };
+    const aggSyn = { avg:["avg","mittel","durchschnitt","mean","_o_"], min:["min","lowest","tiefst"], max:["max","highest","hoechst"], n:["_n","count","cnt"] };
+    for (const [p, syns] of Object.entries(phaseSyn)) {
+      if (syns.some(x => s.includes(x))) {
+        let agg = "avg"; for (const [a, asyns] of Object.entries(aggSyn)) if (asyns.some(x => s.includes(x))) { agg = a; break; }
+        return F(`${p}_${agg}`);
+      }
+    }
+    // 4) Quoten
+    if (s.includes("otif")) return F("otif_quote");
+    if (s.includes("puenkt") || s.includes("punkt")) return F("puenkt_quote");
+    if (s.includes("vollst")) return F("voll_quote");
+    // 5) Summen / Zähler (mit Einheiten-Umrechnung)
+    if (s.includes("ladungsgewicht") || (s.includes("gewicht") && !s.includes("stk"))) return F("sum_gewicht_t", { scale: 0.001 }); // KG->t
+    if (s.includes("wert") && !s.includes("stk")) return F("sum_wert_keur", { scale: 0.001 }); // EUR->k€
+    if (s.includes("volumen") && !s.includes("stk")) return F("sum_volumen");
+    if (s.includes("menge") && s.includes("ist")) return F("sum_menge");
+    if (s.includes("menge") && !s.includes("abw") && !s.includes("soll")) return F("sum_menge");
+    if (s.includes("lieferungsanzahl") || s.includes("anlief")) return F("anzahl_anl");
+    if (s.includes("liefpos") || s.includes("position")) return F("anzahl_pos");
+    return null;
+  }
+
 
   const THEME = `
     :host{
@@ -271,7 +362,7 @@
       super();
       this._sh = this.attachShadow({ mode: "open" });
       this._sh.innerHTML = TPL(THEME);
-      this._props = { theme: "dark", aggregation: "week" };
+      this._props = { theme: "dark", aggregation: "week", dauerEinheit: "sekunden" };
       this._rows = null;          // aggregierte Perioden-Zeilen
       this._seg = "Gesamt";       // gewähltes Segment
       this._selMetric = "dwell_avg";
@@ -287,9 +378,103 @@
       Object.assign(this._props, changed || {});
       if (changed && "theme" in changed) this._applyTheme();
       if (changed && "aggregation" in changed) this._render();
+      // SAC-Datenbindung (Zwei-Feed-Muster: dimensions + measures)
+      if (changed && changed.myDataSource) { this.myDataSource = changed.myDataSource; }
     }
     onCustomWidgetResize() { this._render(); }
     disconnectedCallback() { this._stopPlay(); }
+
+    /* SAC-DataSource-Setter. Erwartet die BENANNTEN Feeds aus dem Manifest —
+       je Kennzahl ein eigener Feed (dimension_periode, value_dur_dwell, …).
+       Jede Kennzahl wird gezielt über ihre Feed-ID gelesen. */
+    set myDataSource(dataBinding) {
+      this._dataBinding = dataBinding;
+      if (!dataBinding || dataBinding.state !== "success") return;
+      try {
+        this._rows = this._ingestSac(dataBinding);
+        this._render();
+      } catch (e) {
+        // Nie einen Framework-Fehler kaskadieren lassen; Zustand sauber halten.
+        console.warn("WE-Strategie: Datenaufbereitung fehlgeschlagen —", e && e.message);
+        this._rows = this._rows || [];
+      }
+    }
+    refreshData() { if (this._dataBinding) this.myDataSource = this._dataBinding; }
+
+    _ingestSac(db) {
+      const data = db.data || [];
+      // Eine Zelle als Zahl (raw bevorzugt; sonst formatierter String mit Einheit).
+      const numOf = (cell) => {
+        if (cell == null) return null;
+        if (typeof cell === "number") return cell;
+        if (typeof cell === "object") {
+          if (cell.raw != null && cell.raw !== "" && !isNaN(Number(cell.raw))) return Number(cell.raw);
+          return fmtNum(String(cell.formatted ?? cell.label ?? "").trim());
+        }
+        return fmtNum(String(cell).trim());
+      };
+      const fmtNum = (s) => { if (!s) return null; const c = s.split(" ")[0].replace(/,/g, ""); const n = Number(c); return isNaN(n) ? null : n; };
+      // Umrechnungsfaktor der Dauer-Rohwerte in STUNDEN. BW-Kennzahltyp "Zeit"
+      // im Format DEC liefert i.d.R. eine Dezimalzahl in SEKUNDEN (SAP-Basis).
+      // Über die Property "dauerEinheit" umstellbar, falls euer Modell anders liefert.
+      const durUnit = (this._props.dauerEinheit || "sekunden").toLowerCase();
+      const durFactor = { sekunden: 1/3600, sec: 1/3600, s: 1/3600,
+                          minuten: 1/60, min: 1/60, m: 1/60,
+                          stunden: 1, std: 1, h: 1, tage: 24, tag: 24, d: 24 }[durUnit] ?? (1/3600);
+      // Dauer -> Stunden. Erkennt HH:MM:SS (formatiert), sonst raw * Faktor.
+      const durOf = (cell) => {
+        if (cell == null) return null;
+        // 1) Explizit formatiert als HH:MM:SS? (auch >24h) -> direkt Stunden
+        const fmt = typeof cell === "object" ? String(cell.formatted ?? cell.label ?? "").trim() : String(cell).trim();
+        const m = /^(-?)(\d+):(\d{2}):(\d{2})$/.exec(fmt);
+        if (m) { const v = (+m[2]) + (+m[3])/60 + (+m[4])/3600; return m[1] ? -v : v; }
+        // 2) DEC-Rohwert (Typ Zeit) -> per Einheit-Faktor in Stunden
+        const raw = numOf(cell);
+        return raw == null ? null : raw * durFactor;
+      };
+      const readVal = (row, key) => { for (const k of [key, `${key}_0`]) if (row[k] != null) { const v = numOf(row[k]); if (v != null) return v; } return null; };
+      const readDur = (row, key) => { for (const k of [key, `${key}_0`]) if (row[k] != null) { const v = durOf(row[k]); if (v != null) return v; } return null; };
+      const readDim = (row, key) => {
+        for (const k of [key, `${key}_0`]) { const c = row[k]; if (c == null) continue;
+          const v = typeof c === "object" ? (c.id ?? c.label ?? c.description ?? "") : c; if (v !== "" && v != null) return String(v).trim(); }
+        return null;
+      };
+
+      const PHASES = { wait_gate:"value_dur_wait_gate", reaction:"value_dur_reaction", unload:"value_dur_unload",
+                       booking:"value_dur_booking", putaway:"value_dur_putaway", dwell:"value_dur_dwell" };
+
+      return data.map((row) => {
+        const r = {
+          periode: normPeriode(readDim(row, "dimension_periode")),
+          segment: normSegment(readDim(row, "dimension_segment")),
+          anzahl_anl: readVal(row, "value_anzahl_anl"),
+          anzahl_pos: readVal(row, "value_anzahl_pos"),
+        };
+        const n = r.anzahl_pos || r.anzahl_anl || 0;
+        // Dauer-Summen -> Ø (Summe/Positionen). Näherung; exakt mit Count je Phase.
+        for (const [ph, feed] of Object.entries(PHASES)) {
+          const sum = readDur(row, feed);
+          r[`${ph}_avg`] = (sum != null && n) ? sum / n : null;
+          r[`${ph}_n`] = n;
+          r[`${ph}_min`] = null; r[`${ph}_max`] = null;
+        }
+        // Optionale Min/Max fürs Standzeit-Band
+        const dmin = readDur(row, "value_dwell_min"), dmax = readDur(row, "value_dwell_max");
+        if (dmin != null) r.dwell_min = dmin;
+        if (dmax != null) r.dwell_max = dmax;
+        // Mengen/Werte mit Einheiten-Umrechnung
+        r.sum_menge = readVal(row, "value_menge");
+        const g = readVal(row, "value_gewicht"); r.sum_gewicht_t = g != null ? g / 1000 : null;   // KG->t
+        const w = readVal(row, "value_wert");    r.sum_wert_keur = w != null ? w / 1000 : null;    // EUR->k€
+        r.sum_volumen = readVal(row, "value_volumen");
+        // Quoten (optional)
+        r.otif_quote   = readVal(row, "value_otif_quote");
+        r.puenkt_quote = readVal(row, "value_puenkt_quote");
+        r.voll_quote   = readVal(row, "value_voll_quote");
+        return r;
+      });
+    }
+    onCustomWidgetDestroy() { this._stopPlay(); }
 
     setTheme(t) { if (t==="dark"||t==="light"){ this._props.theme=t; this._applyTheme(); } }
     _applyTheme() { this.setAttribute("data-theme", this._props.theme === "light" ? "light" : "dark"); }
