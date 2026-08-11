@@ -1,5 +1,5 @@
 /* =========================================================================
- * WE-Prozess-Cockpit – SAC Custom Widget (v0.13.0) · Entwickler: Benne
+ * WE-Prozess-Cockpit – SAC Custom Widget (v0.14.0) · Entwickler: Benne
  * Segment-/Schluesselabgleich mit dem Wareneingang-Tracker.
  * ========================================================================= */
 /* =========================================================================
@@ -118,6 +118,15 @@
     if (/G0|CONTAINER|'/.test(t) || /^\d{2}[A-Z]\d$/.test(t)) return "Container";
     return "Eigendisposition";
   }
+
+  /* Rückrichtung für den Query-Filter: normiertes Segment -> rohe
+     Ladestellen-Werte, wie sie im BW-Modell als Member stehen. 1:1 aus
+     LADESTELLE_KURZ abgeleitet, damit beide Richtungen synchron bleiben. */
+  const SEGMENT_TO_LADESTELLE = (() => {
+    const rev = {};
+    for (const [raw, seg] of Object.entries(LADESTELLE_KURZ)) (rev[seg] ||= []).push(raw);
+    return rev;
+  })();
 
   /** Teamzuordnung aus wöchentlicher F/S-Rotation. */
   function teamOf(sh, kwObj, cfg) {
@@ -1326,6 +1335,29 @@
       this._rebuild();
     }
 
+    /* Eigene Datenquelle der Widget-Bindung holen (gleiches Muster wie
+       this.dataBindings.getDataBinding('myDataSource').getDataSource()
+       im GeoMapWidget) — NICHT auf einer fremden Tabelle/Chart aufrufen,
+       sondern auf der eigenen Bindung dieses Custom Widgets. */
+    _getDataSource() {
+      try {
+        return this.dataBindings?.getDataBinding("myDataSource")?.getDataSource() ?? null;
+      } catch (e) {
+        console.warn("[WE-Cockpit] DataSource nicht verfügbar:", e);
+        return null;
+      }
+    }
+
+    /* "2026-W03" -> "03.2026" (Kalenderwochen-Memberformat wie im Modell) */
+    _periodeToKW(periode) {
+      if (!periode) return null;
+      const i = String(periode).indexOf("-W");
+      if (i === -1) return null;
+      const jahr = periode.substring(0, i);
+      const kw = periode.substring(i + 2);
+      return kw + "." + jahr;
+    }
+
     /* ---- Public API (aufrufbar via SAC-Script) ---- */
     refreshData() { if (this._dataBinding) this.myDataSource = this._dataBinding; }
     setTheme(theme) {
@@ -1359,6 +1391,64 @@
       this._periodContext = { periode: periode || "", segment: segment || "", vorjahr: vorjahr || "" };
       this._renderContextBanner();
       if (this._model && this._mode === "puls") this._render();
+    }
+
+    /* Wird vom Story-Skript mit den Rohwerten aus dem Strategie-Widget
+       aufgerufen: StrategieWidget.getSelectedPeriod/Segment/From/To/
+       PriorYearPeriod(). Setzt den Query-Filter der EIGENEN Datenquelle
+       dieses Widgets (Periode/Kalenderwoche + Ladestelle), löscht dabei
+       einen evtl. vorher aktiven Default-Filter auf derselben Dimension,
+       und stößt so eine neue BW-Abfrage nur für diesen Zeitraum an.
+       Sobald die Daten zurückkommen, feuert SAC erneut `set myDataSource`. */
+    setPeriodFilter(periode, segment, vonISO, bisISO, vorjahr) {
+      const KW_DIM = "dimension_kw_ankunft";   // technischen Namen ggf. anpassen
+      const LADE_DIM = "dimension_ladestelle"; // technischen Namen ggf. anpassen
+      const ds = this._getDataSource();
+      if (!ds) {
+        console.warn("[WE-Cockpit] setPeriodFilter: keine DataSource — nur Kontext gesetzt, kein Requery.");
+        this.setPeriodContext(periode, segment, vorjahr);
+        return false;
+      }
+
+      // Alten Filter auf der Kalenderwochen-Dimension entfernen (egal ob
+      // vorher ein Default-Zeitraum oder eine andere Periode aktiv war).
+      try { ds.removeDimensionFilter(KW_DIM); } catch (e) { /* war ggf. nicht gesetzt */ }
+
+      const kw = this._periodeToKW(periode);
+      if (kw) {
+        try { ds.setDimensionFilter(KW_DIM, [kw]); }
+        catch (e) { console.warn("[WE-Cockpit] KW-Filter fehlgeschlagen:", e && e.message); }
+      }
+
+      // Segment-Filter: nur setzen wenn nicht "Gesamt"/leer; sonst entfernen.
+      try { ds.removeDimensionFilter(LADE_DIM); } catch (e) {}
+      if (segment && segment !== "Gesamt") {
+        const werte = SEGMENT_TO_LADESTELLE[segment] || [segment];
+        try { ds.setDimensionFilter(LADE_DIM, werte); }
+        catch (e) { console.warn("[WE-Cockpit] Segment-Filter fehlgeschlagen:", e && e.message); }
+      }
+
+      // Kontext-Banner sofort zeigen; die eigentlichen Zeilen (myDataSource)
+      // kommen asynchron nach, sobald BW die neue Abfrage beantwortet hat.
+      this.setPeriodContext(periode, segment, vorjahr);
+      return true;
+    }
+
+    /* Gegenstück beim Schließen der Detailansicht: Periode/Segment-Filter
+       der eigenen Datenquelle entfernen und den Kontext-Banner zurücksetzen
+       (nutzt die bestehende clearPeriodContext() für den UI-Teil). Optional
+       könnt ihr hier einen festen Default-Zeitraum erneut setzen. */
+    clearPeriodFilter() {
+      const KW_DIM = "dimension_kw_ankunft";
+      const LADE_DIM = "dimension_ladestelle";
+      const ds = this._getDataSource();
+      if (ds) {
+        try { ds.removeDimensionFilter(KW_DIM); } catch (e) {}
+        try { ds.removeDimensionFilter(LADE_DIM); } catch (e) {}
+        // Beispiel Default-Zeitraum (an euer Modell anpassen):
+        // try { ds.setDimensionFilter(KW_DIM, ["05.2026"]); } catch (e) {}
+      }
+      this.clearPeriodContext();
     }
     /** Vorjahresvergleich setzen (Array oder JSON-String aus dem Strategie-Widget). */
     setYoYComparison(data) {
