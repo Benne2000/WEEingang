@@ -1,5 +1,5 @@
 /* =========================================================================
- * WE-Prozess-Cockpit – SAC Custom Widget (v0.14.0) · Entwickler: Benne
+ * WE-Prozess-Cockpit – SAC Custom Widget (v0.15.0) · Entwickler: Benne
  * Segment-/Schluesselabgleich mit dem Wareneingang-Tracker.
  * ========================================================================= */
 /* =========================================================================
@@ -1348,14 +1348,18 @@
       }
     }
 
-    /* "2026-W03" -> "03.2026" (Kalenderwochen-Memberformat wie im Modell) */
-    _periodeToKW(periode) {
-      if (!periode) return null;
+    /* "2026-W03" -> Kandidaten für das BW-Memberformat der Kalenderwoche.
+       Wir kennen nicht sicher, ob das Modell "03.2026" (formatiertes Label)
+       oder "202603" (6-stellige technische ID Jahr+Woche ohne Trennzeichen)
+       als Member-Schlüssel erwartet — deshalb liefern wir beide Varianten
+       als IN-Filter-Werte; BW ignoriert die nicht passende automatisch. */
+    _periodeToKWCandidates(periode) {
+      if (!periode) return [];
       const i = String(periode).indexOf("-W");
-      if (i === -1) return null;
+      if (i === -1) return [];
       const jahr = periode.substring(0, i);
       const kw = periode.substring(i + 2);
-      return kw + "." + jahr;
+      return [`${kw}.${jahr}`, `${jahr}${kw}`];
     }
 
     /* ---- Public API (aufrufbar via SAC-Script) ---- */
@@ -1414,9 +1418,9 @@
       // vorher ein Default-Zeitraum oder eine andere Periode aktiv war).
       try { ds.removeDimensionFilter(KW_DIM); } catch (e) { /* war ggf. nicht gesetzt */ }
 
-      const kw = this._periodeToKW(periode);
-      if (kw) {
-        try { ds.setDimensionFilter(KW_DIM, [kw]); }
+      const kwCandidates = this._periodeToKWCandidates(periode);
+      if (kwCandidates.length) {
+        try { ds.setDimensionFilter(KW_DIM, kwCandidates); }
         catch (e) { console.warn("[WE-Cockpit] KW-Filter fehlgeschlagen:", e && e.message); }
       }
 
