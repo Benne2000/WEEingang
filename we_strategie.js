@@ -1,5 +1,5 @@
 /* =========================================================================
- * WE Strategie-Cockpit – SAC Custom Widget (v0.10.0) · Entwickler: Benne
+ * WE Strategie-Cockpit – SAC Custom Widget (v0.11.0) · Entwickler: Benne
  * Strategische Langzeitsicht auf den Wareneingangsprozess.
  * Erwartet voraggregierte Perioden-Daten (je KW/Monat × Segment), wie sie
  * BW über SUM/MIN/MAX/COUNT liefert. Kein Median (BW-Einschränkung) — das
@@ -432,45 +432,69 @@
         const raw = numOf(cell);
         return raw == null ? null : raw * durFactor;
       };
-      const readVal = (row, key) => { for (const k of [key, `${key}_0`]) if (row[k] != null) { const v = numOf(row[k]); if (v != null) return v; } return null; };
-      const readDur = (row, key) => { for (const k of [key, `${key}_0`]) if (row[k] != null) { const v = durOf(row[k]); if (v != null) return v; } return null; };
-      const readDim = (row, key) => {
-        for (const k of [key, `${key}_0`]) { const c = row[k]; if (c == null) continue;
-          const v = typeof c === "object" ? (c.id ?? c.label ?? c.description ?? "") : c; if (v !== "" && v != null) return String(v).trim(); }
-        return null;
+      // --- Zwei-Container-Muster: dimensions + measures generisch lesen ---
+      const meta = db.metadata || {};
+      const feeds = meta.feeds || {};
+      // Zellschlüssel je Feed-Typ aus den Metadaten (robust ggü. Benennung).
+      let dimKeys = [], measKeys = [];
+      for (const def of Object.values(feeds)) {
+        if (!def || !Array.isArray(def.values)) continue;
+        if (def.type === "dimension") dimKeys = def.values;
+        else if (def.type === "mainStructureMember") measKeys = def.values;
+      }
+      // Fallback, falls metadata.feeds fehlt: übliche Schlüssel probieren.
+      if (!dimKeys.length) dimKeys = ["dimensions_0", "dimensions_1"];
+      if (!measKeys.length && data[0]) measKeys = Object.keys(data[0]).filter((k) => /^(measures|mainStructureMembers)_\d+$/.test(k));
+
+      // Name einer Measure-Zelle (zur Zuordnung via mapMeasureName).
+      const msm = meta.mainStructureMembers || {};
+      const measName = (key, cell) => {
+        const info = msm[key] || (cell && typeof cell === "object" ? cell : null);
+        return info ? (info.description || info.label || info.id || key) : key;
+      };
+      // Dimensionen identifizieren: Periode vs. Segment über Namen, sonst Reihenfolge.
+      const dmeta = meta.dimensions || {};
+      const dimName = (key) => { const i = dmeta[key]; return i ? String(i.description || i.label || i.id || key) : key; };
+      let periodeKey = null, segmentKey = null;
+      for (const k of dimKeys) {
+        const nm = dimName(k).toLowerCase();
+        if (!periodeKey && /(woche|kw|periode|jahr|monat|kalender)/.test(nm)) periodeKey = k;
+        else if (!segmentKey && /(ladestelle|segment|standort)/.test(nm)) segmentKey = k;
+      }
+      periodeKey = periodeKey || dimKeys[0];
+      segmentKey = segmentKey || dimKeys.find((k) => k !== periodeKey) || dimKeys[1];
+
+      const dimVal = (row, key) => {
+        const c = key && row[key]; if (c == null) return null;
+        const v = typeof c === "object" ? (c.id ?? c.label ?? c.description ?? "") : c;
+        return v === "" || v == null ? null : String(v).trim();
       };
 
-      const PHASES = { wait_gate:"value_dur_wait_gate", reaction:"value_dur_reaction", unload:"value_dur_unload",
-                       booking:"value_dur_booking", putaway:"value_dur_putaway", dwell:"value_dur_dwell" };
-
       return data.map((row) => {
-        const r = {
-          periode: normPeriode(readDim(row, "dimension_periode")),
-          segment: normSegment(readDim(row, "dimension_segment")),
-          anzahl_anl: readVal(row, "value_anzahl_anl"),
-          anzahl_pos: readVal(row, "value_anzahl_pos"),
-        };
+        const r = { periode: normPeriode(dimVal(row, periodeKey)), segment: normSegment(dimVal(row, segmentKey)) };
+        const durSums = {};
+        // Alle Measures durchgehen, per Name zuordnen.
+        for (const key of measKeys) {
+          const cell = row[key]; if (cell == null) continue;
+          const mapped = mapMeasureName(measName(key, cell));
+          if (!mapped) continue;
+          if (mapped.durationSum) {
+            const h = durOf(cell); if (h != null) durSums[mapped.field] = h;   // Summe in Stunden
+          } else if (mapped.scale) {
+            const v = numOf(cell); if (v != null) r[mapped.field] = v * mapped.scale; // KG->t, EUR->k€
+          } else {
+            const v = numOf(cell); if (v != null) r[mapped.field] = v;
+          }
+        }
         const n = r.anzahl_pos || r.anzahl_anl || 0;
         // Dauer-Summen -> Ø (Summe/Positionen). Näherung; exakt mit Count je Phase.
-        for (const [ph, feed] of Object.entries(PHASES)) {
-          const sum = readDur(row, feed);
-          r[`${ph}_avg`] = (sum != null && n) ? sum / n : null;
-          r[`${ph}_n`] = n;
-          r[`${ph}_min`] = null; r[`${ph}_max`] = null;
+        for (const [field, sumH] of Object.entries(durSums)) {
+          const base = field.replace(/_avg$/, "");
+          r[field] = n ? sumH / n : null;
+          if (r[`${base}_n`] == null) r[`${base}_n`] = n;
+          if (r[`${base}_min`] === undefined) r[`${base}_min`] = null;
+          if (r[`${base}_max`] === undefined) r[`${base}_max`] = null;
         }
-        // Optionale Min/Max fürs Standzeit-Band
-        const dmin = readDur(row, "value_dwell_min"), dmax = readDur(row, "value_dwell_max");
-        if (dmin != null) r.dwell_min = dmin;
-        if (dmax != null) r.dwell_max = dmax;
-        // Mengen/Werte mit Einheiten-Umrechnung
-        r.sum_menge = readVal(row, "value_menge");
-        const g = readVal(row, "value_gewicht"); r.sum_gewicht_t = g != null ? g / 1000 : null;   // KG->t
-        const w = readVal(row, "value_wert");    r.sum_wert_keur = w != null ? w / 1000 : null;    // EUR->k€
-        r.sum_volumen = readVal(row, "value_volumen");
-        // Quoten (optional)
-        r.otif_quote   = readVal(row, "value_otif_quote");
-        r.puenkt_quote = readVal(row, "value_puenkt_quote");
-        r.voll_quote   = readVal(row, "value_voll_quote");
         return r;
       });
     }
