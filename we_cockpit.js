@@ -1,5 +1,5 @@
 /* =========================================================================
- * WE-Prozess-Cockpit – SAC Custom Widget (v0.12.0) · Entwickler: Benne
+ * WE-Prozess-Cockpit – SAC Custom Widget (v0.13.0) · Entwickler: Benne
  * Segment-/Schluesselabgleich mit dem Wareneingang-Tracker.
  * ========================================================================= */
 /* =========================================================================
@@ -625,6 +625,8 @@
     Landverkehr: "#27ae60",
     Eigendisposition: "#5d6d7e",
   };
+  // Schicht-Farben: Frühschicht (F) warm/hell, Spätschicht (S) kühl/dunkel
+  const SH_COLORS = { F: "#f5b041", S: "#5dade2" };
 
   /* Design-Tokens übernommen aus dem Wareneingang-Tracker (main.js):
      Markenrot als Akzent, Consolas-Mono für Labels, dunkles Standard-Theme. */
@@ -666,6 +668,7 @@
     { id: "prozesskette", label: "Prozesskette", desc: "Zeitstrahl je Anlieferung inkl. Seetransport" },
     { id: "ausreisser",   label: "Ausreißer",    desc: "Auffällige Anlieferungen mit Detail-Drill" },
     { id: "treiber",      label: "Treiber",      desc: "Aufschlüsselung nach Tor, Frachtführer, Ware" },
+    { id: "schicht",      label: "Schicht",      desc: "Früh- vs. Spätschicht im Vergleich" },
   ];
 
   const TPL = `
@@ -947,6 +950,29 @@
     .drv-bar i{ display:block; height:100%; background:${C.accent}; border-radius:5px; opacity:.75;}
     .drv-med{ width:52px; text-align:right; font-variant-numeric:tabular-nums; color:${C.ink}; font-weight:600;}
     .drv-n{ width:78px; text-align:right; font-size:10px; color:${C.muted};}
+    /* ══ Schicht-Analyse ══ */
+    .sch-cols{ display:flex; gap:12px;}
+    .sch-col{ flex:1; background:${C.band}; border:1px solid ${C.border}; border-radius:10px; padding:12px 14px 10px;}
+    .sch-col .sch-h{ font-weight:700; font-size:13px; margin-bottom:10px;}
+    .sch-kpis{ display:grid; grid-template-columns:repeat(2,1fr); gap:9px;}
+    .sch-kpis > div b{ font-size:18px; font-weight:700; font-variant-numeric:tabular-nums; display:block; line-height:1.1; overflow:hidden; text-overflow:ellipsis;}
+    .sch-kpis > div small{ font-size:9px; color:${C.muted}; text-transform:uppercase; letter-spacing:.05em;}
+    .sch-ph-row{ display:flex; align-items:center; gap:10px; padding:5px 0;}
+    .sch-ph-lbl{ width:96px; flex:none; font-size:11.5px; color:${C.ink};}
+    .sch-ph-bars{ flex:1; display:flex; flex-direction:column; gap:3px;}
+    .sch-ph-bar{ display:flex; align-items:center; gap:7px; height:11px;}
+    .sch-ph-bar i{ display:block; height:11px; border-radius:3px; min-width:2px; transition:width .5s cubic-bezier(.16,1,.3,1);}
+    .sch-ph-bar span{ font-size:10px; color:${C.ink2}; font-variant-numeric:tabular-nums; white-space:nowrap;}
+    .sch-ph-legend{ display:flex; gap:14px; margin-top:8px; padding-top:8px; border-top:1px solid ${C.border};}
+    .sch-ph-legend span{ display:flex; align-items:center; gap:5px; font-size:10px; color:${C.ink2}; font-family:var(--font-mono);}
+    .sch-ph-legend i{ width:9px; height:9px; border-radius:2px;}
+    .sch-q-row{ display:flex; align-items:center; gap:10px; padding:10px 0; border-bottom:1px solid ${C.border};}
+    .sch-q-row:last-child{ border-bottom:0;}
+    .sch-q-name{ display:flex; align-items:center; gap:6px; width:110px; flex:none; font-size:12px; font-weight:600;}
+    .sch-q-name i{ width:9px; height:9px; border-radius:2px;}
+    .sch-q-metric{ flex:1; text-align:center;}
+    .sch-q-v{ font-size:17px; font-weight:700; font-variant-numeric:tabular-nums; display:block;}
+    .sch-q-metric small{ font-size:9px; color:${C.muted}; text-transform:uppercase; letter-spacing:.05em;}
     /* Detail-Zeitstrahl */
     .tl-span{ font-size:11px; color:${C.ink2}; margin-top:8px;}
     .tl-span b{ color:${C.ink};}
@@ -1463,6 +1489,7 @@
       if (mode.id === "prozesskette") { this._viewProzesskette(main); return; }
       if (mode.id === "ausreisser")   { this._viewAusreisser(main); return; }
       if (mode.id === "treiber")      { this._viewTreiber(main); return; }
+      if (mode.id === "schicht")      { this._viewSchicht(main); return; }
       this._viewPuls(main);
     }
 
@@ -1691,6 +1718,143 @@
           <span class="drv-med">${fmtH(r.med)}</span>
           <span class="drv-n">n=${r.n}${r.outRate > 0 ? ` · <b style="color:${C.outlier}">${(r.outRate*100).toFixed(0)}%</b>` : ""}</span>
         </div>`).join("");
+    }
+
+    /* ═══ 5) SCHICHT — Früh- vs. Spätschicht im Vergleich ═══ */
+    _viewSchicht(main) {
+      const M = this._model;
+      const wrap = document.createElement("div");
+      wrap.innerHTML = `
+        <div class="legend">
+          <span><i style="background:${SH_COLORS["F"]}"></i>Frühschicht (F)</span>
+          <span><i style="background:${SH_COLORS["S"]}"></i>Spätschicht (S)</span>
+          <span style="margin-left:auto">Zuordnung: Phase → Schicht, in der die Phase endet</span>
+        </div>
+        <div class="row">
+          <div class="card"><h3>Durchsatz je Schicht</h3><div id="sch-tp"></div></div>
+          <div class="card grow"><h3>Median-Zeit je Prozessphase · Früh vs. Spät</h3><div id="sch-ph"></div></div>
+        </div>
+        <div class="row">
+          <div class="card"><h3>Termintreue & Ausreißer je Schicht</h3><div id="sch-q"></div></div>
+          <div class="card grow"><h3>Anlieferungen nach Ankunfts-Schicht · über den Tag</h3><div id="sch-hr"></div></div>
+        </div>`;
+      main.appendChild(wrap);
+      this._schThroughput(wrap.querySelector("#sch-tp"));
+      this._schPhases(wrap.querySelector("#sch-ph"));
+      this._schQuality(wrap.querySelector("#sch-q"));
+      this._schByHour(wrap.querySelector("#sch-hr"));
+    }
+
+    // Schichtlage einer Anlieferung/Position für eine Phase: F/S -> Früh/Spät
+    _lageOf(rec, shField) { const s = rec[shField]; return s === "F" ? "F" : s === "S" ? "S" : null; }
+
+    // Durchsatz je Schicht (Ankunfts-Schicht als Grundlage)
+    _schThroughput(el) {
+      const M = this._model;
+      const agg = { F: { anl: 0, pos: 0, menge: 0, vol: 0 }, S: { anl: 0, pos: 0, menge: 0, vol: 0 } };
+      for (const d of M.deliveries) {
+        const l = this._lageOf(d, "sh_ankunft"); if (!l) continue;
+        agg[l].anl++; agg[l].pos += d.nPos || 0;
+        agg[l].menge += d.sum_menge || 0; agg[l].vol += d.sum_volumen || 0;
+      }
+      const fmt = (v) => !v ? "–" : v >= 1e6 ? (v/1e6).toFixed(1)+"M" : v >= 1000 ? (v/1000).toFixed(1)+"k" : Math.round(v).toString();
+      const col = (l) => SH_COLORS[l];
+      const block = (l, name) => `
+        <div class="sch-col" style="border-top:3px solid ${col(l)}">
+          <div class="sch-h">${name}</div>
+          <div class="sch-kpis">
+            <div><b>${agg[l].anl}</b><small>Anlieferungen</small></div>
+            <div><b>${agg[l].pos}</b><small>Positionen</small></div>
+            <div><b>${fmt(agg[l].menge)}</b><small>Menge</small></div>
+            <div><b>${fmt(agg[l].vol)}</b><small>Volumen</small></div>
+          </div>
+        </div>`;
+      el.innerHTML = `<div class="sch-cols">${block("F", "Frühschicht")}${block("S", "Spätschicht")}</div>`;
+    }
+
+    // Median-Zeit je Phase, gruppierte Balken Früh vs. Spät
+    _schPhases(el) {
+      const M = this._model;
+      const phaseDefs = [
+        ["wait_gate", "Wartezeit Tor", "sh_andocken", "delivery"],
+        ["reaction", "Reaktion", "sh_entl_start", "delivery"],
+        ["unload", "Entladen", "sh_unload_eff", "delivery"],
+        ["booking", "Buchung", "sh_we", "position"],
+        ["putaway", "Einlagerung", "sh_einl", "position"],
+        ["dwell", "Standzeit", "sh_entl", "delivery"],
+      ];
+      const rows = phaseDefs.map(([key, label, shField, level]) => {
+        const recs = level === "position" ? M.positions : M.deliveries;
+        const byLage = { F: [], S: [] };
+        for (const r of recs) {
+          const l = this._lageOf(r, shField); if (!l) continue;
+          const v = r.phases && r.phases[key];
+          if (v != null) byLage[l].push(v);
+        }
+        return { label, F: WEEngine.median(byLage.F), S: WEEngine.median(byLage.S), nF: byLage.F.length, nS: byLage.S.length };
+      });
+      const maxV = Math.max(1, ...rows.flatMap((r) => [r.F || 0, r.S || 0]));
+      el.innerHTML = rows.map((r) => `
+        <div class="sch-ph-row">
+          <span class="sch-ph-lbl">${r.label}</span>
+          <div class="sch-ph-bars">
+            <div class="sch-ph-bar"><i style="width:${((r.F||0)/maxV*100).toFixed(0)}%;background:${SH_COLORS["F"]}"></i><span>${r.F!=null?fmtH(r.F):"–"}</span></div>
+            <div class="sch-ph-bar"><i style="width:${((r.S||0)/maxV*100).toFixed(0)}%;background:${SH_COLORS["S"]}"></i><span>${r.S!=null?fmtH(r.S):"–"}</span></div>
+          </div>
+        </div>`).join("") +
+        `<div class="sch-ph-legend"><span><i style="background:${SH_COLORS["F"]}"></i>Früh</span><span><i style="background:${SH_COLORS["S"]}"></i>Spät</span></div>`;
+    }
+
+    // Termintreue + Ausreißer-Anteil je Schicht
+    _schQuality(el) {
+      const M = this._model;
+      const agg = { F: { n: 0, onTime: 0, out: 0 }, S: { n: 0, onTime: 0, out: 0 } };
+      for (const d of M.deliveries) {
+        const l = this._lageOf(d, "sh_entl"); if (!l) continue;
+        agg[l].n++;
+        if (d.phases && d.phases.delay != null && d.phases.delay <= (M.cfg.toleranzMin || 0) / 60) agg[l].onTime++;
+        if (d.outlier && (d.outlier.dwell || d.outlier.unload || d.outlier.wait_gate)) agg[l].out++;
+      }
+      const pct = (a, b) => b ? (a / b * 100) : null;
+      const rowFor = (l, name) => {
+        const ot = pct(agg[l].onTime, agg[l].n), or = pct(agg[l].out, agg[l].n);
+        const otCol = ot == null ? C.muted : ot >= 90 ? C.good : ot >= 75 ? C.warn : C.bad;
+        return `<div class="sch-q-row">
+          <span class="sch-q-name"><i style="background:${SH_COLORS[l]}"></i>${name}</span>
+          <div class="sch-q-metric"><span class="sch-q-v" style="color:${otCol}">${ot==null?"–":ot.toFixed(0)+"%"}</span><small>termintreu</small></div>
+          <div class="sch-q-metric"><span class="sch-q-v" style="color:${or>0?C.outlier:C.ink}">${or==null?"–":or.toFixed(0)+"%"}</span><small>Ausreißer</small></div>
+          <div class="sch-q-metric"><span class="sch-q-v">${agg[l].n}</span><small>Anlieferungen</small></div>
+        </div>`;
+      };
+      el.innerHTML = rowFor("F", "Frühschicht") + rowFor("S", "Spätschicht");
+    }
+
+    // Anlieferungen nach Ankunftszeit (Stunde), gestapelt Früh/Spät
+    _schByHour(el) {
+      const M = this._model;
+      const hours = Array.from({ length: 24 }, () => ({ F: 0, S: 0 }));
+      for (const d of M.deliveries) {
+        const t = d.ts_ankunft; if (!(t instanceof Date)) continue;
+        const l = this._lageOf(d, "sh_ankunft"); if (!l) continue;
+        hours[t.getHours()][l]++;
+      }
+      const maxH = Math.max(1, ...hours.map((h) => h.F + h.S));
+      const W = 1000, H = 200, padL = 28, padB = 22, padT = 10, bw = (W - padL - 10) / 24;
+      let svg = `<svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Anlieferungen je Stunde">`;
+      for (let i = 0; i <= 2; i++) { const y = padT + (H - padT - padB) * i / 2; const v = Math.round(maxH * (1 - i / 2));
+        svg += `<line x1="${padL}" x2="${W-6}" y1="${y}" y2="${y}" stroke="${C.border}" opacity=".5"/><text x="${padL-5}" y="${y+3}" font-size="8" fill="${C.muted}" text-anchor="end">${v}</text>`; }
+      hours.forEach((h, i) => {
+        const x = padL + i * bw, total = h.F + h.S;
+        if (!total) return;
+        const scale = (H - padT - padB) / maxH;
+        const hF = h.F * scale, hS = h.S * scale;
+        const yF = H - padB - hF, yS = yF - hS;
+        if (h.F) svg += `<rect x="${x+1}" y="${yF}" width="${bw-2}" height="${hF}" fill="${SH_COLORS["F"]}"><title>${i}:00 Früh: ${h.F}</title></rect>`;
+        if (h.S) svg += `<rect x="${x+1}" y="${yS}" width="${bw-2}" height="${hS}" fill="${SH_COLORS["S"]}"><title>${i}:00 Spät: ${h.S}</title></rect>`;
+      });
+      for (let i = 0; i < 24; i += 3) svg += `<text x="${padL + i*bw + bw/2}" y="${H-6}" font-size="8" fill="${C.muted}" text-anchor="middle">${i}h</text>`;
+      svg += "</svg>";
+      el.innerHTML = svg;
     }
 
     _renderFindings(el) {
