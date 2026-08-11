@@ -1,5 +1,5 @@
 /* =========================================================================
- * WE Strategie-Cockpit – SAC Custom Widget (v0.12.0) · Entwickler: Benne
+ * WE Strategie-Cockpit – SAC Custom Widget (v0.13.0) · Entwickler: Benne
  * Strategische Langzeitsicht auf den Wareneingangsprozess.
  * Erwartet voraggregierte Perioden-Daten (je KW/Monat × Segment), wie sie
  * BW über SUM/MIN/MAX/COUNT liefert. Kein Median (BW-Einschränkung) — das
@@ -19,6 +19,7 @@
     { key: "sum_gewicht_t", label: "Durchsatz Gewicht",unit: "t",  sum: true,                            lowerBetter: false },
     { key: "sum_wert_keur", label: "Warenwert",        unit: "k€", sum: true,                            lowerBetter: false },
     { key: "anzahl_pos",    label: "Positionen",       unit: "",   sum: true,                            lowerBetter: false },
+    { key: "anzahl_anl",    label: "Anlieferungen",    unit: "",   sum: true,                            lowerBetter: false },
   ];
 
   const SEG_COLORS = {
@@ -47,21 +48,52 @@
   // Periode normalisieren: "02.2026" (KW.Jahr) -> "2026-W02"; sonst unverändert.
   function normPeriode(p) {
     if (!p) return p;
-    const m = /^(\d{1,2})\.(\d{4})$/.exec(p.trim());
+    const s = String(p).trim();
+    // Schon normalisiert (unser eigenes Format)
+    if (/^\d{4}-W\d{2}$/.test(s)) return s;
+    // "WW.YYYY" z. B. "03.2026" (formatiertes Label)
+    let m = /^(\d{1,2})\.(\d{4})$/.exec(s);
     if (m) return `${m[2]}-W${String(+m[1]).padStart(2, "0")}`;
-    return p.trim();
+    // "YYYYWW" 6-stellig z. B. "202501" (BW-Technical-ID, Jahr+Woche
+    // ohne Trennzeichen — das liefert die .id einer Kalenderwochen-
+    // Dimension oft statt des formatierten Labels)
+    m = /^(\d{4})(\d{2})$/.exec(s);
+    if (m) {
+      const wk = +m[2];
+      if (wk >= 1 && wk <= 53) return `${m[1]}-W${String(wk).padStart(2, "0")}`;
+    }
+    return s;
   }
-  // Segment aus Ladestelle ableiten (falls die Dimension die Ladestelle ist).
+  // Segment aus Ladestelle ableiten. BW kürzt Member-IDs teils auf eine
+  // feste Länge ("ILW KREFELD CONTAINE" ohne das abschließende "R") —
+  // daher tolerant über Teilstrings statt exakter Wortsuche matchen.
+  // Tabelle 1:1 an die des Review-Widgets angelehnt, damit beide Widgets
+  // dieselben Segmente erzeugen.
+  const LADESTELLE_KURZ_STRAT = {
+    "ILW KREFELD BSL": "BSL",
+    "ILW KREFELD CONTAINE": "Container",
+    "ILW KREFELD LANDVERK": "Landverkehr",
+    "ILW Krefeld Container": "Container",
+    "ILW Krefeld BSL": "BSL",
+    "ILW Krefeld BSL / Eigendisposition": "BSL",
+    "ILW Krefeld Landverkehr": "Landverkehr",
+    "ILW Krefeld Frei Haus / DDP": "Landverkehr",
+  };
   function normSegment(s) {
-    if (!s) return "Gesamt";
-    const u = s.toUpperCase();
-    if (u.includes("CONTAINER")) return "Container";
-    if (u.includes("FREI HAUS") || u.includes("DDP")) return "Landverkehr";
+    // Leer/undefiniert -> "Sonstige", NIE "Gesamt" (das ist die separat
+    // berechnete Summe über alle echten Segmente; würde sich sonst mit
+    // dieser Kategorie überschneiden und Werte doppelt zählen).
+    if (!s) return "Sonstige";
+    const raw = String(s).trim();
+    if (LADESTELLE_KURZ_STRAT[raw]) return LADESTELLE_KURZ_STRAT[raw];
+    const u = raw.toUpperCase();
+    if (u.includes("CONTAINE")) return "Container";   // trifft auch "CONTAINER" voll
+    if (u.includes("LANDVERK") || u.includes("FREI HAUS") || u.includes("DDP")) return "Landverkehr";
     if (u.includes("BSL")) return "BSL";
     if (u.includes("NICHT ZUGEORDNET")) return "Sonstige";
-    // schon ein sauberer Segmentname? dann durchreichen
-    if (["Container","BSL","Landverkehr","Sonstige","Gesamt"].includes(s.trim())) return s.trim();
-    return s.trim();
+    if (raw === "Gesamt") return "Sonstige"; // Schutz vor Kollision mit der Summenzeile
+    if (["Container", "BSL", "Landverkehr", "Sonstige"].includes(raw)) return raw;
+    return raw || "Sonstige";
   }
 
   /* Ordnet einen Measure-Namen (interner Name ODER echter BW-Name) dem Feld zu.
@@ -191,12 +223,17 @@
     .toolbar .spacer{ flex:1; }
     /* Dashboard-Grid */
     main{ flex:1; overflow:auto; padding:14px 16px; position:relative; }
-    .grid{ display:grid; grid-template-columns:repeat(auto-fill, minmax(230px, 1fr)); gap:12px; }
+    .grid{ display:grid; grid-template-columns:repeat(auto-fill, minmax(196px, 1fr)); gap:12px; }
     .tile{ background:var(--card); border:1px solid var(--border); border-radius:var(--r-md);
       padding:13px 14px 8px; cursor:pointer; transition:border-color .15s var(--ease), transform .1s;
       position:relative; overflow:hidden; }
     .tile:hover{ border-color:var(--accent); }
     .tile.sel{ border-color:var(--accent); box-shadow:inset 0 0 0 1px var(--accent); }
+    .tile.tile-nodata{ cursor:default; opacity:.6; }
+    .tile.tile-nodata:hover{ border-color:var(--border); }
+    .tile.tile-nodata .m-val b{ color:var(--muted); font-weight:600; }
+    .tile.tile-nodata .nodata-hint{ font-family:var(--font-mono); font-size:9px; color:var(--muted);
+      text-transform:uppercase; letter-spacing:.06em; }
     .tile .m-lbl{ font-family:var(--font-mono); font-size:9px; font-weight:600; color:var(--muted);
       text-transform:uppercase; letter-spacing:.14em; }
     .tile .m-val{ display:flex; align-items:baseline; gap:6px; margin:5px 0 2px; }
@@ -688,6 +725,24 @@
         const valid = pts.filter(p => p && p.v != null);
         if (!valid.length) return;
         const last = valid[valid.length - 1].v;
+        // Heuristik: Eine %-Kennzahl, die über den GESAMTEN sichtbaren
+        // Zeitraum exakt 0 ist, ist so gut wie nie ein echter Messwert
+        // (auch bei schwacher Performance schwankt sowas minimal) —
+        // meist ist die Kennzahl im Modell nicht gebunden. Zeigt "–"
+        // statt einer irreführenden "0.0%"-Kachel mit falschem Ziel-Status.
+        const noData = m.pct && valid.every(p => p.v === 0);
+        if (noData) {
+          const tileNd = document.createElement("div");
+          tileNd.className = "tile tile-nodata";
+          tileNd.dataset.key = m.key;
+          tileNd.title = "Keine Werte gebunden oder Kennzahl liefert durchgehend 0 — Data Binding prüfen.";
+          tileNd.innerHTML = `
+            <div class="m-lbl">${m.label}</div>
+            <div class="m-val"><b>–</b></div>
+            <div class="m-sub"><span class="nodata-hint">nicht gebunden</span></div>`;
+          grid.appendChild(tileNd);
+          return;
+        }
         const base = valid.length > 3
           ? valid.slice(0, -1).reduce((a, p) => a + p.v, 0) / (valid.length - 1) : last;
         const rel = base ? (last - base) / Math.abs(base) : 0;
@@ -1178,7 +1233,20 @@
       const W = 760, H = 260, padL = 44, padR = 16, padT = 14, padB = 28;
       const n = pts.length;
       const vals = pts.filter(p=>p&&p.v!=null).map(p=>p.v);
-      let lo = Math.min(...vals), hi = Math.max(...vals);
+      let lo = Math.min(...vals), dataHi = Math.max(...vals);
+      // Y-Achsen-Deckel für die Linie selbst: ein einzelner Extremwert soll
+      // nicht den gesamten Trend auf eine unlesbar flache Linie drücken.
+      // Deckel = P90 + 1,2× der Spanne bis P90 über dem Minimum. Punkte
+      // darüber werden an den oberen Rand geklemmt und als ▲ markiert;
+      // der echte Wert bleibt im Tooltip ablesbar.
+      let hi = dataHi;
+      if (vals.length >= 6) {
+        const sorted = [...vals].sort((a, b) => a - b);
+        const p90 = sorted[Math.floor(sorted.length * 0.9)];
+        const median = sorted[Math.floor(sorted.length * 0.5)];
+        const cap = p90 + (p90 - lo) * 1.2;
+        if (dataHi > cap && cap > lo) hi = Math.max(cap, median, p90);
+      }
       // Die Mittelwert-Linie ist die Hauptaussage und bestimmt die Achse.
       // Das Min/Max-Band wird nur so weit gezeigt, wie es die Linie nicht an den
       // Rand drückt: Obergrenze max. 1,6× über die Linien-Spanne hinaus.
@@ -1201,6 +1269,7 @@
       const X = (i) => padL + (i/Math.max(1,n-1))*(W-padL-padR);
       const Y = (v) => H - padB - ((clampY(v)-lo)/(hi-lo))*(H-padT-padB);
       const col = SEG_COLORS[this._seg] || "var(--accent)";
+      const isClipped = (v) => v != null && v > lineHi + (lineSpan * 0.02);
 
       // Anomalien: Abstand zum gleitenden Mittel (Fenster 5). Ohne BW-Median,
       // rein clientseitig auf der Mittelwert-Serie. Punkte > 2×mittl. Abweichung.
@@ -1238,24 +1307,38 @@
           <text x="${W-padR}" y="${ty-4}" text-anchor="end" font-family="var(--font-mono)"
             font-size="9" fill="var(--warn)">Ziel ${fmtVal(target, m)}${m.unit==="%"?"%":m.unit}</text>`;
       }
-      // Punkte — Anomalien größer und in Warnfarbe, mit Ring
-      let dots="";
+      // Punkte — Anomalien größer und in Warnfarbe, mit Ring.
+      // Über den Deckel hinausragende Punkte (isClipped) als kleines ▲
+      // markieren statt als Kreis — signalisiert "geht weiter nach oben,
+      // echter Wert im Tooltip" statt einen falschen Endpunkt vorzutäuschen.
+      let dots="", anyClipped = false;
       pts.forEach((p,i)=>{
         if(!p||p.v==null) return;
-        if (anomFlags[i]) {
+        const clipped = isClipped(p.v);
+        if (clipped) anyClipped = true;
+        const title = `<title>${esc(p.per)}: ${fmtVal(p.v,m)}${m.unit==="%"?"%":m.unit}${clipped?" (Achse gekappt)":""}</title>`;
+        if (clipped) {
+          const cx = X(i), cy = Y(p.v);
+          dots += `<path class="dot dot-clip" data-i="${i}" d="M${cx-5},${cy+4} L${cx+5},${cy+4} L${cx},${cy-4} Z"
+            fill="var(--warn)" stroke="var(--bg)" stroke-width="1">${title}</path>`;
+        } else if (anomFlags[i]) {
           dots += `<circle class="dot anom" data-i="${i}" cx="${X(i)}" cy="${Y(p.v)}" r="5"
-            fill="var(--warn)" stroke="var(--bg)" stroke-width="1.5"/>`;
+            fill="var(--warn)" stroke="var(--bg)" stroke-width="1.5">${title}</circle>`;
         } else {
-          dots += `<circle class="dot" data-i="${i}" cx="${X(i)}" cy="${Y(p.v)}" r="3" fill="${col}"/>`;
+          dots += `<circle class="dot" data-i="${i}" cx="${X(i)}" cy="${Y(p.v)}" r="3" fill="${col}">${title}</circle>`;
         }
       });
+      const clipHint = anyClipped
+        ? `<text x="${W-padR}" y="${padT+8}" text-anchor="end" font-family="var(--font-mono)"
+             font-size="9" fill="var(--warn)">▲ Achse gekappt · Extremwerte im Tooltip</text>`
+        : "";
 
       return `<svg class="big" viewBox="0 0 ${W} ${H}" data-lo="${lo}" data-hi="${hi}" data-n="${n}"
                 data-padl="${padL}" data-padr="${padR}" data-padt="${padT}" data-padb="${padB}">
         ${grid}${xlab}${band}${targetLine}
         <path class="line" stroke="${col}" d="${d}"/>
         <line class="scrub-line" x1="0" y1="${padT}" x2="0" y2="${H-padB}" stroke="${col}" stroke-width="1.5" opacity="0"/>
-        ${dots}
+        ${dots}${clipHint}
       </svg>`;
     }
 
