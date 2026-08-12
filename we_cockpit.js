@@ -1,5 +1,5 @@
 /* =========================================================================
- * WE-Prozess-Cockpit – SAC Custom Widget (v0.15.0) · Entwickler: Benne
+ * WE-Prozess-Cockpit – SAC Custom Widget (v0.16.0) · Entwickler: Benne
  * Segment-/Schluesselabgleich mit dem Wareneingang-Tracker.
  * ========================================================================= */
 /* =========================================================================
@@ -720,6 +720,14 @@
       font:inherit; font-size:12px; background:${C.panel}; color:${C.ink}; box-sizing:border-box;}
     .cfg input[type=range]{ padding:0; accent-color:${C.outlier};}
     .cfg .hint{ color:${C.muted}; font-size:10px; margin-top:2px;}
+    .filterpanel{ width:230px;}
+    .filterpanel-actions{ display:flex; gap:8px; margin-top:12px;}
+    .filterpanel-actions button{ flex:1; padding:7px 0; border-radius:5px; font:inherit; font-size:11.5px;
+      font-weight:600; cursor:pointer; border:1px solid ${C.border}; background:transparent; color:${C.ink2};
+      transition:all .15s;}
+    .filterpanel-actions button:hover{ border-color:${C.accent}; color:${C.ink};}
+    .filterpanel-apply{ background:${C.accent} !important; color:#fff !important; border-color:${C.accent} !important;}
+    .filterpanel-apply:hover{ filter:brightness(1.08);}
     .kpis{ display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin:10px 0 10px;}
     .kpi{ padding:11px 13px; border:1px solid ${C.border}; border-radius:var(--r-md); background:${C.card};
       cursor:pointer; min-width:0; transition:border-color .15s var(--ease), transform .1s;}
@@ -748,6 +756,13 @@
     .ctxbar button{ margin-left:auto; font:inherit; font-size:10px; padding:3px 9px; cursor:pointer;
       border:1px solid var(--border2, rgba(255,255,255,.13)); border-radius:4px; background:transparent; color:${C.ink2}; }
     .ctxbar button:hover{ border-color:var(--accent); color:${C.ink}; }
+    /* Manueller Filter im Cockpit: eigene (blaue) Akzentfarbe statt der
+       roten Strategie-Farbe, damit auf einen Blick klar ist, welche der
+       beiden Filterquellen gerade aktiv ist. */
+    .ctxbar.ctxbar-manual{ background:color-mix(in srgb, #2980b9 14%, ${C.panel}); }
+    .ctxbar.ctxbar-manual .ctx-dot{ background:#2980b9; box-shadow:0 0 8px #2980b9; }
+    .ctxbar.ctxbar-manual b{ color:#5dade2; }
+    .ctxbar.ctxbar-manual button:hover{ border-color:#2980b9; }
     nav{ display:flex; gap:2px; padding:0 14px; height:44px; background:${C.panel};
       border-bottom:1px solid ${C.border}; overflow-x:auto; scrollbar-width:none; flex:none;}
     nav::-webkit-scrollbar{ display:none;}
@@ -1038,8 +1053,29 @@
         <span class="brand-dot"></span>
         <div class="title">WE Prozess-Cockpit <small id="sub"></small></div>
         <div class="ctrl">
+          <button id="btnFilter" title="Zeitraum &amp; Segment manuell filtern">⏱</button>
           <button id="btnTheme" title="Dark-/Light-Mode umschalten">◐</button>
           <button id="btnCfg" title="Kalibrierung">⚙</button>
+        </div>
+      </div>
+      <div class="cfg filterpanel" id="filterpanel" hidden>
+        <h4>Zeitraum &amp; Segment</h4>
+        <div class="hint">Überschreibt die Auswahl aus dem Strategie-Widget mit einem eigenen Filter auf die Ankunftszeit.</div>
+        <label>Von</label>
+        <input type="date" id="fltVon">
+        <label>Bis</label>
+        <input type="date" id="fltBis">
+        <label>Segment</label>
+        <select id="fltSeg">
+          <option value="">Alle Segmente</option>
+          <option value="Container">Container</option>
+          <option value="Landverkehr">Landverkehr</option>
+          <option value="BSL">BSL</option>
+          <option value="Sonstige">Sonstige</option>
+        </select>
+        <div class="filterpanel-actions">
+          <button id="fltApply" class="filterpanel-apply">Anwenden</button>
+          <button id="fltReset">Zurücksetzen</button>
         </div>
       </div>
       <div class="cfg" id="cfg" hidden>
@@ -1288,15 +1324,34 @@
         const el = e.target.closest("[data-drill]");
         if (el) this.openDetail(el.dataset.drill);
       });
-      /* ---- In-Widget-Steuerung: Theme + Kalibrierung ---- */
+      /* ---- In-Widget-Steuerung: Theme + Kalibrierung + Filter ---- */
       const $ = (id) => this._shadow.getElementById(id);
       $("btnTheme").addEventListener("click", () =>
         this.setTheme(this._props.theme === "dark" ? "light" : "dark"));
+      // Nur eines der beiden Panels (Kalibrierung / Filter) gleichzeitig offen
+      const closePanels = () => {
+        $("cfg").hidden = true; $("btnCfg").classList.remove("on");
+        $("filterpanel").hidden = true; $("btnFilter").classList.remove("on");
+      };
       $("btnCfg").addEventListener("click", () => {
-        const p = $("cfg");
-        p.hidden = !p.hidden;
-        $("btnCfg").classList.toggle("on", !p.hidden);
-        if (!p.hidden) this._syncCfg();
+        const wasOpen = !$("cfg").hidden;
+        closePanels();
+        if (!wasOpen) { $("cfg").hidden = false; $("btnCfg").classList.add("on"); this._syncCfg(); }
+      });
+      $("btnFilter").addEventListener("click", () => {
+        const wasOpen = !$("filterpanel").hidden;
+        closePanels();
+        if (!wasOpen) { $("filterpanel").hidden = false; $("btnFilter").classList.add("on"); this._syncFilterPanel(); }
+      });
+      $("fltApply").addEventListener("click", () => {
+        const von = $("fltVon").value, bis = $("fltBis").value, seg = $("fltSeg").value;
+        if (!von && !bis && !seg) return;
+        this.setManualFilter(von, bis, seg);
+      });
+      $("fltReset").addEventListener("click", () => {
+        $("fltVon").value = ""; $("fltBis").value = ""; $("fltSeg").value = "";
+        this.clearPeriodFilter();
+        try { this.dispatchEvent(new CustomEvent("onContextClear", { detail: {} })); } catch (e) {}
       });
       // Live-Kalibrierung: Änderungen wirken sofort auf das Modell
       $("cfgMad").addEventListener("input", () => {
@@ -1312,6 +1367,18 @@
       $("cfgTeamE").addEventListener("change", () => { this._props.teamEvenFrueh = $("cfgTeamE").value || "Team A"; this._rebuild(); });
       $("cfgTeamO").addEventListener("change", () => { this._props.teamOddFrueh = $("cfgTeamO").value || "Team B"; this._rebuild(); });
       this._syncCfg();
+    }
+
+    /* Filterfelder mit dem aktuellen Kontext vorbelegen (falls schon ein
+       manueller Filter oder eine Strategie-Periode aktiv ist). */
+    _syncFilterPanel() {
+      const $ = (id) => this._shadow.getElementById(id);
+      const ctx = this._periodContext;
+      if (ctx && ctx.manual) {
+        $("fltVon").value = ctx.von || "";
+        $("fltBis").value = ctx.bis || "";
+        $("fltSeg").value = (ctx.segment && ctx.segment !== "Gesamt") ? ctx.segment : "";
+      }
     }
 
     /* ---- SAC-Lifecycle ---- */
@@ -1363,7 +1430,15 @@
     }
 
     /* ---- Public API (aufrufbar via SAC-Script) ---- */
-    refreshData() { if (this._dataBinding) this.myDataSource = this._dataBinding; }
+    /* refreshData() zeigt bewusst sofort wieder die Ladeanimation (statt
+       stumm auf die alten Daten zu warten), damit ein Reload genauso
+       Feedback gibt wie der allererste Ladevorgang. */
+    refreshData() {
+      if (!this._dataBinding) return;
+      this._rows = null; this._model = null;
+      this._render();
+      this.myDataSource = this._dataBinding;
+    }
     setTheme(theme) {
       if (theme === "dark" || theme === "light") { this._props.theme = theme; this._applyTheme(); }
     }
@@ -1407,12 +1482,18 @@
     setPeriodFilter(periode, segment, vonISO, bisISO, vorjahr) {
       const KW_DIM = "dimension_kw_ankunft";   // technischen Namen ggf. anpassen
       const LADE_DIM = "dimension_ladestelle"; // technischen Namen ggf. anpassen
+      const TS_DIM = "dimension_ts_ankunft";   // technischen Namen ggf. anpassen
       const ds = this._getDataSource();
       if (!ds) {
         console.warn("[WE-Cockpit] setPeriodFilter: keine DataSource — nur Kontext gesetzt, kein Requery.");
         this.setPeriodContext(periode, segment, vorjahr);
         return false;
       }
+
+      // Einen evtl. aktiven manuellen Datumsbereich-Filter entfernen — die
+      // Strategie-Auswahl hat wieder Vorrang, bis der Nutzer erneut manuell
+      // filtert.
+      try { ds.removeDimensionFilter(TS_DIM); } catch (e) {}
 
       // Alten Filter auf der Kalenderwochen-Dimension entfernen (egal ob
       // vorher ein Default-Zeitraum oder eine andere Periode aktiv war).
@@ -1438,6 +1519,59 @@
       return true;
     }
 
+    /* "2026-01-13" -> "20260113" (BW-Datumsformat, ohne Trennzeichen) */
+    _isoToBW(iso) {
+      if (!iso || iso.length < 10) return null;
+      return iso.substring(0, 4) + iso.substring(5, 7) + iso.substring(8, 10);
+    }
+
+    /* Manueller Filter direkt im Cockpit: überschreibt die aus dem
+       Strategie-Widget übernommene Periode mit einem frei gewählten
+       Datumsbereich (auf Tagesbasis statt Kalenderwoche) und/oder Segment.
+       von/bis sind ISO-Daten "YYYY-MM-DD" aus den <input type=date>-Feldern,
+       leer erlaubt (dann bleibt der Zeitfilter unverändert). segment ist
+       "" (alle) oder einer von Container/Landverkehr/BSL/Sonstige. */
+    setManualFilter(vonISO, bisISO, segment) {
+      const KW_DIM = "dimension_kw_ankunft";
+      const LADE_DIM = "dimension_ladestelle";
+      const TS_DIM = "dimension_ts_ankunft";
+      const ds = this._getDataSource();
+      if (!ds) {
+        console.warn("[WE-Cockpit] setManualFilter: keine DataSource — nur Kontext gesetzt, kein Requery.");
+      } else {
+        // Ein Datumsbereich ersetzt die Kalenderwochen-Filterung der
+        // Strategie-Kopplung vollständig (präziser, tagesgenau statt KW).
+        try { ds.removeDimensionFilter(KW_DIM); } catch (e) {}
+        const vonBW = this._isoToBW(vonISO), bisBW = this._isoToBW(bisISO);
+        if (vonBW || bisBW) {
+          try { ds.removeDimensionFilter(TS_DIM); } catch (e) {}
+          try { ds.setDimensionFilterRange(TS_DIM, vonBW || bisBW, bisBW || vonBW); }
+          catch (e) { console.warn("[WE-Cockpit] Datumsfilter fehlgeschlagen:", e && e.message); }
+        }
+        try { ds.removeDimensionFilter(LADE_DIM); } catch (e) {}
+        if (segment) {
+          const werte = SEGMENT_TO_LADESTELLE[segment] || [segment];
+          try { ds.setDimensionFilter(LADE_DIM, werte); }
+          catch (e) { console.warn("[WE-Cockpit] Segment-Filter fehlgeschlagen:", e && e.message); }
+        }
+      }
+      // Banner als "manueller Filter" kennzeichnen (eigene Optik, kein
+      // Bezug mehr auf die Strategie-Periode).
+      const fmtD = (iso) => { if (!iso) return ""; const d = new Date(iso); return isNaN(d) ? iso :
+        d.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "2-digit" }); };
+      this._periodContext = {
+        periode: "", segment: segment || "", vorjahr: "",
+        manual: true, von: vonISO || "", bis: bisISO || "",
+        label: [vonISO || bisISO ? `${fmtD(vonISO) || "…"} – ${fmtD(bisISO) || "…"}` : "", segment].filter(Boolean).join(" · "),
+      };
+      this._renderContextBanner();
+      if (this._model && this._mode === "puls") this._render();
+      // Filter-Panel wieder einklappen, sobald angewendet.
+      const p = this._shadow.getElementById("filterpanel");
+      if (p) { p.hidden = true; this._shadow.getElementById("btnFilter").classList.remove("on"); }
+      return !!ds;
+    }
+
     /* Gegenstück beim Schließen der Detailansicht: Periode/Segment-Filter
        der eigenen Datenquelle entfernen und den Kontext-Banner zurücksetzen
        (nutzt die bestehende clearPeriodContext() für den UI-Teil). Optional
@@ -1445,10 +1579,12 @@
     clearPeriodFilter() {
       const KW_DIM = "dimension_kw_ankunft";
       const LADE_DIM = "dimension_ladestelle";
+      const TS_DIM = "dimension_ts_ankunft";
       const ds = this._getDataSource();
       if (ds) {
         try { ds.removeDimensionFilter(KW_DIM); } catch (e) {}
         try { ds.removeDimensionFilter(LADE_DIM); } catch (e) {}
+        try { ds.removeDimensionFilter(TS_DIM); } catch (e) {}
         // Beispiel Default-Zeitraum (an euer Modell anpassen):
         // try { ds.setDimensionFilter(KW_DIM, ["05.2026"]); } catch (e) {}
       }
@@ -1503,13 +1639,21 @@
         if (nav && nav.parentNode) nav.parentNode.insertBefore(bar, nav.nextSibling);
         else this._shadow.querySelector(".wrap, .root, body")?.prepend(bar);
       }
-      const seg = ctx.segment && ctx.segment !== "Gesamt" ? ` · ${esc(ctx.segment)}` : "";
-      bar.innerHTML = `<span class="ctx-dot"></span>
-        <span>Zeitraum aus Strategie: <b>${esc(ctx.periode)}</b>${seg}</span>
-        <button id="ctxclear" title="Filter zurücksetzen">Zurücksetzen ✕</button>`;
+      bar.classList.toggle("ctxbar-manual", !!ctx.manual);
+      if (ctx.manual) {
+        const label = ctx.label || "Eigener Filter";
+        bar.innerHTML = `<span class="ctx-dot ctx-dot-manual"></span>
+          <span>Manueller Filter: <b>${esc(label)}</b></span>
+          <button id="ctxclear" title="Filter zurücksetzen">Zurücksetzen ✕</button>`;
+      } else {
+        const seg = ctx.segment && ctx.segment !== "Gesamt" ? ` · ${esc(ctx.segment)}` : "";
+        bar.innerHTML = `<span class="ctx-dot"></span>
+          <span>Zeitraum aus Strategie: <b>${esc(ctx.periode)}</b>${seg}</span>
+          <button id="ctxclear" title="Filter zurücksetzen">Zurücksetzen ✕</button>`;
+      }
       const btn = this._shadow.getElementById("ctxclear");
       if (btn) btn.onclick = () => {
-        this.clearPeriodContext();
+        this.clearPeriodFilter();
         // Story-Skript kann zusätzlich den Datenquellen-Filter zurücksetzen;
         // dafür feuern wir ein Event, auf das die Story hören kann.
         try { this.dispatchEvent(new CustomEvent("onContextClear", { detail: {} })); } catch (e) {}
