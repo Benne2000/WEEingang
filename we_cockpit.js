@@ -1,5 +1,5 @@
 /* =========================================================================
- * WE-Prozess-Cockpit – SAC Custom Widget (v0.16.0) · Entwickler: Benne
+ * WE-Prozess-Cockpit – SAC Custom Widget (v0.17.0) · Entwickler: Benne
  * Segment-/Schluesselabgleich mit dem Wareneingang-Tracker.
  * ========================================================================= */
 /* =========================================================================
@@ -641,15 +641,18 @@
      Markenrot als Akzent, Consolas-Mono für Labels, dunkles Standard-Theme. */
   const THEME_VARS = `
     :host{
-      /* Dark Theme (Standard) */
-      --bg:#0f1117; --panel:#161a24; --card:#1e2335; --card2:#252b3d;
-      --ink:#e8eaf0; --ink2:#8b90a0; --muted:#555b6e;
-      --border:rgba(255,255,255,.07); --border2:rgba(255,255,255,.13);
-      --grid:rgba(255,255,255,.07);
+      /* Dark Theme — exakt an die Referenz (main__3_.js) angeglichen:
+         hellere Cards/Hintergründe, kontrastreicherer Sekundär-/Tertiärtext,
+         sichtbarere Ränder, identische Status-Farben. */
+      --bg:#10131b; --panel:#191e2b; --card:#232a3e; --card2:#2e3650;
+      --ink:#f2f4f8; --ink2:#b4bacc; --muted:#7e8598;
+      --border:rgba(255,255,255,.11); --border2:rgba(255,255,255,.18);
+      --grid:rgba(255,255,255,.11);
       --accent:#e74c3c; --accent-strong:#c0392b;
       --accent-dim:rgba(192,57,43,.14); --accent-border:rgba(192,57,43,.35);
-      --good:#58d68d; --good-dim:rgba(39,174,96,.14);
-      --bad:#e74c3c; --warn:#f39c12; --warn-dim:rgba(243,156,18,.14);
+      --good:#2ecc71; --good-dim:rgba(46,204,113,.18);
+      --bad:#e74c3c; --warn:#f5b041; --warn-dim:rgba(245,176,65,.18);
+      --blue:#3d9ad6; --blue-dim:rgba(61,154,214,.18);
       --band:rgba(192,57,43,.18);
       --shadow-sm:0 2px 8px rgba(0,0,0,.35); --shadow-md:0 4px 16px rgba(0,0,0,.45);
       --shadow-lg:0 8px 40px rgba(0,0,0,.55);
