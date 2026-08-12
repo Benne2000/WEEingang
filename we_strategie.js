@@ -1,5 +1,5 @@
 /* =========================================================================
- * WE Strategie-Cockpit – SAC Custom Widget (v0.14.0) · Entwickler: Benne
+ * WE Strategie-Cockpit – SAC Custom Widget (v0.15.0) · Entwickler: Benne
  * Strategische Langzeitsicht auf den Wareneingangsprozess.
  * Erwartet voraggregierte Perioden-Daten (je KW/Monat × Segment), wie sie
  * BW über SUM/MIN/MAX/COUNT liefert. Kein Median (BW-Einschränkung) — das
@@ -195,22 +195,30 @@
 
   const THEME = `
     :host{
-      --bg:#0f1117; --panel:#161a24; --card:#1e2335; --card2:#252b3d;
-      --ink:#e8eaf0; --ink2:#8b90a0; --muted:#555b6e;
-      --border:rgba(255,255,255,.07); --border2:rgba(255,255,255,.13);
+      /* Design-Tokens exakt an die Referenz (main__3_.js) angeglichen:
+         etwas hellere Cards + Hintergründe, kontrastreicherer Text,
+         sichtbarere Ränder, identische Status-, Schatten- und Radien-Skala. */
+      --bg:#10131b; --panel:#191e2b; --card:#232a3e; --card2:#2e3650;
+      --ink:#f2f4f8; --ink2:#b4bacc; --muted:#7e8598;
+      --border:rgba(255,255,255,.11); --border2:rgba(255,255,255,.18);
       --accent:#e74c3c; --accent-strong:#c0392b;
-      --good:#58d68d; --bad:#e74c3c; --warn:#f39c12;
+      --accent-dim:rgba(192,57,43,.14); --accent-border:rgba(192,57,43,.35);
+      --good:#2ecc71; --good-dim:rgba(46,204,113,.18);
+      --bad:#e74c3c; --warn:#f5b041; --warn-dim:rgba(245,176,65,.18);
+      --blue:#3d9ad6; --blue-dim:rgba(61,154,214,.18);
       --font:'Segoe UI',system-ui,-apple-system,sans-serif;
       --font-mono:'Consolas','Cascadia Code','Courier New',monospace;
       --r-sm:4px; --r-md:8px; --r-lg:12px;
+      --shadow-sm:0 2px 8px rgba(0,0,0,.35); --shadow-md:0 4px 16px rgba(0,0,0,.45); --shadow-lg:0 8px 40px rgba(0,0,0,.55);
       --ease:cubic-bezier(.16,1,.3,1);
     }
     :host([data-theme="light"]){
-      --bg:#f5f6f8; --panel:#fff; --card:#fff; --card2:#f0f2f5;
+      --bg:#f5f6f8; --panel:#ffffff; --card:#ffffff; --card2:#f0f2f5;
       --ink:#1a1d23; --ink2:#4a5060; --muted:#8b90a0;
       --border:rgba(0,0,0,.08); --border2:rgba(0,0,0,.14);
       --accent:#c0392b; --accent-strong:#96281b;
       --good:#27ae60; --bad:#c0392b; --warn:#d68910;
+      --shadow-sm:0 2px 8px rgba(0,0,0,.07); --shadow-md:0 4px 16px rgba(0,0,0,.10); --shadow-lg:0 8px 40px rgba(0,0,0,.14);
     }
     *,*::before,*::after{ box-sizing:border-box; }
     :host{ display:block; width:100%; height:100%; font-family:var(--font);
