@@ -1,5 +1,5 @@
 /* =========================================================================
- * WE Strategie-Cockpit – SAC Custom Widget (v0.13.0) · Entwickler: Benne
+ * WE Strategie-Cockpit – SAC Custom Widget (v0.14.0) · Entwickler: Benne
  * Strategische Langzeitsicht auf den Wareneingangsprozess.
  * Erwartet voraggregierte Perioden-Daten (je KW/Monat × Segment), wie sie
  * BW über SUM/MIN/MAX/COUNT liefert. Kein Median (BW-Einschränkung) — das
@@ -21,6 +21,37 @@
     { key: "anzahl_pos",    label: "Positionen",       unit: "",   sum: true,                            lowerBetter: false },
     { key: "anzahl_anl",    label: "Anlieferungen",    unit: "",   sum: true,                            lowerBetter: false },
   ];
+
+  // Ladeanimation (1:1 aus dem Prozess-Cockpit) — als Konstante gehalten,
+  // damit sie nach einem "keine Daten"-Overwrite von #state jederzeit
+  // wiederhergestellt werden kann (siehe _render()).
+  const LOADER_HTML = `
+    <div class="we-loader">
+      <div class="we-loader-scene">
+        <div class="we-road"><div class="we-road-line"></div></div>
+        <div class="we-truck">
+          <div class="we-truck-body">
+            <div class="we-truck-cabin"></div>
+            <div class="we-truck-trailer"></div>
+          </div>
+          <div class="we-truck-wheel we-wheel-1"></div>
+          <div class="we-truck-wheel we-wheel-2"></div>
+          <div class="we-truck-wheel we-wheel-3"></div>
+        </div>
+        <div class="we-gate">
+          <div class="we-gate-roof"></div>
+          <div class="we-gate-door"></div>
+        </div>
+      </div>
+      <div class="we-steps">
+        <div class="we-step" data-i="0"><span class="we-step-dot"></span>Ankunft</div>
+        <div class="we-step" data-i="1"><span class="we-step-dot"></span>Andocken</div>
+        <div class="we-step" data-i="2"><span class="we-step-dot"></span>Entladen</div>
+        <div class="we-step" data-i="3"><span class="we-step-dot"></span>Buchen</div>
+        <div class="we-step" data-i="4"><span class="we-step-dot"></span>Einlagern</div>
+      </div>
+      <div class="we-loader-text">Wareneingang wird geladen<span class="we-dots"><span>.</span><span>.</span><span>.</span></span></div>
+    </div>`;
 
   const SEG_COLORS = {
     Container: "#e67e22", BSL: "#8e44ad", Landverkehr: "#27ae60",
@@ -329,6 +360,13 @@
     .compact .tile .spark{ height:34px; }
     .compact .tile .m-val b{ font-size:22px; }
     .compact header{ padding-bottom:2px; }
+    /* Schmale Sidebar (z. B. 340px in SAC): Außenpolsterung verschlanken,
+       damit die Kacheln den knappen Platz voll ausnutzen statt Raum an
+       großzügiges Padding zu verlieren, das für die Vollbild-Ansicht gedacht ist. */
+    .compact main{ padding:10px; }
+    .compact .sel-head{ padding:11px 12px; margin-bottom:10px; }
+    .compact .tile .m-lbl{ font-size:8.5px; }
+    .compact .tile .m-sub{ flex-wrap:wrap; row-gap:4px; }
     /* Tooltip */
     .tip{ position:absolute; pointer-events:none; background:var(--card2); border:1px solid var(--border2);
       border-radius:var(--r-sm); padding:6px 9px; font-size:11px; color:var(--ink); z-index:30;
@@ -343,13 +381,61 @@
     .state-icon{ font-size:30px; opacity:.4; }
     .state-txt{ font-family:var(--font-mono); font-size:11px; letter-spacing:.1em;
       text-transform:uppercase; color:var(--muted); }
-    .loader-bar{ width:180px; height:3px; background:var(--border2); border-radius:2px; overflow:hidden; }
-    .loader-bar::after{ content:''; display:block; width:40%; height:100%; background:var(--accent);
-      border-radius:2px; animation:load-slide 1.1s var(--ease) infinite; }
-    @keyframes load-slide{ 0%{transform:translateX(-100%)} 100%{transform:translateX(350%)} }
+    /* ═══ WE-Ladeanimation (1:1 aus dem Prozess-Cockpit übernommen) ═══ */
+    .we-loader{ display:flex; flex-direction:column; align-items:center; gap:26px;}
+    .we-loader-scene{ position:relative; width:280px; height:90px;}
+    .we-road{ position:absolute; bottom:18px; left:0; width:220px; height:3px;
+      background:var(--border2); border-radius:2px; overflow:hidden;}
+    .we-road-line{ position:absolute; top:1px; left:0; width:100%; height:1px;
+      background:repeating-linear-gradient(90deg, var(--muted) 0, var(--muted) 8px,
+        transparent 8px, transparent 16px);
+      animation:we-road-move .6s linear infinite;}
+    @keyframes we-road-move{ to{ transform:translateX(-16px);} }
+    .we-truck{ position:absolute; bottom:20px; left:0;
+      animation:we-truck-drive 3s cubic-bezier(.45,0,.55,1) infinite;}
+    @keyframes we-truck-drive{
+      0%{ left:0;} 45%{ left:150px;} 55%{ left:150px;} 100%{ left:0;} }
+    .we-truck-body{ position:relative; display:flex; align-items:flex-end; gap:2px;}
+    .we-truck-trailer{ width:34px; height:22px; background:var(--accent-strong);
+      border-radius:2px; order:1;}
+    .we-truck-cabin{ width:14px; height:15px; background:var(--accent);
+      border-radius:3px 3px 2px 2px; order:2; position:relative;}
+    .we-truck-cabin::after{ content:''; position:absolute; top:2px; right:2px;
+      width:6px; height:5px; background:var(--bg); border-radius:1px; opacity:.6;}
+    .we-truck-wheel{ position:absolute; bottom:-4px; width:7px; height:7px;
+      background:var(--ink2); border:1.5px solid var(--muted); border-radius:50%;
+      animation:we-spin .4s linear infinite;}
+    @keyframes we-spin{ to{ transform:rotate(360deg);} }
+    .we-wheel-1{ left:3px;} .we-wheel-2{ left:22px;} .we-wheel-3{ left:38px;}
+    .we-gate{ position:absolute; bottom:20px; right:6px; width:44px; height:52px;}
+    .we-gate-roof{ width:0; height:0; border-left:24px solid transparent;
+      border-right:24px solid transparent; border-bottom:14px solid var(--card2); margin:0 -2px;}
+    .we-gate-door{ width:44px; height:38px; background:var(--card);
+      border:2px solid var(--card2); border-top:none; border-radius:0 0 2px 2px;
+      position:relative; overflow:hidden;}
+    .we-gate-door::before{ content:''; position:absolute; top:0; left:0; right:0; height:100%;
+      background:repeating-linear-gradient(0deg, var(--card2) 0, var(--card2) 4px,
+        transparent 4px, transparent 8px);
+      animation:we-door-open 3s ease-in-out infinite;}
+    @keyframes we-door-open{
+      0%,40%{ transform:translateY(0);} 50%,90%{ transform:translateY(-100%);} 100%{ transform:translateY(0);} }
+    .we-steps{ display:flex; gap:14px; flex-wrap:wrap; justify-content:center;}
+    .we-step{ display:flex; align-items:center; gap:5px; font-family:var(--font-mono);
+      font-size:10px; font-weight:600; letter-spacing:.04em; color:var(--muted);
+      opacity:.4; transition:opacity .3s, color .3s;}
+    .we-step-dot{ width:7px; height:7px; border-radius:50%; background:var(--border2);
+      transition:background .3s, box-shadow .3s;}
+    .we-step.we-step-active{ opacity:1; color:var(--ink);}
+    .we-step.we-step-active .we-step-dot{ background:var(--accent-strong);
+      box-shadow:0 0 8px var(--accent-strong);}
+    .we-loader-text{ font-family:var(--font-mono); font-size:12px; color:var(--ink2); letter-spacing:.03em;}
+    .we-dots span{ animation:we-dot-blink 1.4s infinite;}
+    .we-dots span:nth-child(2){ animation-delay:.2s;}
+    .we-dots span:nth-child(3){ animation-delay:.4s;}
+    @keyframes we-dot-blink{ 0%,60%,100%{ opacity:.2;} 30%{ opacity:1;} }
     @media (prefers-reduced-motion:reduce){
       .tile .spark path.line, .detail .big path.line{ stroke-dasharray:none !important; stroke-dashoffset:0 !important; animation:none !important; }
-      .brand-dot, .loader-bar::after{ animation:none; }
+      .brand-dot, .we-truck, .we-road-line, .we-truck-wheel, .we-gate-door::before{ animation:none; }
     }
   `;
 
@@ -378,7 +464,7 @@
       </div>
       <main id="main">
         <div class="sel-head" id="selHead" hidden></div>
-        <div class="state" id="state"><div class="loader-bar"></div><div class="state-txt">Daten werden geladen…</div></div>
+        <div class="state" id="state">${LOADER_HTML}</div>
         <div id="dash"></div>
       </main>
       <div class="tip" id="tip"></div>
@@ -408,6 +494,7 @@
       this._playing = false;
       this._applyTheme();
       this._wire();
+      this._startLoaderSteps(); // Ladeanimation läuft ab dem ersten Moment
     }
 
     // SAC-Lifecycle
@@ -419,7 +506,22 @@
       if (changed && changed.myDataSource) { this.myDataSource = changed.myDataSource; }
     }
     onCustomWidgetResize() { this._render(); }
-    disconnectedCallback() { this._stopPlay(); }
+    disconnectedCallback() { this._stopPlay(); this._stopLoaderSteps(); }
+
+    /** Lässt die Prozess-Schritte der Ladeanimation nacheinander aufleuchten
+     *  (1:1 aus dem Prozess-Cockpit übernommen). */
+    _startLoaderSteps() {
+      if (this._loaderTimer) return;
+      const steps = this._sh.querySelectorAll(".we-step");
+      if (!steps.length) return;
+      let i = 0;
+      const tick = () => { steps.forEach((s, idx) => s.classList.toggle("we-step-active", idx === i)); i = (i + 1) % steps.length; };
+      tick();
+      this._loaderTimer = setInterval(tick, 600);
+    }
+    _stopLoaderSteps() {
+      if (this._loaderTimer) { clearInterval(this._loaderTimer); this._loaderTimer = null; }
+    }
 
     /* SAC-DataSource-Setter. Erwartet die BENANNTEN Feeds aus dem Manifest —
        je Kennzahl ein eigener Feed (dimension_periode, value_dur_dwell, …).
@@ -436,7 +538,15 @@
         this._rows = this._rows || [];
       }
     }
-    refreshData() { if (this._dataBinding) this.myDataSource = this._dataBinding; }
+    /* refreshData() zeigt bewusst sofort wieder die Ladeanimation (statt
+       stumm auf die alten Daten zu warten), damit ein Reload genauso
+       Feedback gibt wie der allererste Ladevorgang. */
+    refreshData() {
+      if (!this._dataBinding) return;
+      this._rows = null;
+      this._render();
+      this.myDataSource = this._dataBinding;
+    }
 
     _ingestSac(db) {
       const data = db.data || [];
@@ -656,13 +766,18 @@
       const S = this._sh;
       const state = S.getElementById("state");
       const dash = S.getElementById("dash");
-      if (!this._rows) { state.hidden = false; dash.innerHTML = ""; return; }
+      if (!this._rows) {
+        state.hidden = false; dash.innerHTML = "";
+        if (!state.querySelector(".we-loader")) state.innerHTML = LOADER_HTML;
+        this._startLoaderSteps(); return;
+      }
       if (!this._rows.length) {
         state.hidden = false;
         state.innerHTML = `<div class="state-icon">📊</div><div class="state-txt">Keine aggregierten Daten — Data Binding zuweisen</div>`;
-        dash.innerHTML = ""; return;
+        dash.innerHTML = ""; this._stopLoaderSteps(); return;
       }
       state.hidden = true;
+      this._stopLoaderSteps();
       this._prepare();
 
       // Untertitel
@@ -907,10 +1022,16 @@
       const legend = this._sh.getElementById("detailLegend");
       const title = this._sh.getElementById("detailTitle");
       legend.innerHTML = "";
+      // Tatsächliche Breite des Chart-Containers messen, statt eine feste
+      // viewBox-Breite anzunehmen. Ohne das skaliert der Browser die SVG
+      // (viewBox vs. feste CSS-Höhe) nach der HÖHE — die Breite bleibt dann
+      // bei genau der viewBox-Breite hängen und das Diagramm wirkt schmal
+      // und zentriert mit leeren Rändern, egal wie breit der Container ist.
+      const CW = Math.max(520, host.clientWidth || 860);
 
       if (this._detailView === "vergleich") {
         title.textContent = `${m.label} · Segmentvergleich`;
-        host.innerHTML = this._compareSvg(m);
+        host.innerHTML = this._compareSvg(m, CW);
         // alle Segmentlinien einzeichnen
         host.querySelectorAll("path.line").forEach((p, i) =>
           this._animateDraw(p, null, i * 90));
@@ -919,7 +1040,7 @@
         this._wireCompareHover(host, m);
       } else if (this._detailView === "engpass") {
         title.textContent = `Engpass-Wanderung · Zusammensetzung der Standzeit · ${this._seg}`;
-        host.innerHTML = this._engpassSvg();
+        host.innerHTML = this._engpassSvg(CW);
         // Flächen wachsen von unten
         host.querySelectorAll("path.area").forEach((p, i) =>
           this._animateArea(p, i * 70));
@@ -933,7 +1054,7 @@
           host.innerHTML = `<div class="empty-hint">Für einen Jahresvergleich werden mindestens zwei Jahre Historie benötigt.<br>Aktuell liegt nur ${years.length === 1 ? "ein Jahr" : "kein vollständiges Jahr"} vor.</div>`;
           legend.innerHTML = "";
         } else {
-          host.innerHTML = this._jahreSvg(years, m);
+          host.innerHTML = this._jahreSvg(years, m, CW);
           host.querySelectorAll("path.line").forEach((p, i) => this._animateDraw(p, null, i * 120));
           legend.innerHTML = years.map((y, i) =>
             `<span class="lg"><i style="background:${YEAR_COLORS[i % YEAR_COLORS.length]}"></i>${y.year}</span>`).join("");
@@ -941,7 +1062,7 @@
       } else {
         title.textContent = `${m.label} · Verlauf · ${this._seg}`;
         const pts = this._serie(m.key);
-        host.innerHTML = this._bigSvg(pts, m);
+        host.innerHTML = this._bigSvg(pts, m, CW);
         this._animateDraw(host.querySelector("path.line"), null);
         this._wireBigHover(host, pts, m);
       }
@@ -965,8 +1086,9 @@
       return Object.keys(byYear).sort().map(year => ({ year, pts: byYear[year], slots }));
     }
 
-    _jahreSvg(years, m) {
-      const W = 760, H = 260, padL = 44, padR = 16, padT = 14, padB = 28;
+    _jahreSvg(years, m, W) {
+      W = W || 760;
+      const H = 260, padL = 44, padR = 16, padT = 14, padB = 28;
       const isMonth = this._props.aggregation === "month";
       const slots = isMonth ? 12 : 53;
       const all = years.flatMap(y => y.pts).filter(v => v != null);
@@ -1005,7 +1127,7 @@
         if (d) lines += `<path class="line" stroke="${YEAR_COLORS[yi % YEAR_COLORS.length]}"
           data-year="${y.year}" d="${d}" opacity="${yi === years.length-1 ? 1 : 0.55}"/>`;
       });
-      return `<svg class="big jahre" viewBox="0 0 ${W} ${H}">${grid}${xlab}${target}${lines}</svg>`;
+      return `<svg class="big jahre" viewBox="0 0 ${W} ${H}" data-w="${W}">${grid}${xlab}${target}${lines}</svg>`;
     }
 
     // Serie einer Kennzahl für ein BESTIMMTES Segment (für den Vergleich)
@@ -1018,8 +1140,9 @@
     }
 
     // Segmentvergleich: alle Segmente als Linien, ohne Band (sonst zu unruhig)
-    _compareSvg(m) {
-      const W = 760, H = 260, padL = 44, padR = 16, padT = 14, padB = 28;
+    _compareSvg(m, W) {
+      W = W || 760;
+      const H = 260, padL = 44, padR = 16, padT = 14, padB = 28;
       const n = this._perioden.length;
       const series = this._segList.map(s => ({ seg: s, pts: this._serieForSeg(m.key, s) }));
       const all = series.flatMap(s => s.pts.map(p => p.v)).filter(v => v != null);
@@ -1046,7 +1169,7 @@
         s.pts.forEach((p, i) => { if (p.v == null) return; d += (started?" L":"M")+X(i)+","+Y(p.v); started=true; });
         lines += `<path class="line" stroke="${SEG_COLORS[s.seg]||"#888"}" data-seg="${esc(s.seg)}" d="${d}"/>`;
       }
-      return `<svg class="big compare" viewBox="0 0 ${W} ${H}" data-lo="${lo}" data-hi="${hi}" data-n="${n}"
+      return `<svg class="big compare" viewBox="0 0 ${W} ${H}" data-w="${W}" data-lo="${lo}" data-hi="${hi}" data-n="${n}"
                 data-padl="${padL}" data-padr="${padR}">
         ${grid}${xlab}${lines}
         <line class="scrub-line" x1="0" y1="${padT}" x2="0" y2="${H-padB}" stroke="var(--ink2)" stroke-width="1" opacity="0"/>
@@ -1054,8 +1177,9 @@
     }
 
     // Engpass-Wanderung: gestapelte Fläche der Phasen-Mittelwerte über Zeit.
-    _engpassSvg() {
-      const W = 760, H = 260, padL = 44, padR = 16, padT = 14, padB = 28;
+    _engpassSvg(W) {
+      W = W || 760;
+      const H = 260, padL = 44, padR = 16, padT = 14, padB = 28;
       const n = this._perioden.length;
       const get = (per) => this._seg === "Gesamt" ? this._idx.__gesamt[per] : this._idx[per + "|" + this._seg];
       const stacks = this._perioden.map(per => {
@@ -1090,7 +1214,7 @@
         const d = `M${top.join(" L")} L${bot.reverse().join(" L")} Z`;
         areas += `<path class="area" fill="${PHASE_COLOR[ph]}" data-ph="${ph}" d="${d}"/>`;
       });
-      return `<svg class="big engpass" viewBox="0 0 ${W} ${H}" data-n="${n}" data-total="${hiTotal}"
+      return `<svg class="big engpass" viewBox="0 0 ${W} ${H}" data-w="${W}" data-n="${n}" data-total="${hiTotal}"
                 data-padl="${padL}" data-padr="${padR}">
         ${grid}${xlab}${areas}
         <line class="scrub-line" x1="0" y1="${padT}" x2="0" y2="${H-padB}" stroke="var(--ink)" stroke-width="1" opacity="0"/>
@@ -1229,8 +1353,9 @@
       return out.slice(0, 4);
     }
 
-    _bigSvg(pts, m) {
-      const W = 760, H = 260, padL = 44, padR = 16, padT = 14, padB = 28;
+    _bigSvg(pts, m, W) {
+      W = W || 760;
+      const H = 260, padL = 44, padR = 16, padT = 14, padB = 28;
       const n = pts.length;
       const vals = pts.filter(p=>p&&p.v!=null).map(p=>p.v);
       let lo = Math.min(...vals), dataHi = Math.max(...vals);
@@ -1333,7 +1458,7 @@
              font-size="9" fill="var(--warn)">▲ Achse gekappt · Extremwerte im Tooltip</text>`
         : "";
 
-      return `<svg class="big" viewBox="0 0 ${W} ${H}" data-lo="${lo}" data-hi="${hi}" data-n="${n}"
+      return `<svg class="big" viewBox="0 0 ${W} ${H}" data-w="${W}" data-lo="${lo}" data-hi="${hi}" data-n="${n}"
                 data-padl="${padL}" data-padr="${padR}" data-padt="${padT}" data-padb="${padB}">
         ${grid}${xlab}${band}${targetLine}
         <path class="line" stroke="${col}" d="${d}"/>
@@ -1371,7 +1496,7 @@
       // Ganzflächiges Klick-/Hover-Feld über dem Plotbereich: nächstgelegene
       // Periode öffnen. Macht die gesamte Fläche zum Ziel statt nur die Punkte.
       const n = +svg.dataset.n, padL = +svg.dataset.padl, padR = +svg.dataset.padr;
-      const W = 760, plotW = W - padL - padR;
+      const W = +svg.dataset.w || 760, plotW = W - padL - padR;
       const nearestIdx = (clientX) => {
         const r = svg.getBoundingClientRect();
         const svgX = (clientX - r.left) / r.width * W; // in viewBox-Koordinaten
@@ -1554,7 +1679,7 @@
       const svg = this._sh.querySelector("svg.big");
       if (svg) {
         const n = +svg.dataset.n, padL = +svg.dataset.padl, padR = +svg.dataset.padr;
-        const W = 760;
+        const W = +svg.dataset.w || 760;
         const X = padL + (i/Math.max(1,n-1))*(W-padL-padR);
         const line = svg.querySelector(".scrub-line");
         if (line) { line.setAttribute("x1", X); line.setAttribute("x2", X); line.setAttribute("opacity", .6); }
