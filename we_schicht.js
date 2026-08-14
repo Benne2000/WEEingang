@@ -977,7 +977,10 @@
     };
   }
 
-  function aggregiere(tes) {
+  // Aggregiert einen Satz TEs zu allen fünf Kennzahlen. Das identische Gerüst
+  // wird sowohl für die Gesamtsumme als auch je Ladestelle verwendet, damit
+  // die Hover-Aufschlüsselung exakt dieselbe Rechnung nutzt wie die Karte.
+  function aggregiereBasis(tes) {
     const dlz = tes.map(t => t.durchlaufzeitMin).filter(v => v != null);
     const dlzSum = dlz.reduce((s, v) => s + v, 0);
 
@@ -1010,6 +1013,26 @@
         nb:        tes.length - mengeBewertbar,
       },
     };
+  }
+
+  function aggregiere(tes) {
+    const gesamt = aggregiereBasis(tes);
+
+    // ── Aufschlüsselung je Ladestelle ──
+    // Feste Reihenfolge BSL · Container · Landverkehr. Jede TE fällt über
+    // ladestelleKurz() in genau eine Gruppe (unbekannt/leer → BSL, wie im
+    // restlichen Widget). Nur tatsächlich vertretene Gruppen werden geliefert.
+    const gruppen = new Map();
+    for (const te of tes) {
+      const ls = ladestelleKurz(te.ladestelle);
+      if (!gruppen.has(ls)) gruppen.set(ls, []);
+      gruppen.get(ls).push(te);
+    }
+    gesamt.ladestellen = LADESTELLE_KATEGORIEN
+      .filter(ls => gruppen.has(ls))
+      .map(ls => ({ ls, ...aggregiereBasis(gruppen.get(ls)) }));
+
+    return gesamt;
   }
 
   // ── Template ─────────────────────────────────────────────────────────────
@@ -1749,6 +1772,7 @@
       }
 
       .kpi-card {
+        position:      relative;
         background:    var(--c-bg2);
         border:        1px solid var(--c-border);
         border-radius: var(--r-lg);
@@ -1759,10 +1783,122 @@
         min-width:     0;
       }
 
+      .kpi-card.hat-breakdown { cursor: help; }
+      .kpi-card.hat-breakdown:hover,
+      .kpi-card.hat-breakdown:focus-visible {
+        border-color: var(--c-border2);
+        outline:      none;
+      }
+
       .kpi-card-kopf {
         display:     flex;
         align-items: center;
         gap:         6px;
+      }
+
+      /* dezentes Icon rechts, signalisiert die Aufschlüsselung */
+      .kpi-card-info {
+        margin-left: auto;
+        font-size:   11px;
+        line-height: 1;
+        color:       var(--c-text3);
+        opacity:     0.7;
+        flex-shrink: 0;
+      }
+      .kpi-card.hat-breakdown:hover .kpi-card-info,
+      .kpi-card.hat-breakdown:focus-visible .kpi-card-info {
+        color:   var(--c-red-light);
+        opacity: 1;
+      }
+
+      /* ── Hover-Aufschlüsselung nach Ladestelle ── */
+      .kpi-breakdown {
+        position:      absolute;
+        top:           calc(100% + 6px);
+        left:          0;
+        right:         0;
+        z-index:       30;
+        background:    var(--c-bg3);
+        border:        1px solid var(--c-border2);
+        border-radius: var(--r-md);
+        box-shadow:    var(--shadow-lg);
+        padding:       10px 12px;
+        display:       none;
+        flex-direction: column;
+        gap:           7px;
+      }
+      /* Nach unten kein Platz? Dann greift die Modifier-Klasse (per JS gesetzt)
+         und klappt das Popup nach oben auf. */
+      .kpi-card.bd-oben .kpi-breakdown {
+        top:    auto;
+        bottom: calc(100% + 6px);
+      }
+      .kpi-card.hat-breakdown:hover .kpi-breakdown,
+      .kpi-card.hat-breakdown:focus-within .kpi-breakdown {
+        display: flex;
+      }
+
+      .kpi-bd-titel {
+        font-family:    var(--font-mono);
+        font-size:      9px;
+        font-weight:    600;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color:          var(--c-text3);
+      }
+
+      .kpi-bd-row {
+        display:     grid;
+        grid-template-columns: auto 1fr auto auto;
+        align-items: center;
+        gap:         8px;
+      }
+
+      .kpi-bd-badge { flex-shrink: 0; }
+
+      .kpi-bd-bar {
+        height:        5px;
+        border-radius: 3px;
+        background:    var(--c-bg);
+        overflow:      hidden;
+        min-width:     40px;
+      }
+      .kpi-bd-bar-fill {
+        height:     100%;
+        border-radius: 3px;
+        background: var(--c-text3);
+      }
+      .kpi-bd-bar-fill.q-gut      { background: #2ecc71; }
+      .kpi-bd-bar-fill.q-mittel   { background: #f5b041; }
+      .kpi-bd-bar-fill.q-schlecht { background: #e74c3c; }
+
+      .kpi-bd-wert {
+        font-family: var(--font-mono);
+        font-size:   12px;
+        font-weight: 700;
+        color:       var(--c-text);
+        text-align:  right;
+        white-space: nowrap;
+      }
+      .kpi-bd-wert.q-gut      { color: #58d68d; }
+      .kpi-bd-wert.q-mittel   { color: #f0b429; }
+      .kpi-bd-wert.q-schlecht { color: #e74c3c; }
+      .kpi-bd-wert.q-nb       { color: var(--c-text3); }
+
+      .kpi-bd-meta {
+        font-family: var(--font-mono);
+        font-size:   9px;
+        color:       var(--c-text3);
+        white-space: nowrap;
+        min-width:   48px;
+        text-align:  right;
+      }
+
+      .kpi-bd-fuss {
+        font-size:   9px;
+        color:       var(--c-text3);
+        padding-top: 4px;
+        border-top:  1px solid var(--c-border);
       }
 
       .kpi-card-label {
@@ -3195,6 +3331,100 @@
 
       const vglName = `Vorperiode: ${bereichLabel(vp)}`;
       host.innerHTML = KPI_DEFS.map(def => this._kpiCardHTML(def, aktiv, vgl, vglName)).join('');
+
+      // Aufklapp-Richtung der Aufschlüsselung bestimmen: Standard ist nach
+      // unten; ist dort im scrollbaren View zu wenig Platz, nach oben klappen.
+      // Delegierte Handler statt eines Listeners je Karte.
+      const richtungPruefen = (card) => {
+        const pop = card.querySelector('.kpi-breakdown');
+        if (!pop) return;
+        const view = this._$('view-uebersicht');
+        const cardR = card.getBoundingClientRect();
+        const viewR = view.getBoundingClientRect();
+        const noetig = pop.offsetHeight + 12;
+        const platzUnten = viewR.bottom - cardR.bottom;
+        card.classList.toggle('bd-oben', platzUnten < noetig && cardR.top - viewR.top > noetig);
+      };
+      host.onpointerover = (e) => {
+        const card = e.target.closest('.kpi-card.hat-breakdown');
+        if (card && !card.contains(e.relatedTarget)) richtungPruefen(card);
+      };
+      host.onfocusin = (e) => {
+        const card = e.target.closest('.kpi-card.hat-breakdown');
+        if (card) richtungPruefen(card);
+      };
+    }
+
+    // Formatiert den Wert einer Kennzahl aus einem aggregierten Datensatz
+    // (Gesamt oder je Ladestelle) einheitlich — genutzt von Karte UND
+    // Hover-Aufschlüsselung, damit beide dieselbe Darstellung zeigen.
+    //   → { text, klasse, wert }  (wert = numerischer Rohwert für den Balken)
+    _kpiWert(defId, agg) {
+      const a = agg[defId];
+      if (defId === 'durchlaufzeit') {
+        return { text: fmtDauerAbs(a.wert), klasse: '', wert: a.wert };
+      }
+      if (defId === 'abwMenge') {
+        return {
+          text:   a.wert == null ? '–' : fmtNum(a.wert),
+          klasse: a.wert == null ? 'q-nb' : (a.betroffen === 0 ? 'q-gut' : 'q-mittel'),
+          wert:   a.wert,
+        };
+      }
+      // Quoten
+      return { text: fmtProzent(a.wert), klasse: quoteKlasse(a.wert), wert: a.wert };
+    }
+
+    // Baut die Ladestellen-Aufschlüsselung einer Kennzahl als Popup-Inhalt.
+    // Zeigt je Ladestelle den Kennzahlwert, einen kleinen Anteilsbalken und
+    // die Fallzahl. Ohne Aufschlüsselung (keine Gruppen) bleibt es leer.
+    _kpiBreakdownHTML(def, aktiv) {
+      const gruppen = aktiv.ladestellen ?? [];
+      if (!gruppen.length) return '';
+
+      const istQuote = !(def.id === 'durchlaufzeit' || def.id === 'abwMenge');
+
+      const zeilen = gruppen.map(g => {
+        const style = LADESTELLE_STYLE[g.ls] ?? LADESTELLE_STYLE.BSL;
+        const w = this._kpiWert(def.id, g);
+
+        // Zusatzinfo je Kennzahltyp (Fallzahlen, damit die Quote einordbar ist)
+        let meta;
+        if (def.id === 'durchlaufzeit') {
+          meta = `${g.durchlaufzeit.bewertbar}/${g.anzahl} TEs`;
+        } else if (def.id === 'abwMenge') {
+          meta = `${g.abwMenge.betroffen}/${g.abwMenge.bewertbar} TEs`;
+        } else {
+          const q = g[def.id];
+          meta = `${q.ok}/${q.bewertbar} TEs`;
+        }
+
+        // Anteilsbalken: bei Quoten die Erfüllungsquote (0–100 %),
+        // sonst der Anteil der TEs dieser Ladestelle an allen TEs.
+        const balkenPct = istQuote
+          ? (w.wert ?? 0)
+          : (aktiv.anzahl ? (g.anzahl / aktiv.anzahl) * 100 : 0);
+        const balkenKlasse = istQuote ? quoteKlasse(w.wert) : '';
+
+        return `
+          <div class="kpi-bd-row">
+            <span class="ls-badge ${style.cls} kpi-bd-badge">${style.icon} ${esc(g.ls)}</span>
+            <div class="kpi-bd-bar"><div class="kpi-bd-bar-fill ${balkenKlasse}" style="width:${Math.max(0, Math.min(100, balkenPct)).toFixed(1)}%"></div></div>
+            <span class="kpi-bd-wert ${w.klasse}">${w.text}</span>
+            <span class="kpi-bd-meta">${esc(meta)}</span>
+          </div>`;
+      }).join('');
+
+      const hinweis = istQuote
+        ? 'Erfüllungsquote je Ladestelle'
+        : (def.id === 'abwMenge' ? 'Σ Beträge · Balken = TE-Anteil' : 'Ø je Ladestelle · Balken = TE-Anteil');
+
+      return `
+        <div class="kpi-breakdown" role="tooltip">
+          <div class="kpi-bd-titel">Nach Ladestelle</div>
+          ${zeilen}
+          <div class="kpi-bd-fuss">${esc(hinweis)}</div>
+        </div>`;
     }
 
     _kpiCardHTML(def, aktiv, vgl, vglName) {
@@ -3245,10 +3475,16 @@
         trendHTML = `<span class="kpi-trend ${cls}">${pfeil} ${betrag}</span>`;
       }
 
+      // Ladestellen-Aufschlüsselung (Hover / Fokus)
+      const breakdown = this._kpiBreakdownHTML(def, aktiv);
+      const hatBd = breakdown !== '';
+
       return `
-        <div class="kpi-card">
+        <div class="kpi-card${hatBd ? ' hat-breakdown' : ''}" tabindex="${hatBd ? '0' : '-1'}"
+             aria-label="${esc(def.label)}${hatBd ? ' — Aufschlüsselung nach Ladestelle per Hover' : ''}">
           <div class="kpi-card-kopf">
             <span class="kpi-card-label">${esc(def.label)}</span>
+            ${hatBd ? '<span class="kpi-card-info" title="Aufschlüsselung nach Ladestelle">⊞</span>' : ''}
           </div>
           <div class="kpi-card-wert ${klasse}">${wertTxt}</div>
           ${balken}
@@ -3257,6 +3493,7 @@
             ${trendHTML}
             <span title="${esc(vglName)}">Vorperiode: ${vglTxt}</span>
           </div>
+          ${breakdown}
         </div>`;
     }
 
