@@ -53,6 +53,9 @@
     return 'BSL';
   }
 
+  // Die 3 Kategorien in fester Reihenfolge (für Filter)
+  const LADESTELLE_KATEGORIEN = ['BSL', 'Container', 'Landverkehr'];
+
   // Icon + CSS-Klasse je Kategorie
   const LADESTELLE_STYLE = {
     BSL:         { icon: '🚛', cls: 'ls-bsl'  },
@@ -273,6 +276,14 @@
     return { key, text: (text ?? key) };
   };
 
+  // Wie readKeyText, aber schneidet führende Nullen im (numerischen) Key ab.
+  // Für Frachtführer- und Lieferantennummern (z.B. "0000400352" → "400352").
+  const readKeyTextNum = (row, ...keys) => {
+    const kt = readKeyText(row, ...keys);
+    if (kt.key != null) kt.key = ohneNullen(kt.key);
+    return kt;
+  };
+
   // Formatiert { key, text } als "Key – Text" bzw. nur das Vorhandene.
   const keyTextStr = (kt) => {
     if (!kt || (!kt.key && !kt.text)) return null;
@@ -354,11 +365,24 @@
     return s;
   };
 
+  // Lagernummer, die BW manchen Merkmalen (Tor, Einlagerungskennzeichen) als
+  // technisches Präfix voranstellt. In der Story kommt z.B. "2630T043" statt
+  // "T043" oder "2630PUTR" statt "PUTR" an. Diese Nummer schneiden wir ab.
+  const LAGER_NR = '2630';
+  const ohneLagerNr = (v) => {
+    if (v == null) return v;
+    let s = String(v).trim();
+    // Präfix "2630" gefolgt von Trennzeichen ODER direkt am Wortanfang entfernen
+    const re = new RegExp('^' + LAGER_NR + '\\s*[/\\-_]?\\s*');
+    if (re.test(s)) s = s.replace(re, '');
+    return s === '' ? null : s;
+  };
+
   // Normalisiert einen Tor-Wert: '#' oder leer → null (kein Tor zugewiesen).
   const normTor = (raw) => {
     if (isNull(raw)) return null;
-    const s = String(raw).trim();
-    return (s === '#' || s === '') ? null : s;
+    const s = ohneLagerNr(String(raw).trim());
+    return (s == null || s === '#' || s === '') ? null : s;
   };
 
   // Normalisiert eine Halle: extrahiert die reine Nummer (4, 6, 8) und
@@ -489,12 +513,12 @@
           teHinweis:       readDim(row, 'dimension_te_hinweis', 'TE_HINWEIS'),
           ladestelle:      readDim(row, 'dimension_ladestelle', 'LADESTELLE'),
           // Tor: "#" bedeutet kein Tor zugewiesen
-          tor:             normTor(readDim(row, 'dimension_tor', 'TOR')),
+          tor:             normTor(readLabel(row, 'dimension_tor', 'TOR') ?? readDim(row, 'dimension_tor', 'TOR')),
           liefernummer:    ohneNullen(readDim(row, 'dimension_liefernummer', 'LIFNR')),
           bestellnummer:   ohneNullen(readDim(row, 'dimension_bestellnummer', 'EBELN')),
           // Lieferant = Warensender. BW-Merkmal mit Key + Text.
-          lieferant:       readKeyText(row, 'dimension_lieferant_name', 'dimension_lieferant_nr', 'WARENSENDER'),
-          lieferantNr:     readDim(row,  'dimension_lieferant_nr', 'WARENSENDER_NR', 'WARENSENDER'),
+          lieferant:       readKeyTextNum(row, 'dimension_lieferant_name', 'dimension_lieferant_nr', 'WARENSENDER'),
+          lieferantNr:     ohneNullen(readDim(row,  'dimension_lieferant_nr', 'WARENSENDER_NR', 'WARENSENDER')),
           lieferantName:   readLabel(row, 'dimension_lieferant_name', 'dimension_lieferant_nr', 'WARENSENDER') ?? '–',
           transportmittel: readDim(row, 'dimension_transportmittel', 'TRMIT'),
           halle:           normHalle(readDim(row, 'dimension_halle', 'HALLE', 'LGNUM')),
@@ -505,7 +529,7 @@
           vorpalettierung: readDim(row, 'dimension_vorpalettierung'),
           prioritaet:      readKeyText(row, 'dimension_prioritaet'),
           containerDepot:  readDim(row, 'dimension_container_depot'),
-          frachtfuehrer:   readKeyText(row, 'dimension_frachtfuehrer'),
+          frachtfuehrer:   readKeyTextNum(row, 'dimension_frachtfuehrer'),
 
           // Ist-Start / Ist-Ende (eigene BW-Felder)
           istStart:        readTs(row, 'dimension_ist_start'),
@@ -525,6 +549,12 @@
           tsEinlagerung:    readTs(row, 'dimension_ts_einlagerung', 'FERTIGSTELLUNG'),
           tsAbfahrt:        readTs(row, 'dimension_ts_abfahrt', 'ABFAHRT'),
 
+          // Sammlung mehrerer Anlieferungen/Bestellungen je TE
+          _lieferSet:       new Set(),
+          _bestellSet:      new Set(),
+          anlieferungen:    [],      // wird nach der Schleife aus _lieferSet befüllt
+          bestellungen:     [],      // dito aus _bestellSet
+
           produkte:         [],
 
           // Berechnete Felder – werden in berechneTE() gesetzt
@@ -541,6 +571,14 @@
 
       // ── Produktzeile anhängen ──
       const te = teMap.get(teNr);
+
+      // Liefer- und Bestellnummer je Position sammeln (eine TE kann mehrere
+      // Anlieferungen/Bestellungen umfassen).
+      const lief = ohneNullen(readDim(row, 'dimension_liefernummer', 'LIFNR'));
+      const best = ohneNullen(readDim(row, 'dimension_bestellnummer', 'EBELN'));
+      if (lief != null && lief !== '' && lief !== '#') te._lieferSet.add(String(lief));
+      if (best != null && best !== '' && best !== '#') te._bestellSet.add(String(best));
+
       const prodNr = ohneNullen(readDim(row, 'dimension_produkt_nr', 'MATNR'));
       if (prodNr) {
         // Ist-Menge (geliefert) und Soll-Menge (bestellt/avisiert).
@@ -566,7 +604,7 @@
 
           packmittel:       readKeyText(row, 'dimension_packmittel'),
           hwg:              readKeyText(row, 'dimension_hwg'),
-          einlagersteuerkz: readDim(row, 'dimension_einlagersteuerkz'),
+          einlagersteuerkz: ohneLagerNr(readLabel(row, 'dimension_einlagersteuerkz') ?? readDim(row, 'dimension_einlagersteuerkz')),
           fotoErstellt:     istWahr(readDim(row, 'dimension_foto_erstellt')),
           baender:          istWahr(readDim(row, 'dimension_baender')),
           sperrgut:         istWahr(readDim(row, 'dimension_sperrgut')),
@@ -581,6 +619,12 @@
 
     // Berechnete Felder für jede TE befüllen
     for (const te of teMap.values()) {
+      // Gesammelte Anlieferungen/Bestellungen in sortierte Arrays wandeln
+      te.anlieferungen = [...te._lieferSet].sort();
+      te.bestellungen  = [...te._bestellSet].sort();
+      delete te._lieferSet;
+      delete te._bestellSet;
+
       berechneTE(te, cfg);
       berechneKennzahlen(te, cfg);
       // Warnungen zuletzt: sie greifen auch auf die Kennzahlen zu.
@@ -824,41 +868,95 @@
 
   // ── Zeiträume ────────────────────────────────────────────────────────────
   //
-  //  gestern      – der komplette Vortag (00:00 bis 24:00)
-  //  letzteWoche  – die abgeschlossene Vorwoche (Montag 00:00 bis Montag 00:00)
+  //  Ein Zeitraum ist immer { von, bis } mit tagesgenauen UTC-Grenzen:
+  //  `von` inklusiv, `bis` exklusiv (= Tag nach dem letzten ausgewerteten Tag).
   //
-  //  Beide Zeiträume liegen vollständig in der Vergangenheit — das Widget
-  //  wertet aus, es trackt nicht mehr live.
-  function zeitraumBereich(id) {
-    const jetzt = jetztWanduhr();
-    const heute = new Date(Date.UTC(jetzt.getUTCFullYear(), jetzt.getUTCMonth(), jetzt.getUTCDate()));
-    if (id === 'letzteWoche') {
-      const wd   = heute.getUTCDay();                    // 0 = Sonntag
-      const diff = (wd === 0 ? -6 : 1 - wd);             // Montag dieser Woche
-      const moDiese = new Date(heute.getTime() + diff * 86400000);
-      const moLetzte = new Date(moDiese.getTime() - 7 * 86400000);
-      return { id, von: moLetzte, bis: moDiese };
+  //  Vordefiniert:
+  //    gestern      – der komplette Vortag
+  //    dieseWoche   – Montag dieser Woche bis einschließlich heute
+  //    letzteWoche  – die abgeschlossene Vorwoche (Mo bis So)
+  //    standard     – Montag der Vorwoche bis einschließlich gestern
+  //                   (Voreinstellung des Zeitraum-Sliders)
+
+  const TAG_MS = 86400000;
+
+  // Kappt ein Datum auf den UTC-Tagesbeginn.
+  const tagStart = (d) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+
+  // Heutiger Tag als UTC-Wanduhr-Datum (00:00).
+  const heuteTag = () => tagStart(jetztWanduhr());
+
+  // Montag der Woche, in der `d` liegt.
+  const montagVon = (d) => {
+    const t  = tagStart(d);
+    const wd = t.getUTCDay();                 // 0 = Sonntag
+    return new Date(t.getTime() + (wd === 0 ? -6 : 1 - wd) * TAG_MS);
+  };
+
+  const tagePlus = (d, n) => new Date(tagStart(d).getTime() + n * TAG_MS);
+
+  // Liefert den Bereich zu einem vordefinierten Zeitfilter.
+  function presetBereich(id) {
+    const heute   = heuteTag();
+    const moDiese = montagVon(heute);
+    switch (id) {
+      case 'gestern':     return { von: tagePlus(heute, -1), bis: heute };
+      case 'dieseWoche':  return { von: moDiese,             bis: tagePlus(heute, 1) };
+      case 'letzteWoche': return { von: tagePlus(moDiese, -7), bis: moDiese };
+      case 'standard':
+      default:            return { von: tagePlus(moDiese, -7), bis: heute };
     }
-    // Default: gestern
-    return { id: 'gestern', von: new Date(heute.getTime() - 86400000), bis: heute };
   }
 
-  // Beschriftung eines Zeitraums, z.B. "Gestern · 12.08.2026"
-  function zeitraumLabel(id) {
-    const { von, bis } = zeitraumBereich(id);
-    const bisAnzeige = new Date(bis.getTime() - 86400000);
-    return id === 'letzteWoche'
-      ? `Letzte Woche · ${fmtDate(von)} – ${fmtDate(bisAnzeige)}`
-      : `Gestern · ${fmtDate(von)}`;
+  // Erkennt, ob ein Bereich exakt einem vordefinierten Filter entspricht.
+  function presetErkennen(bereich) {
+    for (const id of ['gestern', 'dieseWoche', 'letzteWoche']) {
+      const p = presetBereich(id);
+      if (p.von.getTime() === bereich.von.getTime() && p.bis.getTime() === bereich.bis.getTime()) return id;
+    }
+    return null;
   }
 
-  // Filtert TEs auf einen Zeitraum. Anker ist das geplante Startdatum
+  // Anzahl ausgewerteter Tage.
+  const bereichTage = (b) => Math.max(1, Math.round((b.bis - b.von) / TAG_MS));
+
+  // Klartext-Beschriftung: "12.08.2026" bzw. "03.08.2026 – 13.08.2026".
+  function bereichLabel(b) {
+    const letzterTag = new Date(b.bis.getTime() - TAG_MS);
+    return b.von.getTime() === letzterTag.getTime()
+      ? fmtDate(b.von)
+      : `${fmtDate(b.von)} – ${fmtDate(letzterTag)}`;
+  }
+
+  // Name des Zeitraums für die Kopfzeile — Preset-Name, sonst "Zeitraum".
+  const PRESET_NAMEN = {
+    gestern:     'Gestern',
+    dieseWoche:  'Diese Woche',
+    letzteWoche: 'Letzte Woche',
+  };
+  function bereichName(b) {
+    const p = presetErkennen(b);
+    if (p) return PRESET_NAMEN[p];
+    const std = presetBereich('standard');
+    if (std.von.getTime() === b.von.getTime() && std.bis.getTime() === b.bis.getTime()) {
+      return 'Letzte Woche bis gestern';
+    }
+    return 'Individueller Zeitraum';
+  }
+
+  // Unmittelbar vorausgehender Zeitraum gleicher Länge — Vergleichsbasis der
+  // Kennzahlen-Karten. Funktioniert für jeden beliebig gewählten Bereich.
+  function vorperiode(b) {
+    const laenge = b.bis - b.von;
+    return { von: new Date(b.von.getTime() - laenge), bis: new Date(b.von.getTime()) };
+  }
+
+  // Filtert TEs auf einen Bereich. Anker ist das geplante Startdatum
   // (Fallback Ankunft / Fertigstellung). TEs ohne jeden Anker gehören in
   // keinen Zeitraum und werden bewusst ausgeblendet, statt sie irgendwo
   // einzusortieren.
-  function tesImZeitraum(alleTes, id) {
-    const { von, bis } = zeitraumBereich(id);
-    return alleTes.filter(te => te.ankerDatum && te.ankerDatum >= von && te.ankerDatum < bis);
+  function tesImBereich(alleTes, b) {
+    return alleTes.filter(te => te.ankerDatum && te.ankerDatum >= b.von && te.ankerDatum < b.bis);
   }
 
   // ── Aggregation ──────────────────────────────────────────────────────────
@@ -1197,6 +1295,370 @@
         border-top-color: var(--c-red-light);
         border-radius: 50%;
         animation:     spin 0.8s linear infinite;
+      }
+      /* ═══ Coole WE-Ladeanimation ═══ */
+      .we-loader {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 26px;
+      }
+
+      .we-loader-scene {
+        position: relative;
+        width: 280px;
+        height: 90px;
+      }
+
+      /* Fahrbahn */
+      .we-road {
+        position: absolute;
+        bottom: 18px;
+        left: 0;
+        width: 220px;
+        height: 3px;
+        background: var(--c-border2);
+        border-radius: 2px;
+        overflow: hidden;
+      }
+      .we-road-line {
+        position: absolute;
+        top: 1px;
+        left: 0;
+        width: 100%;
+        height: 1px;
+        background: repeating-linear-gradient(90deg,
+          var(--c-text3) 0, var(--c-text3) 8px,
+          transparent 8px, transparent 16px);
+        animation: we-road-move 0.6s linear infinite;
+      }
+      @keyframes we-road-move { to { transform: translateX(-16px); } }
+
+      /* LKW */
+      .we-truck {
+        position: absolute;
+        bottom: 20px;
+        left: 0;
+        animation: we-truck-drive 3s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+      }
+      @keyframes we-truck-drive {
+        0%        { left: 0; }
+        45%       { left: 150px; }
+        55%       { left: 150px; }
+        100%      { left: 0; }
+      }
+
+      .we-truck-body { position: relative; display: flex; align-items: flex-end; gap: 2px; }
+      .we-truck-trailer {
+        width: 34px; height: 22px;
+        background: var(--c-red);
+        border-radius: 2px;
+        order: 1;
+      }
+      .we-truck-cabin {
+        width: 14px; height: 15px;
+        background: var(--c-red-light);
+        border-radius: 3px 3px 2px 2px;
+        order: 2;
+        position: relative;
+      }
+      .we-truck-cabin::after {
+        content: '';
+        position: absolute;
+        top: 2px; right: 2px;
+        width: 6px; height: 5px;
+        background: var(--c-bg);
+        border-radius: 1px;
+        opacity: 0.6;
+      }
+      .we-truck-wheel {
+        position: absolute;
+        bottom: -4px;
+        width: 7px; height: 7px;
+        background: var(--c-text2);
+        border: 1.5px solid var(--c-text3);
+        border-radius: 50%;
+        animation: spin 0.4s linear infinite;
+      }
+      .we-wheel-1 { left: 3px; }
+      .we-wheel-2 { left: 22px; }
+      .we-wheel-3 { left: 38px; }
+
+      /* Tor / Halle */
+      .we-gate {
+        position: absolute;
+        bottom: 20px;
+        right: 6px;
+        width: 44px;
+        height: 52px;
+      }
+      .we-gate-roof {
+        width: 0; height: 0;
+        border-left: 24px solid transparent;
+        border-right: 24px solid transparent;
+        border-bottom: 14px solid var(--c-bg4);
+        margin: 0 -2px;
+      }
+      .we-gate-door {
+        width: 44px;
+        height: 38px;
+        background: var(--c-bg3);
+        border: 2px solid var(--c-bg4);
+        border-top: none;
+        border-radius: 0 0 2px 2px;
+        position: relative;
+        overflow: hidden;
+      }
+      .we-gate-door::before {
+        content: '';
+        position: absolute;
+        top: 0; left: 0; right: 0;
+        height: 100%;
+        background: repeating-linear-gradient(0deg,
+          var(--c-bg4) 0, var(--c-bg4) 4px,
+          transparent 4px, transparent 8px);
+        animation: we-door-open 3s ease-in-out infinite;
+      }
+      @keyframes we-door-open {
+        0%, 40%   { transform: translateY(0); }
+        50%, 90%  { transform: translateY(-100%); }
+        100%      { transform: translateY(0); }
+      }
+
+      /* Prozess-Schritte */
+      .we-steps {
+        display: flex;
+        gap: 14px;
+        flex-wrap: wrap;
+        justify-content: center;
+      }
+      .we-step {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        font-family: var(--font-mono);
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        color: var(--c-text3);
+        opacity: 0.4;
+        transition: opacity 0.3s, color 0.3s;
+      }
+      .we-step-dot {
+        width: 7px; height: 7px;
+        border-radius: 50%;
+        background: var(--c-border2);
+        transition: background 0.3s, box-shadow 0.3s;
+      }
+      .we-step.we-step-active {
+        opacity: 1;
+        color: var(--c-text);
+      }
+      .we-step.we-step-active .we-step-dot {
+        background: var(--c-red);
+        box-shadow: 0 0 8px var(--c-red);
+      }
+
+      .we-loader-text {
+        font-family: var(--font-mono);
+        font-size: 12px;
+        color: var(--c-text2);
+        letter-spacing: 0.03em;
+      }
+      .we-dots span {
+        animation: we-dot-blink 1.4s infinite;
+      }
+      .we-dots span:nth-child(2) { animation-delay: 0.2s; }
+      .we-dots span:nth-child(3) { animation-delay: 0.4s; }
+      @keyframes we-dot-blink {
+        0%, 60%, 100% { opacity: 0.2; }
+        30%           { opacity: 1; }
+      }
+      /* ════════════════════════════════════════════════════════════
+         ZEITRAUMAUSWAHL (Presets + Zwei-Punkt-Slider)
+      ════════════════════════════════════════════════════════════ */
+
+      .zr-leiste {
+        display:       flex;
+        align-items:   center;
+        gap:           14px;
+        flex-wrap:     wrap;
+        padding:       10px 16px;
+        background:    var(--c-bg);
+        border-bottom: 1px solid var(--c-border);
+        flex-shrink:   0;
+      }
+
+      .zr-presets {
+        display:       inline-flex;
+        gap:           4px;
+        padding:       3px;
+        background:    var(--c-bg2);
+        border:        1px solid var(--c-border);
+        border-radius: var(--r-md);
+      }
+
+      .zr-preset {
+        padding:       5px 13px;
+        border-radius: var(--r-sm);
+        font-size:     12px;
+        font-weight:   600;
+        color:         var(--c-text3);
+        white-space:   nowrap;
+        transition:    background 0.15s, color 0.15s;
+      }
+      .zr-preset:hover  { color: var(--c-text2); }
+      .zr-preset.active { background: var(--c-red); color: #fff; }
+
+      /* ── Slider ── */
+      .zr-slider-block {
+        display:       flex;
+        flex-direction: column;
+        gap:           4px;
+        flex:          1 1 320px;
+        min-width:     260px;
+        max-width:     620px;
+      }
+
+      .zr-slider-kopf {
+        display:       flex;
+        align-items:   baseline;
+        justify-content: space-between;
+        gap:           8px;
+        font-family:   var(--font-mono);
+        font-size:     10px;
+        color:         var(--c-text3);
+      }
+
+      .zr-slider-werte {
+        color:       var(--c-text);
+        font-weight: 700;
+      }
+
+      /* Zwei übereinanderliegende range-Inputs: die Spuren sind transparent,
+         sichtbar ist nur die eigene Spur darunter. pointer-events wird auf die
+         Daumen beschränkt, damit sich beide Punkte unabhängig greifen lassen. */
+      .zr-slider {
+        position: relative;
+        height:   26px;
+      }
+
+      .zr-slider-spur {
+        position:      absolute;
+        top:           11px;
+        left:          0;
+        right:         0;
+        height:        4px;
+        border-radius: 2px;
+        background:    var(--c-bg4);
+      }
+
+      .zr-slider-fill {
+        position:      absolute;
+        top:           11px;
+        height:        4px;
+        border-radius: 2px;
+        background:    var(--c-red-light);
+      }
+
+      .zr-slider input[type="range"] {
+        position:   absolute;
+        top:        0;
+        left:       0;
+        width:      100%;
+        height:     26px;
+        margin:     0;
+        background: none;
+        appearance: none;
+        -webkit-appearance: none;
+        pointer-events: none;
+        outline:    none;
+      }
+
+      .zr-slider input[type="range"]::-webkit-slider-runnable-track {
+        height: 26px; background: none; border: none;
+      }
+      .zr-slider input[type="range"]::-moz-range-track {
+        height: 26px; background: none; border: none;
+      }
+
+      .zr-slider input[type="range"]::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        pointer-events: auto;
+        width:         16px;
+        height:        16px;
+        margin-top:    5px;
+        border-radius: 50%;
+        background:    var(--c-bg2);
+        border:        3px solid var(--c-red-light);
+        box-shadow:    var(--shadow-sm);
+        cursor:        grab;
+      }
+      .zr-slider input[type="range"]::-moz-range-thumb {
+        pointer-events: auto;
+        width:         16px;
+        height:        16px;
+        border-radius: 50%;
+        background:    var(--c-bg2);
+        border:        3px solid var(--c-red-light);
+        box-shadow:    var(--shadow-sm);
+        cursor:        grab;
+      }
+      .zr-slider input[type="range"]:active::-webkit-slider-thumb { cursor: grabbing; }
+      .zr-slider input[type="range"]:focus-visible::-webkit-slider-thumb {
+        outline: 2px solid var(--c-text2); outline-offset: 2px;
+      }
+
+      .zr-slider-skala {
+        display:     flex;
+        justify-content: space-between;
+        font-family: var(--font-mono);
+        font-size:   9px;
+        color:       var(--c-text3);
+      }
+
+      .zr-reset {
+        font-family:    var(--font-mono);
+        font-size:      10px;
+        color:          var(--c-text3);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        white-space:    nowrap;
+      }
+      .zr-reset:hover { color: var(--c-text); }
+
+      /* ── Banner: aktiver Zeitraum ── */
+      .zr-aktiv {
+        display:       flex;
+        align-items:   center;
+        gap:           10px;
+        flex-wrap:     wrap;
+        padding:       9px 13px;
+        background:    var(--c-bg2);
+        border:        1px solid var(--c-border);
+        border-left:   3px solid var(--c-red);
+        border-radius: var(--r-md);
+        margin-bottom: 14px;
+      }
+
+      .zr-aktiv-titel {
+        font-size:   13px;
+        font-weight: 700;
+        color:       var(--c-text);
+      }
+
+      .zr-aktiv-datum {
+        font-family: var(--font-mono);
+        font-size:   12px;
+        color:       var(--c-text2);
+      }
+
+      .zr-aktiv-meta {
+        font-family: var(--font-mono);
+        font-size:   10px;
+        color:       var(--c-text3);
+        margin-left: auto;
+        text-align:  right;
       }
       /* Status-Badge */
       .tc-badge {
@@ -2083,30 +2545,81 @@
         <div class="header-title" id="header-title">Wareneingang · Auswertung</div>
         <div class="header-sep"></div>
         <div class="header-meta" id="header-meta"></div>
-        <button class="theme-btn" id="theme-btn" title="Theme wechseln">◑</button>
-      </div>
-
-      <!-- Navigationszeile: Zeitraumauswahl -->
-      <div class="navbar">
-        <span class="nav-label">Zeitraum</span>
-        <div class="zeitraum-tabs" id="zeitraum-tabs" role="group" aria-label="Auswertungszeitraum">
-          <button class="zeitraum-tab active" data-zeitraum="gestern">Gestern</button>
-          <button class="zeitraum-tab" data-zeitraum="letzteWoche">Letzte Woche</button>
-        </div>
-        <div class="nav-sep"></div>
         <button class="refresh-btn" id="refresh-btn" title="Daten neu auswerten">
           <span class="refresh-icon" id="refresh-icon">⟳</span>
           <span>Aktualisieren</span>
         </button>
+        <button class="theme-btn" id="theme-btn" title="Theme wechseln">◑</button>
+      </div>
+
+      <!-- ── ZEITRAUMAUSWAHL: Presets + Zwei-Punkt-Slider ── -->
+      <div class="zr-leiste">
+        <span class="nav-label">Zeitraum</span>
+        <div class="zr-presets" id="zr-presets" role="group" aria-label="Vordefinierte Zeiträume">
+          <button class="zr-preset" data-preset="letzteWoche">Letzte Woche</button>
+          <button class="zr-preset" data-preset="dieseWoche">Diese Woche</button>
+          <button class="zr-preset" data-preset="gestern">Gestern</button>
+        </div>
+
+        <div class="zr-slider-block">
+          <div class="zr-slider-kopf">
+            <span>Individueller Zeitraum</span>
+            <span class="zr-slider-werte" id="zr-werte">–</span>
+          </div>
+          <div class="zr-slider" id="zr-slider">
+            <div class="zr-slider-spur"></div>
+            <div class="zr-slider-fill" id="zr-fill"></div>
+            <input type="range" id="zr-von" min="0" max="1" step="1" value="0"
+                   aria-label="Startdatum des Auswertungszeitraums">
+            <input type="range" id="zr-bis" min="0" max="1" step="1" value="1"
+                   aria-label="Enddatum des Auswertungszeitraums">
+          </div>
+          <div class="zr-slider-skala">
+            <span id="zr-skala-von">–</span>
+            <span id="zr-skala-bis">–</span>
+          </div>
+        </div>
+
+        <button class="zr-reset" id="zr-reset" title="Auf letzte Woche bis gestern zurücksetzen">Standard</button>
       </div>
 
       <!-- Body -->
       <div class="body">
 
-        <!-- Ladezustand -->
+        <!-- Ladezustand: animierter WE-Prozess -->
         <div class="state-overlay" id="state-loading">
-          <div class="loader-ring"></div>
-          <div class="state-text">Auswertung wird geladen …</div>
+          <div class="we-loader">
+            <div class="we-loader-scene">
+              <!-- Fahrbahn -->
+              <div class="we-road">
+                <div class="we-road-line"></div>
+              </div>
+              <!-- LKW fährt zum Tor -->
+              <div class="we-truck">
+                <div class="we-truck-body">
+                  <div class="we-truck-cabin"></div>
+                  <div class="we-truck-trailer"></div>
+                </div>
+                <div class="we-truck-wheel we-wheel-1"></div>
+                <div class="we-truck-wheel we-wheel-2"></div>
+                <div class="we-truck-wheel we-wheel-3"></div>
+              </div>
+              <!-- Tor / Halle -->
+              <div class="we-gate">
+                <div class="we-gate-roof"></div>
+                <div class="we-gate-door"></div>
+              </div>
+            </div>
+            <!-- Prozess-Schritte die nacheinander aufleuchten -->
+            <div class="we-steps">
+              <div class="we-step" data-i="0"><span class="we-step-dot"></span>Ankunft</div>
+              <div class="we-step" data-i="1"><span class="we-step-dot"></span>Andocken</div>
+              <div class="we-step" data-i="2"><span class="we-step-dot"></span>Entladen</div>
+              <div class="we-step" data-i="3"><span class="we-step-dot"></span>Buchen</div>
+              <div class="we-step" data-i="4"><span class="we-step-dot"></span>Einlagern</div>
+            </div>
+            <div class="we-loader-text">Wareneingang wird geladen<span class="we-dots"><span>.</span><span>.</span><span>.</span></span></div>
+          </div>
         </div>
 
         <!-- Leerzustand -->
@@ -2117,6 +2630,13 @@
 
         <!-- ── VIEW 1: ÜBERSICHT (Auswertung) ── -->
         <div class="view active" id="view-uebersicht">
+
+          <!-- Aktiver Zeitraum, immer sichtbar -->
+          <div class="zr-aktiv">
+            <span class="zr-aktiv-titel" id="zr-aktiv-titel">–</span>
+            <span class="zr-aktiv-datum" id="zr-aktiv-datum">–</span>
+            <span class="zr-aktiv-meta" id="zr-aktiv-meta"></span>
+          </div>
 
           <div class="u-abschnitt">
             <div class="u-titel" id="kpi-titel">Kennzahlen</div>
@@ -2152,11 +2672,6 @@
                 <option value="Landverkehr">Landverkehr</option>
               </select>
 
-              <span class="f-label">Halle</span>
-              <select class="f-select" id="f-halle" aria-label="Halle filtern">
-                <option value="">Alle</option>
-              </select>
-
               <span class="f-label">Sortierung</span>
               <select class="f-select" id="f-sort" aria-label="Sortierung">
                 <option value="ankerDatum">Datum</option>
@@ -2176,7 +2691,7 @@
           </div>
         </div>
 
-        <!-- ── VIEW 2: DETAIL (unverändert übernommen) ── -->
+        <!-- ── VIEW 2: DETAIL (aus der Referenz übernommen) ── -->
         <div class="view" id="view-detail">
           <button class="back-btn" id="back-btn">← Zurück zur Übersicht</button>
           <div id="detail-content"></div>
@@ -2198,21 +2713,28 @@
       this._shadow.appendChild(template.content.cloneNode(true));
 
       // Interner State
-      this._teMap      = new Map();     // { teNr → TEObjekt }
-      this._activeTE   = null;          // aktuell im Detail angezeigte TE-Nummer
-      this._theme      = 'dark';        // 'dark' | 'light'
-      this._ac         = new AbortController();
+      this._teMap       = new Map();    // { teNr → TEObjekt }
+      this._activeTE    = null;         // aktuell im Detail angezeigte TE-Nummer
+      this._activeView  = 'uebersicht';
+      this._herkunftView = 'uebersicht'; // Ansicht, aus der ins Detail gesprungen wurde
+      this._theme       = 'dark';       // 'dark' | 'light'
+      this._ac          = new AbortController();
+      this._loaderTimer = null;
 
-      // Auswertung
-      this._zeitraum     = 'gestern';   // 'gestern' | 'letzteWoche'
-      this._kFilter      = 'alle';      // Kennzahl-Schnellfilter
-      this._lsFilter     = 'alle';      // Ladestelle
-      this._halleFilter  = null;        // Einlagerungshalle
+      // Auswertungszeitraum: Standard = letzte Woche bis einschließlich gestern
+      this._bereich     = presetBereich('standard');
+      this._domain      = null;         // { von, bis, tage } — Wertebereich des Sliders
+      this._sliderTimer = null;
+
+      // Listenfilter
+      this._kFilter      = 'alle';
+      this._lsFilter     = 'alle';
       this._suchbegriff  = '';
       this._suchTimer    = null;
       this._sortFeld     = 'ankerDatum';
       this._sortRichtung = -1;          // -1 = absteigend (neueste zuerst)
       this._maxTEs       = 50;
+
       // Instanz-eigene Berechnungs-Konfiguration (aus den Properties gespeist)
       this._cfg          = { ...CFG_DEFAULT };
     }
@@ -2220,12 +2742,15 @@
     connectedCallback() {
       this._bindEvents();
       this._applyTheme();
+      this._syncSlider();
       this._showLoading();
     }
 
     disconnectedCallback() {
       this._ac.abort();
+      this._stopLoaderSteps();
       clearTimeout(this._suchTimer);
+      clearTimeout(this._sliderTimer);
     }
 
     // ── Hilfsmethode: Element im Shadow DOM finden ───────────────────────
@@ -2243,16 +2768,39 @@
       // Aktualisieren
       this._$('refresh-btn')?.addEventListener('click', () => this._doRefresh(), opts);
 
-      // Zurück aus der Detailsicht
+      // Zurück aus der Detailsicht — in die Ansicht, aus der gesprungen wurde
       this._$('back-btn')?.addEventListener('click', () => {
         this._activeTE = null;
-        this._switchView('uebersicht');
+        this._switchView(this._herkunftView || 'uebersicht');
       }, opts);
 
-      // Zeitraumauswahl
-      this._shadow.querySelectorAll('.zeitraum-tab').forEach(tab => {
-        tab.addEventListener('click', () => this.setZeitraum(tab.dataset.zeitraum), opts);
+      // Vordefinierte Zeiträume
+      this._shadow.querySelectorAll('.zr-preset').forEach(btn => {
+        btn.addEventListener('click', () => this.setZeitraum(btn.dataset.preset), opts);
       });
+
+      // Standard-Zeitraum wiederherstellen
+      this._$('zr-reset')?.addEventListener('click', () => this.setZeitraum('standard'), opts);
+
+      // ── Zeitraum-Slider (zwei Punkte) ──
+      const von = this._$('zr-von');
+      const bis = this._$('zr-bis');
+
+      const schieben = (quelle) => {
+        if (!von || !bis || !this._domain) return;
+        let a = Number(von.value);
+        let b = Number(bis.value);
+        // Die Punkte dürfen sich nicht überholen: der jeweils andere wird
+        // mitgeschoben, statt den gezogenen Punkt zu blockieren.
+        if (a > b) {
+          if (quelle === 'von') { b = a; bis.value = String(b); }
+          else                  { a = b; von.value = String(a); }
+        }
+        this._bereichAusSlider(a, b);
+      };
+
+      von?.addEventListener('input', () => schieben('von'), opts);
+      bis?.addEventListener('input', () => schieben('bis'), opts);
 
       // Kennzahl-Schnellfilter
       this._shadow.querySelectorAll('[data-kfilter]').forEach(chip => {
@@ -2264,14 +2812,9 @@
         }, opts);
       });
 
-      // Ladestelle / Halle / Sortierung
+      // Ladestelle / Sortierung
       this._$('f-ladestelle')?.addEventListener('change', (e) => {
         this._lsFilter = e.target.value || 'alle';
-        this._renderTabelle();
-      }, opts);
-
-      this._$('f-halle')?.addEventListener('change', (e) => {
-        this._halleFilter = e.target.value || null;
         this._renderTabelle();
       }, opts);
 
@@ -2312,6 +2855,7 @@
     // ── View-Switching ────────────────────────────────────────────────────
 
     _switchView(name) {
+      this._activeView = name;
       this._shadow.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
       this._$(`view-${name}`)?.classList.add('active');
       // Beim Zurückkehren die Übersicht frisch rendern (Filter/Daten könnten
@@ -2336,10 +2880,33 @@
     _showLoading() {
       this._$('state-loading')?.classList.remove('hidden');
       this._$('state-empty')?.classList.add('hidden');
+      this._startLoaderSteps();
     }
 
     _hideLoading() {
       this._$('state-loading')?.classList.add('hidden');
+      this._stopLoaderSteps();
+    }
+
+    // Lässt die Prozess-Schritte in der Ladeanimation nacheinander aufleuchten
+    _startLoaderSteps() {
+      this._stopLoaderSteps();
+      const steps = this._shadow.querySelectorAll('.we-step');
+      if (!steps.length) return;
+      let i = 0;
+      const tick = () => {
+        steps.forEach((s, idx) => s.classList.toggle('we-step-active', idx === i));
+        i = (i + 1) % steps.length;
+      };
+      tick();
+      this._loaderTimer = setInterval(tick, 600);
+    }
+
+    _stopLoaderSteps() {
+      if (this._loaderTimer) {
+        clearInterval(this._loaderTimer);
+        this._loaderTimer = null;
+      }
     }
 
     _showEmpty(text) {
@@ -2347,6 +2914,7 @@
       if (el && text) el.textContent = text;
       this._$('state-empty')?.classList.remove('hidden');
       this._$('state-loading')?.classList.add('hidden');
+      this._stopLoaderSteps();
     }
 
     _hideEmpty() {
@@ -2360,13 +2928,134 @@
       setTimeout(() => icon?.classList.remove('spinning'), 500);
     }
 
+    // ── Zeitraum-Slider ───────────────────────────────────────────────────
+    //
+    //  Der Slider arbeitet auf Tagesindizes über einer Domäne, die sich aus den
+    //  Daten ergibt: vom frühesten bis zum spätesten Ankerdatum, mindestens
+    //  aber vom Beginn der Vorwoche bis heute. So ist der Standardzeitraum
+    //  immer einstellbar, auch wenn die Datenquelle nur wenige Tage abdeckt.
+
+    _sliderDomain() {
+      const heute = heuteTag();
+      const std   = presetBereich('standard');
+      let min = std.von;
+      let max = heute;
+
+      for (const te of this._teMap.values()) {
+        if (!te.ankerDatum) continue;
+        const t = tagStart(te.ankerDatum);
+        if (t < min) min = t;
+        if (t > max) max = t;
+      }
+      // Aktuell gewählten Bereich immer einschließen (z.B. per API gesetzt)
+      if (this._bereich) {
+        const bisTag = tagStart(new Date(this._bereich.bis.getTime() - TAG_MS));
+        if (this._bereich.von < min) min = tagStart(this._bereich.von);
+        if (bisTag > max) max = bisTag;
+      }
+      // Obergrenze gegen Ausreißer in den Stammdaten
+      const MAX_TAGE = 730;
+      let tage = Math.round((max - min) / TAG_MS);
+      if (tage > MAX_TAGE) {
+        min  = new Date(max.getTime() - MAX_TAGE * TAG_MS);
+        tage = MAX_TAGE;
+      }
+      return { von: min, bis: max, tage: Math.max(1, tage) };
+    }
+
+    // Index (Tag) ↔ Datum
+    _idxZuDatum(i) {
+      return new Date(this._domain.von.getTime() + i * TAG_MS);
+    }
+    _datumZuIdx(d) {
+      const i = Math.round((tagStart(d) - this._domain.von) / TAG_MS);
+      return Math.max(0, Math.min(this._domain.tage, i));
+    }
+
+    // Slider-Positionen und Beschriftungen an den aktiven Bereich angleichen.
+    _syncSlider() {
+      this._domain = this._sliderDomain();
+      const von = this._$('zr-von');
+      const bis = this._$('zr-bis');
+      if (!von || !bis) return;
+
+      const aIdx = this._datumZuIdx(this._bereich.von);
+      const bIdx = this._datumZuIdx(new Date(this._bereich.bis.getTime() - TAG_MS));
+
+      von.min = bis.min = '0';
+      von.max = bis.max = String(this._domain.tage);
+      von.value = String(aIdx);
+      bis.value = String(bIdx);
+
+      this._updateSliderAnzeige(aIdx, bIdx);
+      this._markierePreset();
+    }
+
+    // Preset-Schaltfläche markieren, wenn der Bereich exakt darauf passt
+    _markierePreset() {
+      const aktiv = presetErkennen(this._bereich);
+      this._shadow.querySelectorAll('.zr-preset').forEach(b =>
+        b.classList.toggle('active', b.dataset.preset === aktiv));
+    }
+
+    _updateSliderAnzeige(aIdx, bIdx) {
+      const spanne = Math.max(1, this._domain.tage);
+      const fill = this._$('zr-fill');
+      if (fill) {
+        const links  = (aIdx / spanne) * 100;
+        const breite = ((bIdx - aIdx) / spanne) * 100;
+        fill.style.left  = `${links}%`;
+        fill.style.width = `${Math.max(breite, 0.6)}%`;
+      }
+      const werte = this._$('zr-werte');
+      if (werte) {
+        const a = this._idxZuDatum(aIdx), b = this._idxZuDatum(bIdx);
+        const tage = bIdx - aIdx + 1;
+        werte.textContent = (aIdx === bIdx)
+          ? `${fmtDate(a)} (1 Tag)`
+          : `${fmtDate(a)} – ${fmtDate(b)} (${tage} Tage)`;
+      }
+      const sv = this._$('zr-skala-von');
+      const sb = this._$('zr-skala-bis');
+      if (sv) sv.textContent = fmtDate(this._domain.von);
+      if (sb) sb.textContent = fmtDate(this._domain.bis);
+
+      // Liegen beide Punkte übereinander, verdeckt der obere den unteren.
+      // Am rechten Anschlag muss der Von-Punkt greifbar sein (nur er kann
+      // dann noch nach links), sonst bleibt der Bis-Punkt oben.
+      const von = this._$('zr-von');
+      const bis = this._$('zr-bis');
+      if (von && bis) {
+        const vonOben = (aIdx === bIdx && bIdx >= this._domain.tage);
+        von.style.zIndex = vonOben ? '3' : '1';
+        bis.style.zIndex = vonOben ? '1' : '3';
+      }
+    }
+
+    // Slider bewegt → Bereich übernehmen und Auswertung nachziehen.
+    // Die Anzeige folgt sofort, die Neuberechnung leicht entprellt, damit das
+    // Ziehen auch bei vielen TEs flüssig bleibt.
+    _bereichAusSlider(aIdx, bIdx) {
+      this._updateSliderAnzeige(aIdx, bIdx);
+      this._bereich = {
+        von: this._idxZuDatum(aIdx),
+        bis: new Date(this._idxZuDatum(bIdx).getTime() + TAG_MS),
+      };
+      this._markierePreset();
+
+      clearTimeout(this._sliderTimer);
+      this._sliderTimer = setTimeout(() => {
+        if (this._teMap.size) this._renderUebersicht();
+      }, 80);
+    }
+
     // ── Datenzugriff / Filter ─────────────────────────────────────────────
 
     _alleTes() { return [...this._teMap.values()]; }
 
-    // TEs des aktiven Zeitraums (ohne Detailfilter — Basis der Kennzahlen)
-    _tesZeitraum(id) {
-      return tesImZeitraum(this._alleTes(), id ?? this._zeitraum);
+    // TEs des aktiven Zeitraums (ohne Listenfilter — Basis der Kennzahlen)
+    _tesZeitraum(bereich) {
+      return tesImBereich(this._alleTes(), bereich ?? this._bereich);
     }
 
     // TEs des aktiven Zeitraums nach Anwendung aller Listenfilter
@@ -2380,19 +3069,12 @@
             String(te.te ?? '').toLowerCase().includes(q) ||
             String(te.teExt ?? '').toLowerCase().includes(q) ||
             String(te.lieferantName ?? '').toLowerCase().includes(q) ||
-            String(te.liefernummer ?? '').toLowerCase().includes(q);
+            (te.anlieferungen ?? []).some(l => String(l).toLowerCase().includes(q));
           if (!treffer) return false;
         }
 
         // Ladestelle
         if (this._lsFilter !== 'alle' && ladestelleKurz(te.ladestelle) !== this._lsFilter) return false;
-
-        // Halle (TE-Ebene oder eine der Positionen)
-        if (this._halleFilter) {
-          const treffer = te.halle === this._halleFilter
-            || te.produkte.some(p => p.halle === this._halleFilter);
-          if (!treffer) return false;
-        }
 
         // Kennzahl-Schnellfilter
         switch (this._kFilter) {
@@ -2446,14 +3128,12 @@
     _filterZuruecksetzen() {
       this._kFilter     = 'alle';
       this._lsFilter    = 'alle';
-      this._halleFilter = null;
       this._suchbegriff = '';
       const s = this._$('f-suche-input'); if (s) s.value = '';
       this._$('f-suche-clear')?.classList.add('hidden');
       this._shadow.querySelectorAll('[data-kfilter]').forEach(c =>
         c.classList.toggle('active', c.dataset.kfilter === 'alle'));
       const ls = this._$('f-ladestelle'); if (ls) ls.value = 'alle';
-      const ha = this._$('f-halle');      if (ha) ha.value = '';
       this._renderTabelle();
     }
 
@@ -2461,68 +3141,59 @@
 
     _renderUebersicht() {
       this._updateKopf();
-      this._updateHallenAuswahl();
       this._renderKpiCards();
       this._renderTabelle();
     }
 
     _updateKopf() {
+      const name  = bereichName(this._bereich);
+      const datum = bereichLabel(this._bereich);
+      const tage  = bereichTage(this._bereich);
+      const tes   = this._tesZeitraum();
+
       const titel = this._$('header-title');
-      if (titel) titel.textContent = 'Wareneingang · ' + zeitraumLabel(this._zeitraum);
+      if (titel) titel.textContent = `Wareneingang · ${name} · ${datum}`;
 
       const meta = this._$('header-meta');
-      if (meta) {
-        const n = this._tesZeitraum().length;
-        meta.textContent = `${n} TE${n === 1 ? '' : 's'} im Zeitraum · ${this._teMap.size} gesamt`;
+      if (meta) meta.textContent = `${tes.length} TE${tes.length === 1 ? '' : 's'} im Zeitraum · ${this._teMap.size} gesamt`;
+
+      // Banner "aktiver Zeitraum"
+      const bTitel = this._$('zr-aktiv-titel');
+      const bDatum = this._$('zr-aktiv-datum');
+      const bMeta  = this._$('zr-aktiv-meta');
+      if (bTitel) bTitel.textContent = name;
+      if (bDatum) bDatum.textContent = `${datum} · ${tage} Tag${tage === 1 ? '' : 'e'}`;
+      if (bMeta) {
+        const vp = vorperiode(this._bereich);
+        bMeta.textContent = `${tes.length} ausgewertete TEs · Vergleich: ${bereichLabel(vp)}`;
       }
 
       const kpiTitel = this._$('kpi-titel');
-      if (kpiTitel) kpiTitel.textContent = 'Kennzahlen · ' + zeitraumLabel(this._zeitraum);
-
-      this._shadow.querySelectorAll('.zeitraum-tab').forEach(t =>
-        t.classList.toggle('active', t.dataset.zeitraum === this._zeitraum));
-    }
-
-    // Hallen-Auswahl aus den vorhandenen Daten aufbauen (nur real belegte Hallen)
-    _updateHallenAuswahl() {
-      const sel = this._$('f-halle');
-      if (!sel) return;
-      const hallen = new Set();
-      for (const te of this._alleTes()) {
-        if (te.halle) hallen.add(te.halle);
-        for (const p of te.produkte) if (p.halle) hallen.add(p.halle);
-      }
-      const sortiert = [...hallen].sort();
-      const aktuell  = this._halleFilter ?? '';
-      sel.innerHTML = `<option value="">Alle</option>` +
-        sortiert.map(h => `<option value="${esc(h)}">${esc(h)}</option>`).join('');
-      sel.value = sortiert.includes(aktuell) ? aktuell : '';
-      if (sel.value === '') this._halleFilter = null;
+      if (kpiTitel) kpiTitel.textContent = `Kennzahlen · ${datum}`;
     }
 
     // ── Kennzahlen-Karten ─────────────────────────────────────────────────
     //
-    //  Jede Karte zeigt den Wert des AKTIVEN Zeitraums groß und den Wert des
-    //  jeweils anderen Zeitraums als Vergleich — so sind "Gestern" und
-    //  "Letzte Woche" immer gleichzeitig sichtbar, ohne umschalten zu müssen.
+    //  Jede Karte zeigt den Wert des gewählten Zeitraums groß und daneben den
+    //  Wert der unmittelbar vorausgehenden Periode gleicher Länge als
+    //  Vergleich — das funktioniert für die Presets ebenso wie für jeden per
+    //  Slider gewählten Zeitraum.
     _renderKpiCards() {
       const host = this._$('kpi-cards');
       if (!host) return;
 
-      const aktivId  = this._zeitraum;
-      const vglId    = aktivId === 'gestern' ? 'letzteWoche' : 'gestern';
-      const vglName  = vglId === 'gestern' ? 'Gestern' : 'Letzte Woche';
-
-      const aktiv = aggregiere(this._tesZeitraum(aktivId));
-      const vgl   = aggregiere(this._tesZeitraum(vglId));
+      const vp    = vorperiode(this._bereich);
+      const aktiv = aggregiere(this._tesZeitraum());
+      const vgl   = aggregiere(this._tesZeitraum(vp));
 
       if (aktiv.anzahl === 0) {
         host.innerHTML = `<div class="u-leer" style="grid-column:1/-1">
-          Keine Transporteinheiten im Zeitraum „${esc(zeitraumLabel(aktivId))}“
+          Keine Transporteinheiten im Zeitraum ${esc(bereichLabel(this._bereich))}
         </div>`;
         return;
       }
 
+      const vglName = `Vorperiode: ${bereichLabel(vp)}`;
       host.innerHTML = KPI_DEFS.map(def => this._kpiCardHTML(def, aktiv, vgl, vglName)).join('');
     }
 
@@ -2532,7 +3203,8 @@
 
       // Anzeige + Trendrichtung je Kennzahl. "besserWennHoeher" steuert, ob
       // ein Anstieg grün oder rot dargestellt wird.
-      let wertTxt, klasse = '', subTxt, balken = '', vglTxt, besserWennHoeher = true, aWert = a.wert, vWert = v.wert;
+      let wertTxt, klasse = '', subTxt, balken = '', vglTxt, besserWennHoeher = true;
+      const aWert = a.wert, vWert = v.wert;
 
       if (def.id === 'durchlaufzeit') {
         besserWennHoeher = false;
@@ -2583,7 +3255,7 @@
           <div class="kpi-card-sub">${esc(subTxt)}</div>
           <div class="kpi-card-vgl">
             ${trendHTML}
-            <span>${esc(vglName)}: ${vglTxt}</span>
+            <span title="${esc(vglName)}">Vorperiode: ${vglTxt}</span>
           </div>
         </div>`;
     }
@@ -2642,7 +3314,7 @@
         <div class="te-tabelle-fuss">
           <span>${sichtbar.length} von ${gefiltert.length} TEs angezeigt${gekappt > 0 ? ` (${gekappt} durch maxTEs ausgeblendet)` : ''}</span>
           <span>·</span>
-          <span>Zeitraum: ${esc(zeitraumLabel(this._zeitraum))}</span>
+          <span>Zeitraum: ${esc(bereichLabel(this._bereich))}</span>
           <span>·</span>
           <span>„n. b.“ = nicht bewertbar (unvollständige Daten)</span>
         </div>`;
@@ -2694,8 +3366,8 @@
             class="${verletzt ? 'verletzt' : ''}"
             title="Detailsicht für TE ${esc(te.te)} öffnen">
           <td>
-            <span class="tt-te">${esc(te.te)}</span>
-            ${te.teExt ? `<div class="tt-te-ext">${esc(te.teExt)}</div>` : ''}
+            <span class="tt-te">${esc(te.teExt ?? te.te)}</span>
+            ${te.teExt ? `<div class="tt-te-ext">intern ${esc(te.te)}</div>` : ''}
           </td>
           <td>
             <span class="tt-lieferant" title="${esc(te.lieferantName ?? '')}">${esc(te.lieferantName ?? '–')}</span>
@@ -2728,6 +3400,13 @@
       const te = this._teMap.get(teNr);
       const content = this._$('detail-content');
       if (!te || !content) return;
+
+      // Herkunfts-View merken, damit der Zurück-Button dorthin zurückführt
+      // (sonst landet man immer in der Übersicht, auch wenn man aus dem
+      // Zeitstrahl oder der Analyse kam).
+      if (this._activeView && this._activeView !== 'detail') {
+        this._herkunftView = this._activeView;
+      }
 
       content.innerHTML = this._detailHTML(te);
       this._switchView('detail');
@@ -2777,9 +3456,12 @@
       ).join('');
 
       // ── Sendungsinfo ──
+      const listeOderStrich = (arr) => (arr && arr.length) ? arr.join(', ') : '–';
+      const anlLabel = te.anlieferungen.length > 1 ? `Anlieferungen (${te.anlieferungen.length})` : 'Anlieferung (Liefernr.)';
+      const bestLabel = te.bestellungen.length > 1 ? `Bestellungen (${te.bestellungen.length})` : 'Bestellnummer';
       const sendung = [
-        ['Anlieferung (Liefernr.)', esc(te.liefernummer ?? '–')],
-        ['Bestellnummer',           esc(te.bestellnummer ?? '–')],
+        [anlLabel,                  esc(listeOderStrich(te.anlieferungen))],
+        [bestLabel,                 esc(listeOderStrich(te.bestellungen))],
         ['Frachtführer',            esc(keyTextStr(te.frachtfuehrer) ?? '–')],
         ['Lieferant',               esc(keyTextStr(te.lieferant) ?? te.lieferantName ?? '–')],
         ['Ladestelle',              esc(ladestelleKurz(te.ladestelle))],
@@ -2837,7 +3519,7 @@
         <div class="detail-head s-${esc(status)}">
           <div class="dh-top">
             <div>
-              <div class="dh-te">${esc(te.te)}</div>
+              <div class="dh-te">${esc(te.teExt ?? te.te)}</div>
               <div class="dh-sub">${esc(te.lieferantName ?? '')}</div>
             </div>
             <a class="dh-ewm" href="${esc(ewmLink(te.te))}" target="_blank" rel="noopener">In EWM öffnen ↗</a>
@@ -3130,6 +3812,8 @@
       }
 
       console.info(`[WE-Analyse] ${this._teMap.size} TEs geparst`);
+      // Slider-Domäne hängt an den Daten → nach jedem Laden neu bestimmen
+      this._syncSlider();
       this._render();
     }
 
@@ -3147,11 +3831,9 @@
     get theme() { return this._theme; }
 
     set defaultZeitraum(v) {
-      const id = (v === 'letzteWoche') ? 'letzteWoche' : 'gestern';
-      this._zeitraum = id;
-      if (this._teMap.size) this._renderUebersicht();
+      this.setZeitraum(v);
     }
-    get defaultZeitraum() { return this._zeitraum; }
+    get defaultZeitraum() { return presetErkennen(this._bereich) ?? 'individuell'; }
 
     set puenktlichkeitToleranzMin(v) {
       const n = Number(v);
@@ -3220,11 +3902,29 @@
       }
     }
 
-    setZeitraum(zeitraum) {
-      if (zeitraum !== 'gestern' && zeitraum !== 'letzteWoche') return;
-      this._zeitraum = zeitraum;
-      this._shadow.querySelectorAll('.zeitraum-tab').forEach(t =>
-        t.classList.toggle('active', t.dataset.zeitraum === zeitraum));
+    // Vordefinierten Zeitraum wählen. Der Slider wird mitgeführt.
+    setZeitraum(preset) {
+      const erlaubt = ['gestern', 'dieseWoche', 'letzteWoche', 'standard'];
+      if (!erlaubt.includes(preset)) return;
+      this._bereich = presetBereich(preset);
+      this._syncSlider();
+      if (this._teMap.size) this._renderUebersicht();
+    }
+
+    // Individuellen Zeitraum setzen. Akzeptiert Date-Objekte oder Datums-
+    // Strings (ISO, deutsch oder SAP-Format); `bis` ist einschließlich.
+    setZeitraumBereich(von, bis) {
+      const a = (von instanceof Date) ? von : parseTs(von);
+      const b = (bis instanceof Date) ? bis : parseTs(bis);
+      if (!a || !b) {
+        console.warn('[WE-Analyse] setZeitraumBereich: Datum nicht lesbar', von, bis);
+        return;
+      }
+      let vonTag = tagStart(a);
+      let bisTag = tagStart(b);
+      if (bisTag < vonTag) { const t = vonTag; vonTag = bisTag; bisTag = t; }
+      this._bereich = { von: vonTag, bis: new Date(bisTag.getTime() + TAG_MS) };
+      this._syncSlider();
       if (this._teMap.size) this._renderUebersicht();
     }
 
@@ -3234,13 +3934,6 @@
       this._kFilter = filter;
       this._shadow.querySelectorAll('[data-kfilter]').forEach(c =>
         c.classList.toggle('active', c.dataset.kfilter === filter));
-      this._renderTabelle();
-    }
-
-    setHalleFilter(halle) {
-      this._halleFilter = halle ? normHalle(halle) : null;
-      const sel = this._$('f-halle');
-      if (sel) sel.value = this._halleFilter ?? '';
       this._renderTabelle();
     }
 
