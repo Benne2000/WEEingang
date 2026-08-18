@@ -2123,6 +2123,18 @@
     }
 
     _render() {
+      try {
+        this._renderIntern();
+      } catch (err) {
+        // Ein Renderfehler darf weder SAC blockieren noch als endlose
+        // Ladeanimation erscheinen.
+        console.error('[Verlauf] Fehler beim Rendern', err);
+        this._stopWatchdog();
+        this._showEmpty('Die Auswertung konnte nicht dargestellt werden. Details stehen in der Browserkonsole.');
+      }
+    }
+
+    _renderIntern() {
       const m = this._modell;
 
       if (!m.knoten.size) {
@@ -2171,7 +2183,10 @@
         return;
       }
 
-      if (dataBinding.state !== 'success') {
+      // Manche Umgebungen liefern kein state-Feld, sondern nur data.
+      const fertig = dataBinding.state === 'success' ||
+                     (dataBinding.state == null && Array.isArray(dataBinding.data));
+      if (!fertig) {
         this._showLoading();
         this._startWatchdog();
         return;
@@ -2179,7 +2194,7 @@
 
       this._stopWatchdog();
 
-      const rows = dataBinding.data ?? [];
+      const rows = Array.isArray(dataBinding.data) ? dataBinding.data : [];
       console.info(`[Verlauf] myDataSource: ${rows.length} Rows empfangen`);
 
       try {
@@ -2253,13 +2268,30 @@
     set infoTitel(v) { this._infoTitel = v || 'Dokumentation'; }
     get infoTitel() { return this._infoTitel; }
 
-    // Gewählte Werte für Story-Skripte lesbar machen
+    // Gewählte Werte für Story-Skripte lesbar machen.
+    //
+    // WICHTIG: SAC weist beim Initialisieren *jede* im Manifest deklarierte
+    // Property als Feld auf dem Element zu – auch die, die nur gelesen werden
+    // sollen. Ein reiner Getter führt dabei im Strict Mode zu
+    // "Cannot set property X which has only a getter"; SAC bricht den
+    // Initialisierungslauf ab und ruft myDataSource nie auf – das Widget
+    // bliebe dauerhaft im Ladezustand. Deshalb hat jede dieser Properties
+    // einen Setter, der den zugewiesenen Wert bewusst verwirft.
     get selektierteHwg() { return this._hwg ?? ''; }
+    set selektierteHwg(_) { /* nur lesend – Zuweisung von SAC wird ignoriert */ }
+
     get selektiertesProdukt() { return this._produkt ?? ''; }
+    set selektiertesProdukt(_) { /* nur lesend */ }
+
     // Als kommaseparierte Liste, damit der Wert im Designer als String-Property lesbar ist
     get selektierteNiederlassungen() { return [...this._nlAuswahl].join(','); }
+    set selektierteNiederlassungen(_) { /* nur lesend – zum Setzen dient setNiederlassungen() */ }
+
     get zeitraumVon() { return this._von; }
+    set zeitraumVon(_) { /* nur lesend – zum Setzen dient setZoom() */ }
+
     get zeitraumBis() { return this._bis; }
+    set zeitraumBis(_) { /* nur lesend */ }
 
     // ── Methoden ───────────────────────────────────────────────────────
     refreshData() { if (this._dataBinding) this.myDataSource = this._dataBinding; }
@@ -2316,7 +2348,12 @@
     onCustomWidgetBeforeUpdate(changedProperties) { this._changed = changedProperties; }
 
     onCustomWidgetAfterUpdate(changedProperties) {
-      const c = changedProperties || this._changed || {};
+      try { this._propsUebernehmen(changedProperties || this._changed || {}); }
+      catch (err) { console.error('[Verlauf] Fehler beim Übernehmen der Properties', err); }
+      this._changed = null;
+    }
+
+    _propsUebernehmen(c) {
       if ('theme' in c) this.theme = c.theme;
       if ('periodenTyp' in c) this.periodenTyp = c.periodenTyp;
       if ('defaultModus' in c) this.defaultModus = c.defaultModus;
