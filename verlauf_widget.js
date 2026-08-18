@@ -52,6 +52,15 @@
     return false;
   };
 
+  // BW liefert Materialnummern intern mit führenden Nullen. Für Anzeige und
+  // Schlüsselbildung wird konsistent ohne Nullen gearbeitet.
+  const ohneNullen = (wert) => {
+    if (wert == null) return null;
+    const s = String(wert).trim();
+    if (!/^0+\d/.test(s)) return s;
+    return s.replace(/^0+/, '') || s;
+  };
+
   const extractVal = (v) => {
     if (v == null) return null;
     if (typeof v === 'object') {
@@ -210,8 +219,9 @@
 
     for (const row of rows) {
       if (!row || typeof row !== 'object') continue;
-      const p = parsePeriode(readDim(row, 'dimension_periode', 'CALWEEK', 'CALMONTH', 'PERIODE'),
-                             readDim(row, 'dimension_jahr', 'CALYEAR', 'JAHR'));
+      const p = parsePeriode(readDim(row, 'dimension_periode', '0CALMONTH', '0CALWEEK', '0CALDAY',
+                                     'CALMONTH', 'CALWEEK', 'PERIODE'),
+                             readDim(row, 'dimension_jahr', '0CALYEAR', 'CALYEAR', 'JAHR'));
       if (!p) continue;
       if (p.typ) typHinweis = typHinweis ?? p.typ;
       if (p.per > maxPer) maxPer = p.per;
@@ -240,12 +250,14 @@
       if (perTyp === 'monat' && p.monat) { jahr = p.jahrMonat; per = p.monat; }
       if (per < 1 || per > perMax) continue;
 
-      const gf   = readDim(row, 'dimension_gf', 'GF', 'GFBEREICH') ?? '#';
-      const nl   = readDim(row, 'dimension_nl', 'NL', 'NIEDERLASSUNG') ?? '#';
-      const hwg  = readDim(row, 'dimension_hwg', 'HWG') ?? '#';
-      const prod = readDim(row, 'dimension_produkt_nr', 'PRODUKT', 'MATNR') ?? '#';
+      // Aliase decken die BW-Merkmalsnamen mit ab, falls die Feeds im Designer
+      // anders benannt sind als im Manifest vorgesehen.
+      const gf   = readDim(row, 'dimension_gf', 'GFB', 'GF', 'GFBEREICH') ?? '#';
+      const nl   = readDim(row, 'dimension_nl', '0PLANT', 'PLANT', 'WERKS', 'NL') ?? '#';
+      const hwg  = readDim(row, 'dimension_hwg', 'HWG', 'MATKL') ?? '#';
+      const prod = ohneNullen(readDim(row, 'dimension_produkt_nr', '0MATERIAL', 'MATERIAL', 'MATNR')) ?? '#';
 
-      const menge = readVal(row, 'value_menge', 'MENGE');
+      const menge = readVal(row, 'value_menge', 'MENGE', 'UMSATZ');
       const mengeVj = readVal(row, 'value_menge_vj', 'MENGE_VJ');
       if (menge == null && mengeVj == null) continue;
 
@@ -256,7 +268,9 @@
           gf, gfText: readLabel(row, 'dimension_gf') ?? gf,
           nl, nlText: readLabel(row, 'dimension_nl') ?? nl,
           hwg, hwgText: readLabel(row, 'dimension_hwg') ?? hwg,
-          produkt: prod, produktText: readLabel(row, 'dimension_produkt_name', 'dimension_produkt_nr') ?? prod,
+          produkt: prod,
+          produktText: ohneNullen(readLabel(row, 'dimension_produkt_name', 'dimension_produkt_nr',
+                                            '0MATERIAL', 'MATERIAL')) ?? prod,
           werte: new Map(),
         };
         modell.knoten.set(schluessel, k);
@@ -973,8 +987,8 @@
       // Darstellung
       this._theme = 'light';
       this._periodenTyp = 'auto';
-      this._infoPdfUrl = '';
-      this._infoTitel = 'Dokumentation';
+      this._infoPdfUrl = 'https://benne2000.github.io/WEEingang/verlauf_widget.pdf';
+      this._infoTitel = 'Verlaufsanalyse – Dokumentation';
       this._maxSerien = 6;
 
       // Auswahlzustand
@@ -1003,12 +1017,13 @@
       this._brushGeo = null;
       this._brushStart = null;
       this._resizeTimer = null;
+      this._watchdog = null;
     }
 
     connectedCallback() {
       this._bindEvents();
       this._applyTheme();
-      if (!this._modell.knoten.size) this._showLoading();
+      if (!this._modell.knoten.size) { this._showLoading(); this._startWatchdog(); }
       this._render();
     }
 
@@ -1016,7 +1031,26 @@
       this._ac.abort();
       clearTimeout(this._suchTimer);
       clearTimeout(this._resizeTimer);
+      clearTimeout(this._watchdog);
     }
+
+    // Ein hängender Ladezustand kommt fast nie vom Widget, sondern von der
+    // Verbindung zur Datenquelle. Nach kurzer Wartezeit sagen wir das auch.
+    _startWatchdog() {
+      clearTimeout(this._watchdog);
+      this._watchdog = setTimeout(() => {
+        if (this._modell.knoten.size) return;
+        const zustand = this._dataBinding ? (this._dataBinding.state ?? 'unbekannt') : 'keine Zuweisung';
+        this._showEmpty(
+          'Es sind bisher keine Daten angekommen (Status der Datenquelle: ' + zustand + '). ' +
+          'Typische Ursachen: die Live-Verbindung zum BW antwortet nicht (CORS/Netzwerk), ' +
+          'dem Widget ist keine Datenquelle zugewiesen, oder die Feeds sind im Designer noch leer. ' +
+          'Details stehen in der Browserkonsole.'
+        );
+      }, 20000);
+    }
+
+    _stopWatchdog() { clearTimeout(this._watchdog); this._watchdog = null; }
 
     _$(id) { return this._shadow.getElementById(id); }
 
@@ -2122,10 +2156,28 @@
     set myDataSource(dataBinding) {
       this._dataBinding = dataBinding;
 
-      if (!dataBinding || dataBinding.state !== 'success') {
-        this._showLoading();
+      if (!dataBinding) {
+        this._stopWatchdog();
+        this._showEmpty('Dem Widget ist keine Datenquelle zugewiesen. Im Designer unter "Datenquelle" eine Query auswählen und die Feeds befüllen.');
         return;
       }
+
+      if (dataBinding.state === 'error') {
+        this._stopWatchdog();
+        const meldung = (dataBinding.error && (dataBinding.error.description || dataBinding.error.message)) || '';
+        console.error('[Verlauf] Datenquelle meldet einen Fehler', dataBinding.error);
+        this._showEmpty('Die Datenquelle meldet einen Fehler' + (meldung ? ': ' + meldung : '') +
+          '. Bei Live-Verbindungen zum BW liegt die Ursache meist in der Verbindung selbst, nicht im Widget.');
+        return;
+      }
+
+      if (dataBinding.state !== 'success') {
+        this._showLoading();
+        this._startWatchdog();
+        return;
+      }
+
+      this._stopWatchdog();
 
       const rows = dataBinding.data ?? [];
       console.info(`[Verlauf] myDataSource: ${rows.length} Rows empfangen`);
@@ -2141,7 +2193,8 @@
       }
 
       if (!this._modell.knoten.size) {
-        this._showEmpty('Keine auswertbaren Zeilen. Erwartet werden mindestens ein Zeitmerkmal (Kalenderwoche oder -monat) und eine Kennzahl.');
+        this._showEmpty(`Die Datenquelle hat ${rows.length} Zeilen geliefert, davon war keine auswertbar. ` +
+          'Erwartet werden ein Zeitmerkmal (0CALMONTH, 0CALWEEK oder 0CALDAY) im Feed "dimension_periode" und eine Kennzahl im Feed "value_menge".');
         this._renderToolbar();
         return;
       }
