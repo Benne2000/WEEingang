@@ -1020,6 +1020,8 @@
       this._watchdog = null;
       this._letzterStatus = '';
       this._letzterFehler = '';
+      this._letzterLogStatus = null;
+      this._letzterLogZeilen = -1;
     }
 
     connectedCallback() {
@@ -1050,7 +1052,7 @@
           'eine Pflichtvariable ist nicht gefüllt, oder die Verbindung zum BW antwortet nicht. ' +
           'Für Details in der Browserkonsole die Widget-Methode diagnose() aufrufen.'
         );
-      }, 20000);
+      }, 10000);
     }
 
     _stopWatchdog() { clearTimeout(this._watchdog); this._watchdog = null; }
@@ -2171,6 +2173,18 @@
     set myDataSource(dataBinding) {
       this._dataBinding = dataBinding;
 
+      // Jeden Aufruf protokollieren (nur bei Statuswechsel, damit das Log
+      // nicht zuläuft). So ist in der Konsole die komplette Abfolge sichtbar:
+      // Kommt nach dem ersten 'error' überhaupt noch ein Update?
+      const status = dataBinding ? (dataBinding.state ?? 'ohne Status') : 'null';
+      const zeilen = (dataBinding && Array.isArray(dataBinding.data)) ? dataBinding.data.length : 0;
+      if (status !== this._letzterLogStatus || zeilen !== this._letzterLogZeilen) {
+        this._letzterLogStatus = status;
+        this._letzterLogZeilen = zeilen;
+        console.info(`[Verlauf] myDataSource aufgerufen – Status: ${status}, Zeilen: ${zeilen}` +
+          (dataBinding ? `, Felder der Bindung: ${Object.keys(dataBinding).join(', ')}` : ''));
+      }
+
       if (!dataBinding) {
         this._stopWatchdog();
         this._showEmpty('Dem Widget ist keine Datenquelle zugewiesen. Im Designer unter "Datenquelle" eine Query auswählen und die Feeds befüllen.');
@@ -2206,7 +2220,7 @@
       this._stopWatchdog();
 
       const rows = Array.isArray(dataBinding.data) ? dataBinding.data : [];
-      console.info(`[Verlauf] myDataSource: ${rows.length} Rows empfangen`);
+      if (rows.length) console.info('[Verlauf] Erste Zeile der Datenquelle', rows[0]);
 
       try {
         this._modell = parseRows(rows, this._periodenTyp);
