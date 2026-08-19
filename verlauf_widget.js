@@ -1018,6 +1018,8 @@
       this._brushStart = null;
       this._resizeTimer = null;
       this._watchdog = null;
+      this._letzterStatus = '';
+      this._letzterFehler = '';
     }
 
     connectedCallback() {
@@ -1040,12 +1042,13 @@
       clearTimeout(this._watchdog);
       this._watchdog = setTimeout(() => {
         if (this._modell.knoten.size) return;
-        const zustand = this._dataBinding ? (this._dataBinding.state ?? 'unbekannt') : 'keine Zuweisung';
+        const zustand = this._letzterStatus || (this._dataBinding ? (this._dataBinding.state ?? 'unbekannt') : 'keine Zuweisung');
+        const fehler = this._letzterFehler ? ' – Meldung: ' + this._letzterFehler : '';
         this._showEmpty(
-          'Es sind bisher keine Daten angekommen (Status der Datenquelle: ' + zustand + '). ' +
-          'Typische Ursachen: die Live-Verbindung zum BW antwortet nicht (CORS/Netzwerk), ' +
-          'dem Widget ist keine Datenquelle zugewiesen, oder die Feeds sind im Designer noch leer. ' +
-          'Details stehen in der Browserkonsole.'
+          'Es sind keine auswertbaren Daten angekommen. Status der Datenquelle: ' + zustand + fehler + '. ' +
+          'Häufige Ursachen bei diesem Status: die Query liefert mehr Zeilen als die Live-Verbindung zulässt, ' +
+          'eine Pflichtvariable ist nicht gefüllt, oder die Verbindung zum BW antwortet nicht. ' +
+          'Für Details in der Browserkonsole die Widget-Methode diagnose() aufrufen.'
         );
       }, 20000);
     }
@@ -2174,12 +2177,20 @@
         return;
       }
 
+      this._letzterStatus = dataBinding.state ?? 'ohne Status';
+      this._letzterFehler = this._fehlerText(dataBinding);
+
+      // Ein Fehlerzustand ist nicht zwingend endgültig: SAC meldet während des
+      // Aufbaus einer Story durchaus zwischenzeitlich 'error' und liefert kurz
+      // darauf ein erfolgreiches Update nach. Deshalb wird weiter gewartet
+      // (wie im WE-Widget) und der Zustand nur protokolliert; erst der
+      // Watchdog macht daraus eine sichtbare Meldung.
       if (dataBinding.state === 'error') {
-        this._stopWatchdog();
-        const meldung = (dataBinding.error && (dataBinding.error.description || dataBinding.error.message)) || '';
-        console.error('[Verlauf] Datenquelle meldet einen Fehler', dataBinding.error);
-        this._showEmpty('Die Datenquelle meldet einen Fehler' + (meldung ? ': ' + meldung : '') +
-          '. Bei Live-Verbindungen zum BW liegt die Ursache meist in der Verbindung selbst, nicht im Widget.');
+        console.warn('[Verlauf] Datenquelle meldet Status "error"' +
+          (this._letzterFehler ? ': ' + this._letzterFehler : ' (ohne Fehlertext)') +
+          ' – warte auf ein nachfolgendes Update. Diagnose über die Methode diagnose().');
+        this._showLoading();
+        this._startWatchdog();
         return;
       }
 
@@ -2227,6 +2238,41 @@
     }
 
     get myDataSource() { return this._dataBinding; }
+
+    // Fehlerinformationen können als Objekt, Array oder String kommen.
+    _fehlerText(dataBinding) {
+      const f = dataBinding && dataBinding.error;
+      if (!f) return '';
+      const einer = (e) => {
+        if (!e) return '';
+        if (typeof e === 'string') return e;
+        return e.description || e.message || e.text || e.code || '';
+      };
+      if (Array.isArray(f)) return f.map(einer).filter(Boolean).join(' | ');
+      return einer(f);
+    }
+
+    // Für die Fehlersuche aus der Browserkonsole oder per Story-Skript:
+    // schreibt alles, was das Widget über die Datenbindung weiß, ins Log.
+    diagnose() {
+      const b = this._dataBinding;
+      const info = {
+        status: b ? (b.state ?? 'ohne Status') : 'keine Datenbindung zugewiesen',
+        fehler: this._fehlerText(b) || '(kein Fehlertext)',
+        zeilen: (b && Array.isArray(b.data)) ? b.data.length : 0,
+        felderErsteZeile: (b && Array.isArray(b.data) && b.data[0]) ? Object.keys(b.data[0]) : [],
+        schluesselDerBindung: b ? Object.keys(b) : [],
+        modell: {
+          knoten: this._modell.knoten.size,
+          jahre: this._modell.jahre,
+          raster: this._modell.perTyp,
+          letztePeriode: this._modell.maxPerAktJahr,
+        },
+      };
+      console.info('[Verlauf] Diagnose', info);
+      try { console.info('[Verlauf] Erste Datenzeile', (b && b.data && b.data[0]) || null); } catch (e) { /* egal */ }
+      return JSON.stringify(info);
+    }
 
     // ── Properties ─────────────────────────────────────────────────────
     set theme(v) { this._theme = (v === 'dark') ? 'dark' : 'light'; this._applyTheme(); }
