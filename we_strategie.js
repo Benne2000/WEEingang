@@ -1,5 +1,5 @@
 /* =========================================================================
- * WE Strategie-Cockpit – SAC Custom Widget (v0.15.0) · Entwickler: Benne
+ * WE Strategie-Cockpit – SAC Custom Widget (v0.16.0) · Entwickler: Benne
  * Strategische Langzeitsicht auf den Wareneingangsprozess.
  * Erwartet voraggregierte Perioden-Daten (je KW/Monat × Segment), wie sie
  * BW über SUM/MIN/MAX/COUNT liefert. Kein Median (BW-Einschränkung) — das
@@ -510,8 +510,19 @@
       Object.assign(this._props, changed || {});
       if (changed && "theme" in changed) this._applyTheme();
       if (changed && "aggregation" in changed) this._render();
-      // SAC-Datenbindung (Zwei-Feed-Muster: dimensions + measures)
-      if (changed && changed.myDataSource) { this.myDataSource = changed.myDataSource; }
+      if (changed && "dauerEinheit" in changed && this._dataBinding) {
+        // Einheit geändert -> vorhandene Bindung neu verarbeiten
+        this.myDataSource = this._dataBinding;
+      }
+      // SAC-Datenbindung: kommt normalerweise als changed.myDataSource. Zur
+      // Sicherheit auch alternative Schlüssel/Objektformen erkennen, damit der
+      // Loader nicht hängen bleibt, falls SAC die Bindung anders benennt.
+      if (changed) {
+        const binding = changed.myDataSource
+          || (changed.dataBindings && changed.dataBindings.myDataSource)
+          || null;
+        if (binding) this.myDataSource = binding;
+      }
     }
     onCustomWidgetResize() { this._render(); }
     disconnectedCallback() { this._stopPlay(); this._stopLoaderSteps(); }
@@ -533,18 +544,35 @@
 
     /* SAC-DataSource-Setter. Erwartet die BENANNTEN Feeds aus dem Manifest —
        je Kennzahl ein eigener Feed (dimension_periode, value_dur_dwell, …).
-       Jede Kennzahl wird gezielt über ihre Feed-ID gelesen. */
+       Jede Kennzahl wird gezielt über ihre Feed-ID gelesen.
+
+       WICHTIG: Der Loader darf NIE hängen bleiben. Sobald die Bindung
+       überhaupt Daten liefert (oder final "success"/"error" meldet),
+       verlassen wir den Ladezustand — auch wenn 0 Zeilen ankommen. Nur
+       solange die Bindung noch aktiv lädt ("loading"/"pending") bleibt die
+       Animation stehen. */
     set myDataSource(dataBinding) {
       this._dataBinding = dataBinding;
-      if (!dataBinding || dataBinding.state !== "success") return;
+      if (!dataBinding) { return; }
+      const st = dataBinding.state;
+      const hasData = Array.isArray(dataBinding.data);
+      // Noch am Laden UND noch keine Daten -> Loader weiter zeigen.
+      if (!hasData && (st === "loading" || st === "pending" || st === "waiting")) {
+        this._rows = null; this._render(); return;
+      }
+      // Fehlerzustand ohne Daten -> Fehlermeldung statt Dauerloader.
+      if (!hasData && st === "error") {
+        this._rows = []; this._render(); return;
+      }
+      // Ab hier: Daten liegen vor (oder success/leer). Immer verarbeiten und
+      // den Loader in JEDEM Fall verlassen (auch bei Ausnahme).
       try {
         this._rows = this._ingestSac(dataBinding);
-        this._render();
       } catch (e) {
-        // Nie einen Framework-Fehler kaskadieren lassen; Zustand sauber halten.
         console.warn("WE-Strategie: Datenaufbereitung fehlgeschlagen —", e && e.message);
-        this._rows = this._rows || [];
+        this._rows = [];
       }
+      this._render();
     }
     /* refreshData() zeigt bewusst sofort wieder die Ladeanimation (statt
        stumm auf die alten Daten zu warten), damit ein Reload genauso
@@ -782,6 +810,18 @@
       if (!this._rows.length) {
         state.hidden = false;
         state.innerHTML = `<div class="state-icon">📊</div><div class="state-txt">Keine aggregierten Daten — Data Binding zuweisen</div>`;
+        dash.innerHTML = ""; this._stopLoaderSteps(); return;
+      }
+      // Zeilen sind da, aber keine gültige Periode? Dann konnte die Dimension
+      // "dimension_periode" nicht gelesen werden — praktisch immer, weil der
+      // technische Feed-/Dimensionsname im Modell abweicht. Klarer Hinweis
+      // statt einer leeren/kaputten Ansicht.
+      const validPer = this._rows.some(r => r.periode != null && r.periode !== "");
+      if (!validPer) {
+        state.hidden = false;
+        state.innerHTML = `<div class="state-icon">🔗</div>
+          <div class="state-txt">${this._rows.length} Zeilen empfangen, aber keine Periode erkannt.<br>
+          Prüfe die Zuweisung des Feeds <b>dimension_periode</b> (Kalenderwoche) im Builder.</div>`;
         dash.innerHTML = ""; this._stopLoaderSteps(); return;
       }
       state.hidden = true;
