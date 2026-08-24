@@ -470,6 +470,100 @@
     return (a < b ? -1 : a > b ? 1 : 0) * richtung;
   };
 
+  // ── Datenmodell-Diagnose ─────────────────────────────────────────────────
+  //
+  //  Prüft die eingehenden BW-Rows gegen die im Widget erwarteten Feed-IDs.
+  //  Unterscheidet zwei grundverschiedene Fehlerbilder, die beide zu leeren
+  //  oder falschen Kennzahlen führen, aber unterschiedliche Ursachen haben:
+  //
+  //    „FELD FEHLT“   – der Objekt-Key (`dimension_xyz_0` bzw. ohne Suffix)
+  //                     kommt in KEINER Zeile vor. Das Feed wurde in der
+  //                     Story nicht (mehr) gebunden, umbenannt, oder das
+  //                     BW-Merkmal/-Kennzahl wurde aus der Query entfernt.
+  //    „IMMER LEER“   – der Key ist vorhanden, aber der Wert ist in jeder
+  //                     Zeile ein BW-Nullwert (#, leer, @NullMember …).
+  //                     Kann echtes Fehlen der Daten sein (z. B. kein Ist-
+  //                     Wert im Zeitraum) oder ein kaputtes Mapping in der
+  //                     Query — beides ist von außen nicht unterscheidbar,
+  //                     daher nur als Hinweis, nicht als Fehler markiert.
+  //
+  //  Die für die Auswertung KRITISCHEN Felder (Anker- und Prozess-Zeitstempel,
+  //  Mengen) sind separat markiert, weil ihr Fehlen die Kennzahlen unmittelbar
+  //  leer/„n. b.“ macht.
+
+  const DIAG_FELDER = [
+    { feld: 'TE-Nummer',            keys: ['dimension_te'],             kritisch: true  },
+    { feld: 'Externe TE',           keys: ['dimension_te_ext'],         kritisch: false },
+    { feld: 'Ladestelle',           keys: ['dimension_ladestelle'],     kritisch: false },
+    { feld: 'Lieferant',            keys: ['dimension_lieferant_name'], kritisch: false },
+    { feld: 'Geplanter Start',      keys: ['dimension_geplant_start'],  kritisch: true  },
+    { feld: 'Ankunft',              keys: ['dimension_ts_ankunft'],     kritisch: true  },
+    { feld: 'Entladen Ende',        keys: ['dimension_ts_entladen_ende'], kritisch: false },
+    { feld: 'WE-Buchung',           keys: ['dimension_ts_we_buchung'],  kritisch: false },
+    { feld: 'Einlagerung',          keys: ['dimension_ts_einlagerung'], kritisch: true  },
+    { feld: 'Produktnummer',        keys: ['dimension_produkt_nr'],     kritisch: false },
+    { feld: 'Menge (Ist)',          keys: ['value_menge'],              kritisch: true  },
+    { feld: 'Menge (Soll)',         keys: ['value_menge_soll'],         kritisch: true  },
+  ];
+
+  // Prüft, ob der Objekt-Key für eines der Feld-Aliase überhaupt existiert
+  // (unabhängig vom Wert — auch `null` zählt als "vorhanden").
+  function keyExistiert(row, keys) {
+    return keys.some(key => (`${key}_0` in row) || (key in row));
+  }
+
+  // Extrahiert einen Rohwert unabhängig vom Feldtyp (Dimension/Zeitstempel/
+  // Kennzahl), nur um zu prüfen, ob überhaupt etwas Auswertbares drinsteht.
+  function irgendeinWert(row, keys) {
+    const dim = readDim(row, ...keys);
+    if (dim != null) return dim;
+    const ts = readTs(row, ...keys);
+    if (ts != null) return ts;
+    return readVal(row, ...keys);
+  }
+
+  // Läuft über eine Stichprobe der Rows und baut die Diagnosetabelle.
+  // Auf sehr große Datenmengen gedeckelt (Diagnose, nicht die eigentliche
+  // Verarbeitung — die läuft in parseRows() über ALLE Rows).
+  function diagnoseDatenmodell(rows) {
+    if (!Array.isArray(rows) || rows.length === 0) return null;
+    const MAX_STICHPROBE = 2000;
+    const stichprobe = rows.length > MAX_STICHPROBE ? rows.slice(0, MAX_STICHPROBE) : rows;
+
+    const felder = DIAG_FELDER.map(f => {
+      let vorhanden = 0, mitWert = 0;
+      for (const row of stichprobe) {
+        if (!row || typeof row !== 'object') continue;
+        if (keyExistiert(row, f.keys)) {
+          vorhanden++;
+          if (irgendeinWert(row, f.keys) != null) mitWert++;
+        }
+      }
+      let status;
+      if (vorhanden === 0)      status = 'FELD FEHLT IM PAYLOAD';
+      else if (mitWert === 0)   status = 'IMMER LEER';
+      else if (mitWert < vorhanden * 0.5) status = 'TEILWEISE LEER';
+      else                       status = 'OK';
+      return { ...f, gesamt: stichprobe.length, vorhanden, mitWert, status };
+    });
+
+    // Zeilen ohne lesbare TE-Nummer würden von parseRows() stillschweigend
+    // übersprungen — hier separat sichtbar machen.
+    let ohneTeNummer = 0;
+    for (const row of stichprobe) {
+      if (!row || typeof row !== 'object') { ohneTeNummer++; continue; }
+      if (readDim(row, 'dimension_te', 'TE', 'VBELN', 'te_nr') == null) ohneTeNummer++;
+    }
+
+    return {
+      rowsGesamt:     rows.length,
+      rowsGeprueft:   stichprobe.length,
+      ohneTeNummer,
+      felder,
+      kritischeProbleme: felder.filter(f => f.kritisch && f.status !== 'OK'),
+    };
+  }
+
   // ── Daten-Parser ─────────────────────────────────────────────────────────
   //
   // Wandelt flache BW-Rows (eine Zeile pro Produktposition pro TE) in ein
@@ -2854,6 +2948,7 @@
       this._iid            = Math.random().toString(36).slice(2, 7);
       this._tStart         = (typeof performance !== 'undefined' ? performance.now() : Date.now());
       this._dsAufrufe      = 0;   // Zähler: wie oft hat SAC myDataSource gesetzt
+      this._designMode     = false; // aus onCustomWidgetBeforeUpdate/AfterUpdate übernommen
       this._watchdogTimer  = null;
       this._watchdogVersuch = 0;
 
@@ -2955,9 +3050,11 @@
           'warn',
         );
       } else {
+        const fehlertext = this._extraktFehlertext(this._dataBinding);
         this._log(
           `Watchdog (${this._watchdogVersuch}) — ${this._seitStart()}ms seit dem Einhängen, `
-          + `myDataSource wurde ${this._dsAufrufe}× aufgerufen, letzter state='${letzterState}'. `
+          + `myDataSource wurde ${this._dsAufrufe}× aufgerufen, letzter state='${letzterState}'`
+          + (fehlertext ? `, Meldung: "${fehlertext}"` : '') + `. `
           + `Es liegt also noch nie ein state='success' mit Daten vor.`,
           'warn',
           this._dataBinding,
@@ -4116,18 +4213,46 @@
     //   Fall "nur Ladeanimation, nichts in der Konsole" nicht von "SAC ruft
     //   den Setter gar nicht erst auf" unterscheidbar machte.
 
+    // Zieht aus dataBinding eine lesbare Fehlermeldung, unabhängig davon, in
+    // welcher Form SAC sie liefert (message als String, messages als Array
+    // von Strings oder von Objekten mit .text/.message/.detail). Ohne diese
+    // Extraktion bleibt im Log nur ein eingeklapptes Objekt sichtbar, das man
+    // erst manuell aufklappen müsste — hier steht der Text direkt in der Zeile.
+    _extraktFehlertext(dataBinding) {
+      if (!dataBinding) return null;
+      const teileZuText = (v) => {
+        if (v == null) return null;
+        if (typeof v === 'string') return v;
+        if (typeof v === 'object') return v.text ?? v.message ?? v.detail ?? v.description ?? null;
+        return String(v);
+      };
+      if (typeof dataBinding.message === 'string' && dataBinding.message) return dataBinding.message;
+      if (Array.isArray(dataBinding.messages) && dataBinding.messages.length) {
+        return dataBinding.messages.map(teileZuText).filter(Boolean).join(' | ');
+      }
+      if (dataBinding.error != null) return teileZuText(dataBinding.error);
+      return null;
+    }
+
     set myDataSource(dataBinding) {
       this._dataBinding = dataBinding;
       this._dsAufrufe++;
 
       const state = dataBinding?.state ?? null;
       const anzahlRows = Array.isArray(dataBinding?.data) ? dataBinding.data.length : null;
+      const fehlertext = this._extraktFehlertext(dataBinding);
+      const modusTag = this._designMode ? '[Design-Modus] ' : '';
       this._log(
-        `myDataSource gesetzt (Aufruf #${this._dsAufrufe}) — state='${state}'`
-        + (anzahlRows != null ? `, ${anzahlRows} Rows` : ', keine Datenarray vorhanden'),
+        `${modusTag}myDataSource gesetzt (Aufruf #${this._dsAufrufe}) — state='${state}'`
+        + (anzahlRows != null ? `, ${anzahlRows} Rows` : ', keine Datenarray vorhanden')
+        + (fehlertext ? ` — Meldung: "${fehlertext}"` : ''),
         state === 'success' ? 'info' : 'warn',
-        { state, hatDataArray: Array.isArray(dataBinding?.data), anzahlRows,
-          objektSchluessel: dataBinding ? Object.keys(dataBinding) : null },
+        state === 'success'
+          // Im Erfolgsfall NICHT das komplette dataBinding samt Datenarray
+          // mitloggen — das kann bei vielen Rows unnötig groß werden.
+          ? { state, anzahlRows }
+          : { state, hatDataArray: Array.isArray(dataBinding?.data), anzahlRows, fehlertext,
+              objektSchluessel: dataBinding ? Object.keys(dataBinding) : null, dataBindingVoll: dataBinding },
       );
 
       if (!dataBinding) {
@@ -4140,13 +4265,25 @@
         // Typische Zwischenzustände von SAC: 'loading', 'booting', 'error',
         // 'incomplete' o.ä. — je nach dem, was hier ankommt, lässt sich die
         // CORS-Störung von einem reinen Ladezustand unterscheiden.
-        this._log(`myDataSource: state='${state}' ist kein Erfolg — Ladeanimation bleibt aktiv`, 'warn');
+        this._log(
+          `myDataSource: state='${state}' ist kein Erfolg — Ladeanimation bleibt aktiv`
+          + (fehlertext ? ` (Meldung: "${fehlertext}")` : ''),
+          'warn',
+        );
         this._showLoading();
         return;
       }
 
       const rows = Array.isArray(dataBinding.data) ? dataBinding.data : [];
       this._log(`myDataSource: Erfolg — ${rows.length} Rows werden geparst`);
+
+      // ── Datenmodell-Diagnose ──────────────────────────────────────────
+      // Läuft VOR dem eigentlichen Parsen und prüft, ob die von diesem
+      // Widget erwarteten BW-Felder überhaupt in den Rows ankommen. Zeigt
+      // insbesondere den Unterschied zwischen "Feld fehlt komplett im
+      // Payload" (Feed umbenannt/entfernt/nicht gebunden) und "Feld ist
+      // da, aber in jeder Zeile leer" (evtl. echtes Fehlen der Daten).
+      this._logDatenmodellDiagnose(rows);
 
       const tParseStart = this._seitStart();
       try {
@@ -4162,10 +4299,71 @@
       }
       this._log(`Parsing abgeschlossen in ${this._seitStart() - tParseStart}ms — ${this._teMap.size} TEs`);
 
+      // Rows kamen an, aber keine einzige TE hat es durch den Parser
+      // geschafft → fast immer ein Datenmodell-Problem, nicht "keine Daten".
+      if (rows.length > 0 && this._teMap.size === 0) {
+        this._log(
+          `${rows.length} Rows empfangen, aber 0 TEs geparst — sehr wahrscheinlich ein `
+          + `Datenmodell-Problem (siehe Diagnosetabelle oben), nicht ein leerer Zeitraum.`,
+          'warn',
+        );
+      }
+
       // Slider-Domäne hängt an den Daten → nach jedem Laden neu bestimmen
       this._syncSlider();
       this._watchdogStop();
       this._render();
+    }
+
+    // Formatiert und protokolliert das Ergebnis von diagnoseDatenmodell().
+    // Nutzt console.table für die Feldübersicht, wenn verfügbar — das macht
+    // "welche Spalte fehlt" auf einen Blick sichtbar, auch bei vielen Feldern.
+    _logDatenmodellDiagnose(rows) {
+      const diag = diagnoseDatenmodell(rows);
+      if (!diag) return;
+
+      if (diag.ohneTeNummer > 0) {
+        this._log(
+          `${diag.ohneTeNummer} von ${diag.rowsGeprueft} geprüften Rows haben keine lesbare `
+          + `TE-Nummer und werden beim Parsen übersprungen.`,
+          diag.ohneTeNummer === diag.rowsGeprueft ? 'error' : 'warn',
+        );
+      }
+
+      // Rohe Keys der ersten Zeile — hilft beim Abgleich "wie heißt das Feld
+      // WIRKLICH im Payload", z.B. wenn sich ein _0-Suffix geändert hat oder
+      // ein Feed umbenannt wurde.
+      if (rows[0] && typeof rows[0] === 'object') {
+        this._log('Feld-Keys der ersten Row (Rohdaten):', 'info', Object.keys(rows[0]).sort());
+      }
+
+      const tabelle = diag.felder.map(f => ({
+        Feld:            f.feld,
+        Kritisch:        f.kritisch ? 'ja' : '',
+        'Im Payload':    `${f.vorhanden}/${diag.rowsGeprueft}`,
+        'Mit Wert':      `${f.mitWert}/${diag.rowsGeprueft}`,
+        Status:          f.status,
+      }));
+
+      if (typeof console.table === 'function') {
+        this._log(`Datenmodell-Diagnose (${diag.rowsGeprueft} von ${diag.rowsGesamt} Rows geprüft):`);
+        console.table(tabelle);
+      } else {
+        this._log('Datenmodell-Diagnose:', 'info', tabelle);
+      }
+
+      if (diag.kritischeProbleme.length > 0) {
+        const liste = diag.kritischeProbleme.map(f => `${f.feld} (${f.status})`).join(', ');
+        this._log(
+          `Kritische Felder mit Problemen — diese wirken sich direkt auf die Kennzahlen aus: ${liste}. `
+          + `"FELD FEHLT IM PAYLOAD" deutet auf ein geändertes/entferntes BW-Feed oder eine nicht `
+          + `mehr passende Feldbindung in der Story hin; "IMMER LEER" kann echtes Fehlen der Daten `
+          + `im Zeitraum sein oder ein kaputtes Mapping in der Query.`,
+          'warn',
+        );
+      } else {
+        this._log('Datenmodell-Diagnose: keine kritischen Felder auffällig.');
+      }
     }
 
     get myDataSource() { return this._dataBinding; }
@@ -4224,11 +4422,17 @@
     onCustomWidgetBeforeUpdate(changedProperties) {
       this._log('onCustomWidgetBeforeUpdate', 'info', changedProperties);
       this._changed = changedProperties ?? {};
+      // designMode/mobileMode kommen oft schon hier mit — für den Kontext-Tag
+      // in den myDataSource-Logs so früh wie möglich übernehmen.
+      if (changedProperties && 'designMode' in changedProperties) {
+        this._designMode = !!changedProperties.designMode;
+      }
     }
 
     onCustomWidgetAfterUpdate(changedProperties) {
       const c = changedProperties ?? this._changed ?? {};
       this._log('onCustomWidgetAfterUpdate — geänderte Properties:', 'info', c);
+      if ('designMode' in c) this._designMode = !!c.designMode;
       if ('theme' in c)                     this.theme = c.theme;
       if ('defaultZeitraum' in c)           this.defaultZeitraum = c.defaultZeitraum;
       if ('puenktlichkeitToleranzMin' in c) this.puenktlichkeitToleranzMin = c.puenktlichkeitToleranzMin;
