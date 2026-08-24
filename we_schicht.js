@@ -2848,6 +2848,17 @@
       this._shadow = this.attachShadow({ mode: 'open' });
       this._shadow.appendChild(template.content.cloneNode(true));
 
+      // ── Diagnose ──────────────────────────────────────────────────────
+      // Kurze Instanz-ID, damit sich bei mehreren Widget-Instanzen auf einer
+      // Story die Konsolen-Logs eindeutig zuordnen lassen.
+      this._iid            = Math.random().toString(36).slice(2, 7);
+      this._tStart         = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+      this._dsAufrufe      = 0;   // Zähler: wie oft hat SAC myDataSource gesetzt
+      this._watchdogTimer  = null;
+      this._watchdogVersuch = 0;
+
+      this._log('Widget-Instanz erstellt (constructor)');
+
       // Interner State
       this._teMap       = new Map();    // { teNr → TEObjekt }
       this._activeTE    = null;         // aktuell im Detail angezeigte TE-Nummer
@@ -2876,17 +2887,85 @@
     }
 
     connectedCallback() {
+      this._log('connectedCallback — Widget wird ins DOM eingehängt');
       this._bindEvents();
       this._applyTheme();
       this._syncSlider();
       this._showLoading();
+      this._watchdogStart();
     }
 
     disconnectedCallback() {
+      this._log('disconnectedCallback — Widget wird aus dem DOM entfernt');
       this._ac.abort();
       this._stopLoaderSteps();
+      this._watchdogStop();
       clearTimeout(this._suchTimer);
       clearTimeout(this._sliderTimer);
+    }
+
+    // ── Diagnose-Hilfsmethoden ───────────────────────────────────────────
+    //
+    //  Einheitliches Logformat mit Instanz-ID und verstrichener Zeit seit dem
+    //  Erstellen des Widgets — das macht sichtbar, WANN im Ladeprozess etwas
+    //  passiert (oder eben nicht passiert). Läuft immer über console.*, auch
+    //  im Erfolgsfall, damit bei Störungen die vollständige Abfolge sichtbar
+    //  ist und nicht nur der Fehlerfall.
+
+    _seitStart() {
+      const jetzt = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+      return Math.round(jetzt - this._tStart);
+    }
+
+    _log(nachricht, ebene = 'info', daten) {
+      const prefix = `[WE-Analyse#${this._iid} +${this._seitStart()}ms]`;
+      if (daten !== undefined) console[ebene](prefix, nachricht, daten);
+      else                      console[ebene](prefix, nachricht);
+    }
+
+    // Watchdog: meldet sich, wenn nach dem Einhängen zu lange keine Daten
+    // ankommen. Genau der Fall aus der Fehlerbeschreibung — "nur die
+    // Ladeanimation, Konsole leer" — erzeugt dadurch trotzdem einen
+    // Log-Eintrag, auch wenn SAC selbst nie einen Fehler meldet.
+    _watchdogStart() {
+      this._watchdogStop();
+      this._watchdogVersuch = 0;
+      this._watchdogTimer = setInterval(() => this._watchdogCheck(), 15000);
+    }
+
+    _watchdogStop() {
+      if (this._watchdogTimer) {
+        clearInterval(this._watchdogTimer);
+        this._watchdogTimer = null;
+      }
+    }
+
+    _watchdogCheck() {
+      if (this._teMap.size > 0) { this._watchdogStop(); return; }
+      this._watchdogVersuch++;
+
+      const letzterState = this._dataBinding?.state ?? null;
+      if (this._dsAufrufe === 0) {
+        this._log(
+          `Watchdog (${this._watchdogVersuch}) — ${this._seitStart()}ms seit dem Einhängen, `
+          + `myDataSource wurde bisher NICHT aufgerufen. SAC hat die Datenbindung noch nicht `
+          + `zugestellt — mögliche Ursachen: Story lädt die Datenquelle noch, die BW-Live-`
+          + `Verbindung hängt (z. B. CORS-Fehler beim InA-Aufruf), oder das Feld-Mapping der `
+          + `Datenbindung ist leer.`,
+          'warn',
+        );
+      } else {
+        this._log(
+          `Watchdog (${this._watchdogVersuch}) — ${this._seitStart()}ms seit dem Einhängen, `
+          + `myDataSource wurde ${this._dsAufrufe}× aufgerufen, letzter state='${letzterState}'. `
+          + `Es liegt also noch nie ein state='success' mit Daten vor.`,
+          'warn',
+          this._dataBinding,
+        );
+      }
+
+      // Nach 4 Versuchen (~60s) nicht weiter spammen — die Information steht.
+      if (this._watchdogVersuch >= 4) this._watchdogStop();
     }
 
     // ── Hilfsmethode: Element im Shadow DOM finden ───────────────────────
@@ -3020,6 +3099,7 @@
     }
 
     _hideLoading() {
+      this._log('Ladezustand beendet — Daten sind da, Rendering beginnt');
       this._$('state-loading')?.classList.add('hidden');
       this._stopLoaderSteps();
     }
@@ -3046,6 +3126,7 @@
     }
 
     _showEmpty(text) {
+      this._log(`Leerzustand angezeigt: "${text ?? ''}"`, 'warn');
       const el = this._$('state-empty-text');
       if (el && text) el.textContent = text;
       this._$('state-empty')?.classList.remove('hidden');
@@ -3058,9 +3139,11 @@
     }
 
     _doRefresh() {
+      this._log('Aktualisieren-Button geklickt — myDataSource wird erneut zugewiesen');
       const icon = this._$('refresh-icon');
       icon?.classList.add('spinning');
       if (this._dataBinding) this.myDataSource = this._dataBinding;
+      else this._log('Aktualisieren: keine bisherige Datenbindung vorhanden (_dataBinding ist leer)', 'warn');
       setTimeout(() => icon?.classList.remove('spinning'), 500);
     }
 
@@ -4000,6 +4083,7 @@
     // ── Gesamt-Render ─────────────────────────────────────────────────────
 
     _render() {
+      this._log(`_render() — ${this._teMap.size} TEs im internen State`);
       this._hideLoading();
 
       if (this._teMap.size === 0) {
@@ -4011,6 +4095,7 @@
       // Steht die aktuell geöffnete TE nach dem Neuladen nicht mehr zur
       // Verfügung, fällt die Ansicht zurück auf die Übersicht.
       if (this._activeTE && !this._teMap.has(this._activeTE)) {
+        this._log(`Bisher offene TE ${this._activeTE} ist nach dem Reload nicht mehr vorhanden — zurück zur Übersicht`, 'warn');
         this._activeTE = null;
         this._switchView('uebersicht');
       }
@@ -4019,38 +4104,67 @@
 
       // Detailsicht offen? Dann mit den frischen Daten neu aufbauen.
       if (this._activeTE) this._renderDetail(this._activeTE);
+
+      this._log(`_render() abgeschlossen (gesamt ${this._seitStart()}ms seit dem Einhängen)`);
     }
 
     // ── SAC DataSource-Setter ─────────────────────────────────────────────
     //   Einstiegspunkt für die BW-Datenbindung — SAC ruft diesen auf, sobald
-    //   neue Daten verfügbar sind.
+    //   neue Daten verfügbar sind. Wird HIER protokolliert, bei JEDEM Aufruf
+    //   und JEDEM state — nicht nur im Erfolgsfall. Genau das war die Lücke:
+    //   bisher blieb die Konsole bei jedem state ≠ 'success' stumm, was den
+    //   Fall "nur Ladeanimation, nichts in der Konsole" nicht von "SAC ruft
+    //   den Setter gar nicht erst auf" unterscheidbar machte.
 
     set myDataSource(dataBinding) {
       this._dataBinding = dataBinding;
+      this._dsAufrufe++;
 
-      if (!dataBinding || dataBinding.state !== 'success') {
+      const state = dataBinding?.state ?? null;
+      const anzahlRows = Array.isArray(dataBinding?.data) ? dataBinding.data.length : null;
+      this._log(
+        `myDataSource gesetzt (Aufruf #${this._dsAufrufe}) — state='${state}'`
+        + (anzahlRows != null ? `, ${anzahlRows} Rows` : ', keine Datenarray vorhanden'),
+        state === 'success' ? 'info' : 'warn',
+        { state, hatDataArray: Array.isArray(dataBinding?.data), anzahlRows,
+          objektSchluessel: dataBinding ? Object.keys(dataBinding) : null },
+      );
+
+      if (!dataBinding) {
+        this._log('myDataSource: dataBinding ist null/undefined — SAC hat (noch) keine Bindung übergeben', 'warn');
+        this._showLoading();
+        return;
+      }
+
+      if (dataBinding.state !== 'success') {
+        // Typische Zwischenzustände von SAC: 'loading', 'booting', 'error',
+        // 'incomplete' o.ä. — je nach dem, was hier ankommt, lässt sich die
+        // CORS-Störung von einem reinen Ladezustand unterscheiden.
+        this._log(`myDataSource: state='${state}' ist kein Erfolg — Ladeanimation bleibt aktiv`, 'warn');
         this._showLoading();
         return;
       }
 
       const rows = Array.isArray(dataBinding.data) ? dataBinding.data : [];
-      console.info(`[WE-Analyse] myDataSource: ${rows.length} Rows empfangen`);
+      this._log(`myDataSource: Erfolg — ${rows.length} Rows werden geparst`);
 
+      const tParseStart = this._seitStart();
       try {
         this._teMap = parseRows(rows, this._cfg);
       } catch (err) {
         // Ein Parserfehler darf das Widget nicht in einem Dauer-Ladezustand
         // hinterlassen — lieber sichtbar leer als endlos drehend.
-        console.error('[WE-Analyse] Fehler beim Parsen der Daten', err);
+        this._log('Fehler beim Parsen der Daten', 'error', err);
         this._teMap = new Map();
         this._hideLoading();
         this._showEmpty('Daten konnten nicht ausgewertet werden');
         return;
       }
+      this._log(`Parsing abgeschlossen in ${this._seitStart() - tParseStart}ms — ${this._teMap.size} TEs`);
 
-      console.info(`[WE-Analyse] ${this._teMap.size} TEs geparst`);
       // Slider-Domäne hängt an den Daten → nach jedem Laden neu bestimmen
       this._syncSlider();
+      this._watchdogStop();
       this._render();
     }
 
@@ -4108,11 +4222,13 @@
 
     // SAC-Lifecycle: wird bei jeder Property-Änderung aufgerufen.
     onCustomWidgetBeforeUpdate(changedProperties) {
+      this._log('onCustomWidgetBeforeUpdate', 'info', changedProperties);
       this._changed = changedProperties ?? {};
     }
 
     onCustomWidgetAfterUpdate(changedProperties) {
       const c = changedProperties ?? this._changed ?? {};
+      this._log('onCustomWidgetAfterUpdate — geänderte Properties:', 'info', c);
       if ('theme' in c)                     this.theme = c.theme;
       if ('defaultZeitraum' in c)           this.defaultZeitraum = c.defaultZeitraum;
       if ('puenktlichkeitToleranzMin' in c) this.puenktlichkeitToleranzMin = c.puenktlichkeitToleranzMin;
@@ -4122,7 +4238,9 @@
     }
 
     onCustomWidgetDestroy() {
+      this._log('onCustomWidgetDestroy');
       this._ac.abort();
+      this._watchdogStop();
       clearTimeout(this._suchTimer);
     }
 
