@@ -364,6 +364,9 @@
     .target-note{ margin-top:8px; padding-top:8px; border-top:1px solid var(--border); font-size:9.5px;
       color:var(--muted); line-height:1.5;}
     /* Begriffsverzeichnis */
+    /* Wichtig für SAC/Shadow-DOM: eigene display-Regeln dürfen das native
+       hidden-Attribut nicht übersteuern. Standardzustand ist geschlossen. */
+    .glossary-panel[hidden], .glossary-backdrop[hidden]{ display:none !important; }
     .glossary-backdrop{ position:fixed; inset:0; z-index:9070; background:rgba(0,0,0,.5);}
     .glossary-panel{ position:fixed; z-index:9080; inset:50% auto auto 50%; transform:translate(-50%,-50%);
       width:min(520px,92vw); max-height:min(82vh,760px); display:flex; flex-direction:column;
@@ -579,7 +582,7 @@
           <div class="ctrl">
             <button id="btnExport" title="Befunde kopieren">⧉ Export</button>
             <button id="btnTargets" title="Zielwerte konfigurieren" aria-expanded="false">◎ Ziele</button>
-            <button id="btnGlossary" title="Begriffe &amp; Berechnungen">? Begriffe</button>
+            <button id="btnGlossary" title="Begriffe &amp; Berechnungen" aria-expanded="false" aria-controls="glossaryPanel">? Begriffe</button>
             <button id="btnTheme" title="Hell/Dunkel">◐</button>
           </div>
         </div>
@@ -649,6 +652,13 @@
       this._scrubIdx = null;      // Scrubber-Position (Periodenindex) oder null
       this._playing = false;
       this._applyTheme();
+      // Begriffsfenster muss beim Start immer geschlossen sein.
+      const glossaryPanel = this._sh.getElementById("glossaryPanel");
+      const glossaryBackdrop = this._sh.getElementById("glossaryBackdrop");
+      if (glossaryPanel) glossaryPanel.hidden = true;
+      if (glossaryBackdrop) glossaryBackdrop.hidden = true;
+      const glossaryBtn = this._sh.getElementById("btnGlossary");
+      if (glossaryBtn) glossaryBtn.setAttribute("aria-expanded", "false");
       this._wire();
       this._startLoaderSteps(); // Ladeanimation läuft ab dem ersten Moment
     }
@@ -933,11 +943,17 @@
           : `<div class="glossary-empty">Kein Treffer für „${esc(filter)}“.</div>`;
       };
       const openGlossary = () => {
-        $("glossaryPanel").hidden = false; $("glossaryBackdrop").hidden = false;
+        const panel = $("glossaryPanel"), backdrop = $("glossaryBackdrop"), btn = $("btnGlossary");
+        panel.hidden = false; backdrop.hidden = false;
+        btn.setAttribute("aria-expanded", "true");
         $("glossarySearch").value = ""; renderGlossary("");
-        $("glossarySearch").focus();
+        requestAnimationFrame(() => $("glossarySearch").focus());
       };
-      const closeGlossary = () => { $("glossaryPanel").hidden = true; $("glossaryBackdrop").hidden = true; };
+      const closeGlossary = () => {
+        const panel = $("glossaryPanel"), backdrop = $("glossaryBackdrop"), btn = $("btnGlossary");
+        panel.hidden = true; backdrop.hidden = true;
+        btn.setAttribute("aria-expanded", "false");
+      };
       $("btnGlossary").addEventListener("click", openGlossary);
       $("glossaryClose").addEventListener("click", closeGlossary);
       $("glossaryBackdrop").addEventListener("click", closeGlossary);
@@ -1244,15 +1260,18 @@
         const tile = document.createElement("div");
         tile.className = "tile" + (m.key === this._selMetric ? " sel" : "");
         tile.dataset.key = m.key;
+        const mi = METRIC_INFO[m.key] || {};
+        const infoTitle = [mi.meaning || "Kennzahl des Cockpits.", mi.formula ? `Formel: ${mi.formula}` : ""]
+          .filter(Boolean).join(" · ");
         tile.innerHTML = `
           <div class="m-lbl">${m.label}<button class="tile-info" data-key="${m.key}" type="button"
-            aria-label="Kennzahl ${m.label} erklären" title="Kennzahl erklären">i</button></div>
+            aria-label="Kennzahl ${m.label} erklären" title="${esc(infoTitle)}">i</button></div>
           <div class="m-val"><b data-count="${last}">${m.pct ? "0.0" : "0"}</b><span class="u">${m.unit}</span>
             <span class="m-delta ${good?"up":"down"}">${rel>=0?"▲":"▼"} ${Math.abs(rel*100).toFixed(0)}%</span></div>
           <div class="m-sub">${slaHtml}${yoyHtml}</div>
           ${this._sparkSvg(pts, m, i)}`;
         tile.addEventListener("click", (e) => {
-          if (e.target.closest(".tile-info")) return; // Info-Klick öffnet nur das Glossar, nicht die Detailansicht
+          if (e.target.closest(".tile-info")) return; // Info-Klick darf weder Glossar noch Detailansicht öffnen
           this._selMetric = m.key; this._render();
         });
         grid.appendChild(tile);
@@ -1261,19 +1280,13 @@
         this._animateDraw(tile.querySelector("path.line"), tile.querySelector("circle.head"));
         this._wireSparkHover(tile, pts, m);
       });
-      // Einheitliches Infobutton-System: jeder "i"-Button auf einer Kachel
-      // öffnet dasselbe Begriffsverzeichnis, vorgefiltert auf die Kennzahl —
-      // eine Quelle für Erklärungen, kein zweites, potenziell abweichendes Popup.
+      // Das große Fenster „Begriffe & Berechnungen“ wird ausschließlich über
+      // den Header-Button „Begriffe“ geöffnet. Die kleinen i-Buttons liefern
+      // ihre Kurzinformation über den title/Tooltip und dürfen das Glossar nicht öffnen.
       grid.querySelectorAll(".tile-info").forEach((btn) => {
         btn.addEventListener("click", (e) => {
+          e.preventDefault();
           e.stopPropagation();
-          const m = METRICS.find(x => x.key === btn.dataset.key);
-          const search = this._sh.getElementById("glossarySearch");
-          const panel = this._sh.getElementById("glossaryPanel");
-          const backdrop = this._sh.getElementById("glossaryBackdrop");
-          panel.hidden = false; backdrop.hidden = false;
-          search.value = m ? m.label : "";
-          search.dispatchEvent(new Event("input"));
         });
       });
     }
