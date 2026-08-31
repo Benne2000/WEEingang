@@ -1,5 +1,5 @@
 /* =========================================================================
- * WE Strategie-Cockpit – SAC Custom Widget (v0.19.0) · Entwickler: Benne
+ * WE Strategie-Cockpit – SAC Custom Widget (v0.19.1-fixed) · Entwickler: Benne
  * Strategische Langzeitsicht auf den Wareneingangsprozess.
  * Erwartet voraggregierte Perioden-Daten (je KW/Monat × Segment), wie sie
  * BW über SUM/MIN/MAX/COUNT liefert. Kein Median (BW-Einschränkung) — das
@@ -11,11 +11,11 @@
 
   // ── Kennzahl-Definitionen: was in den Kacheln als Trend läuft ──────────
   const METRICS = [
-    { key: "dwell_avg",     label: "Ø Standzeit",      unit: "h",  band: ["dwell_min","dwell_max"],     lowerBetter: true,  targetProp: "targetDwell" },
-    { key: "putaway_avg",   label: "Ø Einlagerung",    unit: "h",  band: ["putaway_min","putaway_max"], lowerBetter: true,  targetProp: "targetPutaway" },
-    { key: "otif_quote",    label: "OTIF-Quote",       unit: "%",  pct: true,                            lowerBetter: false, targetProp: "targetOtif" },
-    { key: "puenkt_quote",  label: "Pünktlichkeit",    unit: "%",  pct: true,                            lowerBetter: false, targetProp: "targetPuenkt" },
-    { key: "wait_gate_avg", label: "Ø Wartezeit Tor",  unit: "h",  band: ["wait_gate_min","wait_gate_max"], lowerBetter: true, targetProp: "targetWaitGate" },
+    { key: "dwell_avg",     label: "Ø Standzeit",      unit: "h",  band: ["dwell_min","dwell_max"],     lowerBetter: true,  targetProp: "targetDwell", weightKey: "dwell_n" },
+    { key: "putaway_avg",   label: "Ø Einlagerung",    unit: "h",  band: ["putaway_min","putaway_max"], lowerBetter: true,  targetProp: "targetPutaway", weightKey: "putaway_n" },
+    { key: "otif_quote",    label: "OTIF-Quote",       unit: "%",  pct: true,                            lowerBetter: false, targetProp: "targetOtif", weightKey: "otif_n" },
+    { key: "puenkt_quote",  label: "Pünktlichkeit",    unit: "%",  pct: true,                            lowerBetter: false, targetProp: "targetPuenkt", weightKey: "puenkt_n" },
+    { key: "wait_gate_avg", label: "Ø Wartezeit bis Andocken", unit: "h", band: ["wait_gate_min","wait_gate_max"], lowerBetter: true, targetProp: "targetWaitGate", weightKey: "wait_gate_n" },
     { key: "sum_gewicht_t", label: "Durchsatz Gewicht",unit: "t",  sum: true,                            lowerBetter: false },
     { key: "sum_wert_keur", label: "Warenwert",        unit: "k€", sum: true,                            lowerBetter: false },
     { key: "anzahl_pos",    label: "Positionen",       unit: "",   sum: true,                            lowerBetter: false },
@@ -31,7 +31,7 @@
     putaway_avg: { level:"Position", meaning:"Zeit von der WE-Buchung einer Position bis zu deren Einlagerung/Fertigstellung.", formula:"Fertigstellung/Einlagerung − WE-Buchung", aggregation:"Mittelwert über alle Positionen." },
     otif_quote: { level:"BW-Kennzahl", meaning:"On Time In Full. Fachliche Definition und Bewertung stammt aus BW.", formula:"BW-Kennzahl, nicht lokal neu berechnet", aggregation:"Wie von BW geliefert." },
     puenkt_quote: { level:"BW / TE", meaning:"Anteil der TEs mit BW-Kennzeichen P (pünktlich).", formula:"P / (P + N) × 100", aggregation:"Über alle bewerteten TEs der Periode/Ladestelle." },
-    wait_gate_avg: { level:"TE", meaning:"Zeit vom Eintreffen der TE bis zum Andocken am Tor.", formula:"Andocken − Ankunft am Kontrollpunkt", aggregation:"Mittelwert über alle TEs." },
+    wait_gate_avg: { level:"TE", meaning:"Zeit vom Eintreffen der TE am Kontrollpunkt bis zum Andocken am Tor.", formula:"Andocken − Ankunft am Kontrollpunkt", aggregation:"Mittelwert über alle TEs." },
     sum_gewicht_t: { level:"Position", meaning:"Summe des angelieferten Gewichts.", formula:"Σ Gewicht je Position", aggregation:"Summe über den Zeitraum/Ladestelle." },
     sum_wert_keur: { level:"Position", meaning:"Summe des Warenwerts der Anlieferungen.", formula:"Σ Wert je Position", aggregation:"Summe über den Zeitraum/Ladestelle." },
     anzahl_pos: { level:"Position", meaning:"Anzahl der angelieferten Positionen.", formula:"Anzahl Positionszeilen", aggregation:"Summe über den Zeitraum/Ladestelle." },
@@ -109,9 +109,26 @@
   // Phasen für die Engpass-Wanderung (Zusammensetzung der Standzeit)
   const PHASE_KEYS = ["wait_gate", "reaction", "unload", "booking", "putaway"];
   const PHASE_LABEL = {
-    wait_gate: "Wartezeit Tor", reaction: "Reaktionszeit", unload: "Entladedauer",
+    wait_gate: "Wartezeit bis Andocken", reaction: "Reaktionszeit", unload: "Entladedauer",
     booking: "Buchungsverzug", putaway: "Einlagerung",
   };
+  // Fachliche Gewichtung der Phasen: Hof-/Entladephasen auf TE-Ebene,
+  // Buchung/Einlagerung auf Positionsebene. Diese Trennung ist zentral.
+  const PHASE_WEIGHT_KEY = {
+    wait_gate: "wait_gate_n", reaction: "reaction_n", unload: "unload_n",
+    booking: "booking_n", putaway: "putaway_n", dwell: "dwell_n",
+  };
+  const PROCESS_TIME_ITEMS = [
+    { key:"plan_start_end_avg", label:"Geplanter Start → Geplantes Ende", weightKey:"anzahl_te" },
+    { key:"actual_start_end_avg", label:"Ist-Start → Ist-Ende", weightKey:"anzahl_te" },
+    { key:"arrival_dock_avg", label:"Ankunft → Am Tor angedockt", weightKey:"anzahl_te" },
+    { key:"dock_unload_start_avg", label:"Angedockt → Entladen gestartet", weightKey:"anzahl_te" },
+    { key:"unload_start_end_avg", label:"Entladen gestartet → Entladen beendet", weightKey:"anzahl_te" },
+    { key:"unload_end_actual_end_avg", label:"Entladen beendet → Tatsächliches Ende", weightKey:"anzahl_te" },
+    { key:"we_booked_completion_avg", label:"WE gebucht → Fertigstellung", weightKey:"anzahl_pos" },
+    { key:"arrival_completion_avg", label:"Ankunft → Fertigstellung", weightKey:"anzahl_te" },
+    { key:"dock_completion_avg", label:"Angedockt → Fertigstellung", weightKey:"anzahl_te" },
+  ];
   const PHASE_COLOR = {
     wait_gate: "#5d6d7e", reaction: "#2980b9", unload: "#27ae60",
     booking: "#f39c12", putaway: "#c0392b",
@@ -326,6 +343,10 @@
     .pt-row:last-child{ border-bottom:0;}
     .pt-label{ font-size:11.5px; color:var(--ink2);}
     .pt-val{ font-family:var(--font-mono); font-size:12px; font-weight:700; color:var(--ink);}
+    .collapsible-section{ display:block; }
+    .collapsible-section .card{ margin-top:6px; padding:10px 12px; background:var(--card);
+      border:1px solid var(--border); border-radius:var(--r-md); }
+    .collapsible-section .card[hidden]{ display:none !important; }
     /* Einheitliches Infobutton-System: gleiche Größe/Form/Rahmen überall */
     .tile-info{ display:inline-flex; align-items:center; justify-content:center; width:14px; height:14px;
       margin-left:5px; border-radius:50%; border:1px solid var(--border2); background:transparent;
@@ -569,7 +590,7 @@
         <label>Ø Einlagerung (h) <input type="number" step="0.5" id="tgtPutaway"></label>
         <label>OTIF-Quote (%) <input type="number" step="1" id="tgtOtif"></label>
         <label>Pünktlichkeit (%) <input type="number" step="1" id="tgtPuenkt"></label>
-        <label>Ø Wartezeit Tor (h) <input type="number" step="0.5" id="tgtWaitGate"></label>
+        <label>Ø Wartezeit bis Andocken (h) <input type="number" step="0.5" id="tgtWaitGate"></label>
         <div class="target-note"><b>Zielquelle:</b> Cockpit-Konfiguration. Werte können später über Widget-Properties/BW-Vorgaben übergeben werden — kein automatisch aus SAP EWM abgeleiteter Systemwert.</div>
       </div>
       <div class="glossary-panel" id="glossaryPanel" hidden role="dialog" aria-modal="true" aria-label="Begriffe und Berechnungen">
@@ -582,7 +603,7 @@
       </div>
       <div class="glossary-backdrop" id="glossaryBackdrop" hidden></div>
       <div class="toolbar">
-        <span class="tb-lbl">Segment</span>
+        <span class="tb-lbl">Ladestelle</span>
         <div class="segmented" id="segpick"></div>
         <span class="spacer"></span>
         <span class="tb-lbl">Zeitraster</span>
@@ -723,7 +744,27 @@
         }
         return fmtNum(String(cell).trim());
       };
-      const fmtNum = (s) => { if (!s) return null; const c = s.split(" ")[0].replace(/,/g, ""); const n = Number(c); return isNaN(n) ? null : n; };
+      const fmtNum = (s) => {
+        if (s == null || s === "") return null;
+        let c = String(s).trim().replace(/ /g, " ").replace(/\s+/g, "");
+        // Einheit/Prozent entfernen, Vorzeichen und Exponent erhalten.
+        c = c.replace(/[^0-9,\.eE+\-]/g, "");
+        if (!c) return null;
+        const lastComma = c.lastIndexOf(","), lastDot = c.lastIndexOf(".");
+        if (lastComma >= 0 && lastDot >= 0) {
+          // Der zuletzt auftretende Separator ist i.d.R. der Dezimaltrenner.
+          if (lastComma > lastDot) c = c.replace(/\./g, "").replace(",", ".");
+          else c = c.replace(/,/g, "");
+        } else if (lastComma >= 0) {
+          // 1,234,567 => Tausender; 123,45 => Dezimal.
+          c = /^[-+]?\d{1,3}(,\d{3})+$/.test(c) ? c.replace(/,/g, "") : c.replace(",", ".");
+        } else if (lastDot >= 0) {
+          // 1.234.567 => Tausender; 123.45 => Dezimal.
+          if (/^[-+]?\d{1,3}(\.\d{3})+$/.test(c)) c = c.replace(/\./g, "");
+        }
+        const n = Number(c);
+        return Number.isFinite(n) ? n : null;
+      };
       // Umrechnungsfaktor der Dauer-Rohwerte in STUNDEN. BW-Kennzahltyp "Zeit"
       // im Format DEC liefert i.d.R. eine Dezimalzahl in SEKUNDEN (SAP-Basis).
       // Über die Property "dauerEinheit" umstellbar, falls euer Modell anders liefert.
@@ -768,12 +809,15 @@
         // transparent gekennzeichnet, keine stille Gleichsetzung.
         r.anzahl_te = readVal(row, "value_anzahl_te");
         if (r.anzahl_te == null) r.anzahl_te = r.anzahl_anl; // Legacy-Fallback: TE ≈ Anlieferung, bis BW-Feld existiert
-        const n = r.anzahl_pos || r.anzahl_anl || 0;
-        // Dauern (NODIM-Zahl -> Stunden per durOf) als Summe -> Ø (Summe/Positionen).
+        const nTe = r.anzahl_te || r.anzahl_anl || 0; // Legacy-Fallback nur solange value_anzahl_te fehlt
+        const nPos = r.anzahl_pos || 0;
+        // Dauer-Summen fachlich korrekt teilen: Hof/Entladen = TE, Buchung/Einlagerung = Position.
+        const phaseCount = { wait_gate:nTe, reaction:nTe, unload:nTe, booking:nPos, putaway:nPos, dwell:nTe };
         for (const [ph, feed] of Object.entries(PHASES)) {
           const sumH = readDur(row, feed);
-          r[`${ph}_avg`] = (sumH != null && n) ? sumH / n : null;
-          r[`${ph}_n`] = n;
+          const cnt = phaseCount[ph] || 0;
+          r[`${ph}_avg`] = (sumH != null && cnt > 0) ? sumH / cnt : null;
+          r[`${ph}_n`] = cnt;
           r[`${ph}_min`] = null; r[`${ph}_max`] = null;
         }
         // Optionale Min/Max fürs Standzeit-Band
@@ -785,17 +829,26 @@
         const g = readVal(row, "value_gewicht"); r.sum_gewicht_t = g != null ? g / 1000 : null;   // KG->t
         const w = readVal(row, "value_wert");    r.sum_wert_keur = w != null ? w / 1000 : null;    // EUR->k€
         r.sum_volumen = readVal(row, "value_volumen");
-        // Quoten (optional)
-        r.otif_quote   = readVal(row, "value_otif_quote");
-        r.puenkt_quote = readVal(row, "value_puenkt_quote");
-        r.voll_quote   = readVal(row, "value_voll_quote");
+        // Quoten (optional). SAC/BW kann 0..1 oder 0..100 liefern; intern immer 0..1.
+        const normQuote = (v) => {
+          if (v == null || !Number.isFinite(Number(v))) return null;
+          v = Number(v);
+          if (Math.abs(v) > 1 && Math.abs(v) <= 100) v /= 100;
+          return v;
+        };
+        r.otif_quote   = normQuote(readVal(row, "value_otif_quote"));
+        r.puenkt_quote = normQuote(readVal(row, "value_puenkt_quote"));
+        r.voll_quote   = normQuote(readVal(row, "value_voll_quote"));
+        // Optionale fachliche Nenner; falls nicht gebunden, TE-Anzahl als transparenter Fallback.
+        r.otif_n   = readVal(row, "value_otif_n")   ?? nTe;
+        r.puenkt_n = readVal(row, "value_puenkt_n") ?? nTe;
+        r.voll_n   = readVal(row, "value_voll_n")   ?? nTe;
 
         // Erweiterte Prozesszeiten (Abschnitt "Prozesszeiten", standardmäßig
         // eingeklappt). Summen-Feeds als NODIM-Zahl, Divisor Anzahl TEs, je
         // WE-Buchung->Fertigstellung Divisor Positionen. Fällt auf bereits
         // vorhandene, verwandte Kennzahl zurück, falls der neue Feed im BW-
         // Modell noch nicht gebunden ist — so bleibt die Ansicht nutzbar.
-        const nTe = r.anzahl_te || r.anzahl_anl || 0;
         const avgFeed = (feedId, divisor) => {
           const sumH = readDur(row, feedId);
           return (sumH != null && divisor) ? sumH / divisor : null;
@@ -806,7 +859,7 @@
         r.dock_unload_start_avg   = avgFeed("value_dur_dock_unload_start", nTe) ?? r.reaction_avg;
         r.unload_start_end_avg    = avgFeed("value_dur_unload_start_end", nTe) ?? r.unload_avg;
         r.unload_end_actual_end_avg = avgFeed("value_dur_unload_end_actual_end", nTe);
-        r.we_booked_completion_avg  = avgFeed("value_dur_we_booked_completion", n) ?? r.putaway_avg;
+        r.we_booked_completion_avg  = avgFeed("value_dur_we_booked_completion", nPos) ?? r.putaway_avg;
         r.arrival_completion_avg  = avgFeed("value_dur_arrival_completion", nTe) ?? r.dwell_avg;
         r.dock_completion_avg     = avgFeed("value_dur_dock_completion", nTe);
         return r;
@@ -908,73 +961,100 @@
       return `${thu.getUTCFullYear()}-${String(thu.getUTCMonth() + 1).padStart(2, "0")}`;
     }
 
+    // N-gewichteter Mittelwert, aber nur über tatsächlich vorhandene Werte.
+    // Fehlende Kennzahlen dürfen den Nenner NICHT künstlich vergrößern.
+    _weightedAvg(rows, valueKey, weightKey) {
+      let num = 0, den = 0;
+      const fallback = [];
+      for (const r of rows) {
+        const v = r && r[valueKey];
+        if (v == null || !Number.isFinite(Number(v))) continue;
+        fallback.push(Number(v));
+        const w = Number(r[weightKey]);
+        if (Number.isFinite(w) && w > 0) { num += Number(v) * w; den += w; }
+      }
+      if (den > 0) return num / den;
+      return fallback.length ? fallback.reduce((a,b)=>a+b,0) / fallback.length : null;
+    }
+
     // Verdichtet Wochenzeilen zu Monatszeilen. Aggregationsregeln wie BW:
-    // Summen addieren, Mittelwerte n-gewichtet, Min=LOWEST, Max=HIGHEST.
+    // Summen addieren, Mittelwerte fachlich n-gewichtet, Min=LOWEST, Max=HIGHEST.
     _rollupToMonths(rows) {
       const groups = {};
       for (const r of rows) {
+        if (!r || !r.periode) continue;
         const key = this._weekToMonth(r.periode) + "|" + r.segment;
         (groups[key] ||= []).push(r);
       }
       const out = [];
       for (const key in groups) {
         const g = groups[key];
-        const [per, seg] = key.split("|");
-        const totalN = g.reduce((a, r) => a + (r.anzahl_pos || 0), 0) || 1;
-        const row = { periode: per, segment: seg,
-          anzahl_pos: g.reduce((a, r) => a + (r.anzahl_pos || 0), 0),
-          anzahl_anl: g.reduce((a, r) => a + (r.anzahl_anl || 0), 0) };
+        const splitAt = key.lastIndexOf("|");
+        const per = key.slice(0, splitAt), seg = key.slice(splitAt + 1);
+        const row = { periode: per, segment: seg };
+        // Zähler und optionale Bewertungsnenner addieren.
+        for (const k of ["anzahl_pos","anzahl_anl","anzahl_te","otif_n","puenkt_n","voll_n"])
+          row[k] = g.reduce((a,r)=>a + (Number(r[k]) || 0), 0);
+
         for (const m of METRICS) {
-          if (m.sum) row[m.key] = g.reduce((a, r) => a + (r[m.key] || 0), 0);
-          else if (m.pct || /_avg$/.test(m.key))
-            row[m.key] = g.reduce((a, r) => a + (r[m.key] || 0) * (r.anzahl_pos || 0), 0) / totalN;
+          if (m.sum) row[m.key] = g.reduce((a, r) => a + (Number(r[m.key]) || 0), 0);
+          else row[m.key] = this._weightedAvg(g, m.key, m.weightKey || "anzahl_pos");
           if (m.band) {
-            const mins = g.map(r => r[m.band[0]]).filter(v => v != null);
-            const maxs = g.map(r => r[m.band[1]]).filter(v => v != null);
-            if (mins.length) row[m.band[0]] = Math.min(...mins);
-            if (maxs.length) row[m.band[1]] = Math.max(...maxs);
+            const mins = g.map(r => r[m.band[0]]).filter(v => v != null && Number.isFinite(Number(v)));
+            const maxs = g.map(r => r[m.band[1]]).filter(v => v != null && Number.isFinite(Number(v)));
+            row[m.band[0]] = mins.length ? Math.min(...mins) : null;
+            row[m.band[1]] = maxs.length ? Math.max(...maxs) : null;
           }
         }
-        // Phasen-Mix (für Engpass-Wanderung): Mittelwerte je Phase n-gewichtet
+        // Phasen fachlich TE- bzw. positionsgewichtet.
         for (const ph of PHASE_KEYS) {
           const k = ph + "_avg";
-          row[k] = g.reduce((a, r) => a + (r[k] || 0) * (r.anzahl_pos || 0), 0) / totalN;
+          row[k] = this._weightedAvg(g, k, PHASE_WEIGHT_KEY[ph]);
+          row[ph + "_n"] = g.reduce((a,r)=>a + (Number(r[ph + "_n"]) || 0), 0);
         }
+        // Erweiterte Prozesszeiten müssen auch in Monatsansicht erhalten bleiben.
+        for (const p of PROCESS_TIME_ITEMS)
+          row[p.key] = this._weightedAvg(g, p.key, p.weightKey);
         out.push(row);
       }
       return out;
     }
 
     _prepare() {
-      let rows = this._rows || [];
+      let rows = (this._rows || []).filter(r => r && r.periode != null && r.periode !== "");
       if (this._props.aggregation === "month") rows = this._rollupToMonths(rows);
       const perioden = [...new Set(rows.map(r => r.periode))].sort();
-      const segmente = [...new Set(rows.map(r => r.segment))].sort();
-      // Lookup: (periode, segment) -> row
+      const segmente = [...new Set(rows.map(r => r.segment).filter(Boolean))].sort();
+      if (this._seg !== "Gesamt" && !segmente.includes(this._seg)) this._seg = "Gesamt";
+      // Lookup: (periode, Ladestelle) -> row
       const idx = {};
       for (const r of rows) idx[r.periode + "|" + r.segment] = r;
 
-      // "Gesamt" = aufsummierte/n-gewichtete Kombination über Segmente
+      // "Gesamt" = fachlich gewichtete Kombination über Ladestellen.
       const gesamt = {};
       for (const per of perioden) {
-        const segRows = segmente.map(s => idx[per + "|" + s]).filter(Boolean);
+        const segRows = segmente.map(x => idx[per + "|" + x]).filter(Boolean);
         if (!segRows.length) continue;
         const g = { periode: per, segment: "Gesamt" };
-        const totalN = segRows.reduce((a, r) => a + (r.anzahl_pos || 0), 0) || 1;
+        for (const k of ["anzahl_pos","anzahl_anl","anzahl_te","otif_n","puenkt_n","voll_n"])
+          g[k] = segRows.reduce((a,r)=>a + (Number(r[k]) || 0), 0);
         for (const m of METRICS) {
-          if (m.sum) g[m.key] = segRows.reduce((a, r) => a + (r[m.key] || 0), 0);
-          else if (m.pct || /_avg$/.test(m.key))
-            g[m.key] = segRows.reduce((a, r) => a + (r[m.key] || 0) * (r.anzahl_pos || 0), 0) / totalN;
+          if (m.sum) g[m.key] = segRows.reduce((a,r)=>a + (Number(r[m.key]) || 0), 0);
+          else g[m.key] = this._weightedAvg(segRows, m.key, m.weightKey || "anzahl_pos");
           if (m.band) {
-            g[m.band[0]] = Math.min(...segRows.map(r => r[m.band[0]] ?? Infinity));
-            g[m.band[1]] = Math.max(...segRows.map(r => r[m.band[1]] ?? -Infinity));
+            const mins = segRows.map(r=>r[m.band[0]]).filter(v=>v != null && Number.isFinite(Number(v)));
+            const maxs = segRows.map(r=>r[m.band[1]]).filter(v=>v != null && Number.isFinite(Number(v)));
+            g[m.band[0]] = mins.length ? Math.min(...mins) : null;
+            g[m.band[1]] = maxs.length ? Math.max(...maxs) : null;
           }
         }
         for (const ph of PHASE_KEYS) {
           const k = ph + "_avg";
-          g[k] = segRows.reduce((a, r) => a + (r[k] || 0) * (r.anzahl_pos || 0), 0) / totalN;
+          g[k] = this._weightedAvg(segRows, k, PHASE_WEIGHT_KEY[ph]);
+          g[ph + "_n"] = segRows.reduce((a,r)=>a + (Number(r[ph + "_n"]) || 0), 0);
         }
-        g.anzahl_pos = totalN;
+        for (const p of PROCESS_TIME_ITEMS)
+          g[p.key] = this._weightedAvg(segRows, p.key, p.weightKey);
         gesamt[per] = g;
       }
       idx.__gesamt = gesamt;
@@ -1059,7 +1139,7 @@
             <span class="open-hint" id="openHint">▸ Klicken öffnet Detailansicht</span>
             <div class="viewpick">
               <button data-dv="verlauf" class="${this._detailView==="verlauf"?"on":""}">Verlauf</button>
-              <button data-dv="vergleich" class="${this._detailView==="vergleich"?"on":""}">Segmente</button>
+              <button data-dv="vergleich" class="${this._detailView==="vergleich"?"on":""}">Ladestellen</button>
               <button data-dv="engpass" class="${this._detailView==="engpass"?"on":""}">Engpass-Mix</button>
               <button data-dv="jahre" class="${this._detailView==="jahre"?"on":""}">Jahresvergleich</button>
             </div>
@@ -1108,24 +1188,15 @@
        Segment — konsistent mit den Haupt-Kacheln. */
     _renderProcessTimes() {
       const el = this._sh.getElementById("processTimes");
-      if (!el) return;
-      const rows = this._rows.filter(r => r.periode === this._perioden[this._perioden.length - 1] && r.segment === this._seg);
-      const r = rows[0] || {};
-      const items = [
-        ["plan_start_end_avg", "Geplanter Start → Geplantes Ende"],
-        ["actual_start_end_avg", "Ist-Start → Ist-Ende"],
-        ["arrival_dock_avg", "Ankunft → Am Tor angedockt"],
-        ["dock_unload_start_avg", "Angedockt → Entladen gestartet"],
-        ["unload_start_end_avg", "Entladen gestartet → Entladen beendet"],
-        ["unload_end_actual_end_avg", "Entladen beendet → Tatsächliches Ende"],
-        ["we_booked_completion_avg", "WE gebucht → Fertigstellung"],
-        ["arrival_completion_avg", "Ankunft → Fertigstellung"],
-        ["dock_completion_avg", "Angedockt → Fertigstellung"],
-      ];
-      el.innerHTML = `<div class="pt-hint">Letzte Periode (${esc(this._perioden[this._perioden.length-1])}) · ${esc(this._seg)}</div>
-        <div class="pt-list">${items.map(([k, label]) => {
-          const v = r[k];
-          return `<div class="pt-row"><span class="pt-label">${label}</span><span class="pt-val">${v != null ? v.toFixed(1) + " h" : "–"}</span></div>`;
+      if (!el || !this._perioden || !this._perioden.length || !this._idx) return;
+      const idx = (this._scrubIdx != null && this._scrubIdx >= 0 && this._scrubIdx < this._perioden.length)
+        ? this._scrubIdx : this._perioden.length - 1;
+      const per = this._perioden[idx];
+      const r = (this._seg === "Gesamt" ? this._idx.__gesamt[per] : this._idx[per + "|" + this._seg]) || {};
+      el.innerHTML = `<div class="pt-hint">Ausgewählte Periode (${esc(per)}) · ${esc(this._seg === "Gesamt" ? "Alle Ladestellen" : this._seg)}</div>
+        <div class="pt-list">${PROCESS_TIME_ITEMS.map(({key,label}) => {
+          const v = r[key];
+          return `<div class="pt-row"><span class="pt-label">${label}</span><span class="pt-val">${v != null ? Number(v).toFixed(1) + " h" : "–"}</span></div>`;
         }).join("")}</div>`;
     }
 
@@ -1140,30 +1211,11 @@
     _renderTiles() {
       const grid = this._sh.getElementById("grid");
       grid.innerHTML = "";
-      const yearBack = this._props.aggregation === "month" ? 12 : 52;
       METRICS.forEach((m, i) => {
         const pts = this._serie(m.key);
         const valid = pts.filter(p => p && p.v != null);
         if (!valid.length) return;
         const last = valid[valid.length - 1].v;
-        // Heuristik: Eine %-Kennzahl, die über den GESAMTEN sichtbaren
-        // Zeitraum exakt 0 ist, ist so gut wie nie ein echter Messwert
-        // (auch bei schwacher Performance schwankt sowas minimal) —
-        // meist ist die Kennzahl im Modell nicht gebunden. Zeigt "–"
-        // statt einer irreführenden "0.0%"-Kachel mit falschem Ziel-Status.
-        const noData = m.pct && valid.every(p => p.v === 0);
-        if (noData) {
-          const tileNd = document.createElement("div");
-          tileNd.className = "tile tile-nodata";
-          tileNd.dataset.key = m.key;
-          tileNd.title = "Keine Werte gebunden oder Kennzahl liefert durchgehend 0 — Data Binding prüfen.";
-          tileNd.innerHTML = `
-            <div class="m-lbl">${m.label}</div>
-            <div class="m-val"><b>–</b></div>
-            <div class="m-sub"><span class="nodata-hint">nicht gebunden</span></div>`;
-          grid.appendChild(tileNd);
-          return;
-        }
         const base = valid.length > 3
           ? valid.slice(0, -1).reduce((a, p) => a + p.v, 0) / (valid.length - 1) : last;
         const rel = base ? (last - base) / Math.abs(base) : 0;
@@ -1172,12 +1224,11 @@
         // Vorjahres-Delta: Wert der aktuellen Periode vs. gleiche Periode vor
         // einem Jahr (falls die Historie so weit reicht).
         let yoy = null;
-        const lastIdx = pts.length - 1;
-        if (lastIdx - yearBack >= 0) {
-          const prevYear = pts[lastIdx - yearBack];
-          if (prevYear && prevYear.v != null && prevYear.v)
-            yoy = (last - prevYear.v) / Math.abs(prevYear.v);
-        }
+        const lastPer = valid[valid.length - 1].per;
+        const pyPer = this._priorYearPeriod(lastPer);
+        const prevYear = pyPer ? pts.find(p => p && p.per === pyPer) : null;
+        if (prevYear && prevYear.v != null && prevYear.v !== 0)
+          yoy = (last - prevYear.v) / Math.abs(prevYear.v);
 
         // Ziel-Status
         let slaHtml = "";
@@ -1276,7 +1327,7 @@
     // Linie von links nach rechts "zeichnen"
     _animateDraw(pathEl, headEl, delay = 0) {
       if (!pathEl) return;
-      const reduce = matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const reduce = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
       let len = 0; try { len = pathEl.getTotalLength(); } catch { len = 0; }
       if (!len || reduce) { if (headEl) headEl.style.opacity = ".9"; return; }
       pathEl.style.strokeDasharray = len;
@@ -1294,7 +1345,7 @@
     // Zahl von 0 auf Zielwert hochzählen
     _countUp(el, target, m) {
       if (el == null || target == null || isNaN(target)) { if (el) el.textContent = "–"; return; }
-      const reduce = matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const reduce = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
       const disp = (v) => fmtVal(m.pct ? v/100 : v, m);
       if (reduce) { el.textContent = disp(m.pct ? target*100 : target); return; }
       const end = m.pct ? target * 100 : target;
@@ -1343,10 +1394,24 @@
 
     // ── Großes Detail-Diagramm (drei Ansichten) ───────────────────────────
     _renderDetail() {
-      const m = METRICS.find(x => x.key === this._selMetric) || METRICS[0];
       const host = this._sh.getElementById("detailChart");
       const legend = this._sh.getElementById("detailLegend");
       const title = this._sh.getElementById("detailTitle");
+      let m = METRICS.find(x => x.key === this._selMetric) || METRICS[0];
+      // Wenn die bisher gewählte Kennzahl im neuen Datenbestand nicht gebunden ist,
+      // automatisch auf die erste tatsächlich vorhandene Kennzahl wechseln.
+      const hasMetricData = (mt) => this._serie(mt.key).some(p => p && p.v != null && Number.isFinite(Number(p.v)));
+      if (!hasMetricData(m)) {
+        const fallback = METRICS.find(hasMetricData);
+        if (!fallback) {
+          title.textContent = "Keine auswertbare Kennzahl";
+          host.innerHTML = `<div class="empty-hint">Die Perioden wurden erkannt, aber keine der erwarteten Kennzahlen enthält auswertbare Werte.<br>Bitte Data Binding / Feed-Zuordnung prüfen.</div>`;
+          legend.innerHTML = "";
+          return;
+        }
+        m = fallback;
+        this._selMetric = fallback.key;
+      }
       legend.innerHTML = "";
       // Tatsächliche Breite des Chart-Containers messen, statt eine feste
       // viewBox-Breite anzunehmen. Ohne das skaliert der Browser die SVG
@@ -1356,7 +1421,7 @@
       const CW = Math.max(520, host.clientWidth || 860);
 
       if (this._detailView === "vergleich") {
-        title.textContent = `${m.label} · Segmentvergleich`;
+        title.textContent = `${m.label} · Ladestellenvergleich`;
         host.innerHTML = this._compareSvg(m, CW);
         // alle Segmentlinien einzeichnen
         host.querySelectorAll("path.line").forEach((p, i) =>
@@ -1467,7 +1532,7 @@
       });
     }
 
-    // Segmentvergleich: alle Segmente als Linien, ohne Band (sonst zu unruhig)
+    // Ladestellenvergleich: alle Segmente als Linien, ohne Band (sonst zu unruhig)
     _compareSvg(m, W) {
       W = W || 760;
       const H = 260, padL = 44, padR = 16, padT = 14, padB = 28;
@@ -1595,7 +1660,7 @@
 
     _animateArea(pathEl, delay) {
       if (!pathEl) return;
-      const reduce = matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const reduce = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
       if (reduce) { pathEl.style.opacity = .8; return; }
       pathEl.style.opacity = "0";
       pathEl.style.transformOrigin = "bottom";
@@ -1611,7 +1676,7 @@
       const findings = this._computeInsights();
       if (!findings.length) { host.innerHTML = ""; return; }
       host.innerHTML = `<div class="ins-head">Befunde</div>` +
-        findings.map(f => `<div class="ins ${f.tone}"><i></i><span>${f.text}</span></div>`).join("");
+        findings.map(f => `<div class="ins ${f.tone}"><i></i><span>${esc(f.text)}</span></div>`).join("");
     }
 
     // Befunde + aktuelle Kennzahlen als Text in die Zwischenablage
@@ -1976,7 +2041,7 @@
     _renderSelHead(periode) {
       const el = this._sh.getElementById("selHead");
       if (!el) return;
-      const seg = this._seg && this._seg !== "Gesamt" ? this._seg : "Alle Segmente";
+      const seg = this._seg && this._seg !== "Gesamt" ? this._seg : "Alle Ladestellen";
       const { von, bis } = this._periodRange(periode);
       const fmtD = (s) => { if (!s) return ""; const d = new Date(s); return d.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "2-digit" }); };
       el.hidden = false;
@@ -1994,7 +2059,9 @@
       const play = this._sh.getElementById("play");
       scrub.addEventListener("input", () => { this._scrubIdx = +scrub.value; this._applyScrub(); });
       play.addEventListener("click", () => this._playing ? this._stopPlay() : this._startPlay());
-      this._scrubIdx = this._perioden.length - 1;
+      if (this._scrubIdx == null || this._scrubIdx < 0 || this._scrubIdx >= this._perioden.length)
+        this._scrubIdx = this._perioden.length - 1;
+      scrub.value = this._scrubIdx;
       this._applyScrub();
     }
 
@@ -2018,8 +2085,10 @@
         if (!m) return;
         const r = this._seg === "Gesamt" ? this._idx.__gesamt[per] : this._idx[per + "|" + this._seg];
         const b = tile.querySelector("b");
-        if (r && r[m.key] != null) b.textContent = fmtVal(r[m.key], m);
+        if (b) b.textContent = (r && r[m.key] != null) ? fmtVal(r[m.key], m) : "–";
       });
+      // Prozesszeiten folgen derselben ausgewählten Periode wie die Kacheln.
+      this._renderProcessTimes();
     }
 
     _startPlay() {
