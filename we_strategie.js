@@ -1,5 +1,5 @@
 /* =========================================================================
- * WE Strategie-Cockpit – SAC Custom Widget (v0.16.0) · Entwickler: Benne
+ * WE Strategie-Cockpit – SAC Custom Widget (v0.19.0) · Entwickler: Benne
  * Strategische Langzeitsicht auf den Wareneingangsprozess.
  * Erwartet voraggregierte Perioden-Daten (je KW/Monat × Segment), wie sie
  * BW über SUM/MIN/MAX/COUNT liefert. Kein Median (BW-Einschränkung) — das
@@ -11,16 +11,64 @@
 
   // ── Kennzahl-Definitionen: was in den Kacheln als Trend läuft ──────────
   const METRICS = [
-    { key: "dwell_avg",     label: "Ø Standzeit",      unit: "h",  band: ["dwell_min","dwell_max"],     lowerBetter: true,  target: 8 },
-    { key: "putaway_avg",   label: "Ø Einlagerung",    unit: "h",  band: ["putaway_min","putaway_max"], lowerBetter: true,  target: 4 },
-    { key: "otif_quote",    label: "OTIF-Quote",       unit: "%",  pct: true,                            lowerBetter: false, target: 0.90 },
-    { key: "puenkt_quote",  label: "Pünktlichkeit",    unit: "%",  pct: true,                            lowerBetter: false, target: 0.90 },
-    { key: "wait_gate_avg", label: "Ø Wartezeit Tor",  unit: "h",  band: ["wait_gate_min","wait_gate_max"], lowerBetter: true, target: 2 },
+    { key: "dwell_avg",     label: "Ø Standzeit",      unit: "h",  band: ["dwell_min","dwell_max"],     lowerBetter: true,  targetProp: "targetDwell" },
+    { key: "putaway_avg",   label: "Ø Einlagerung",    unit: "h",  band: ["putaway_min","putaway_max"], lowerBetter: true,  targetProp: "targetPutaway" },
+    { key: "otif_quote",    label: "OTIF-Quote",       unit: "%",  pct: true,                            lowerBetter: false, targetProp: "targetOtif" },
+    { key: "puenkt_quote",  label: "Pünktlichkeit",    unit: "%",  pct: true,                            lowerBetter: false, targetProp: "targetPuenkt" },
+    { key: "wait_gate_avg", label: "Ø Wartezeit Tor",  unit: "h",  band: ["wait_gate_min","wait_gate_max"], lowerBetter: true, targetProp: "targetWaitGate" },
     { key: "sum_gewicht_t", label: "Durchsatz Gewicht",unit: "t",  sum: true,                            lowerBetter: false },
     { key: "sum_wert_keur", label: "Warenwert",        unit: "k€", sum: true,                            lowerBetter: false },
     { key: "anzahl_pos",    label: "Positionen",       unit: "",   sum: true,                            lowerBetter: false },
     { key: "anzahl_anl",    label: "Anlieferungen",    unit: "",   sum: true,                            lowerBetter: false },
+    { key: "anzahl_te",     label: "Transporteinheiten (TE)", unit: "", sum: true,                        lowerBetter: false },
   ];
+
+  /* Zentrale Kennzahl-Definitionen für Infobuttons UND Begriffsverzeichnis —
+     eine Quelle, damit sich beide nie widersprechen können. Level-Badges
+     bewusst kurz (TE / Position / TE+Position / BW), volle Erklärung im Popup. */
+  const METRIC_INFO = {
+    dwell_avg: { level:"TE", meaning:"Aufenthaltsdauer einer Transporteinheit am Standort.", formula:"Abfahrt vom Kontrollpunkt − Ankunft am Kontrollpunkt", aggregation:"Mittelwert über alle TEs der Periode/Ladestelle." },
+    putaway_avg: { level:"Position", meaning:"Zeit von der WE-Buchung einer Position bis zu deren Einlagerung/Fertigstellung.", formula:"Fertigstellung/Einlagerung − WE-Buchung", aggregation:"Mittelwert über alle Positionen." },
+    otif_quote: { level:"BW-Kennzahl", meaning:"On Time In Full. Fachliche Definition und Bewertung stammt aus BW.", formula:"BW-Kennzahl, nicht lokal neu berechnet", aggregation:"Wie von BW geliefert." },
+    puenkt_quote: { level:"BW / TE", meaning:"Anteil der TEs mit BW-Kennzeichen P (pünktlich).", formula:"P / (P + N) × 100", aggregation:"Über alle bewerteten TEs der Periode/Ladestelle." },
+    wait_gate_avg: { level:"TE", meaning:"Zeit vom Eintreffen der TE bis zum Andocken am Tor.", formula:"Andocken − Ankunft am Kontrollpunkt", aggregation:"Mittelwert über alle TEs." },
+    sum_gewicht_t: { level:"Position", meaning:"Summe des angelieferten Gewichts.", formula:"Σ Gewicht je Position", aggregation:"Summe über den Zeitraum/Ladestelle." },
+    sum_wert_keur: { level:"Position", meaning:"Summe des Warenwerts der Anlieferungen.", formula:"Σ Wert je Position", aggregation:"Summe über den Zeitraum/Ladestelle." },
+    anzahl_pos: { level:"Position", meaning:"Anzahl der angelieferten Positionen.", formula:"Anzahl Positionszeilen", aggregation:"Summe über den Zeitraum/Ladestelle." },
+    anzahl_anl: { level:"Anlieferung", meaning:"Anzahl der Anlieferungen (Lieferdokumente). Eine TE kann mehrere Anlieferungen enthalten.", formula:"Anzahl distinkter Anlieferungen", aggregation:"Summe über den Zeitraum/Ladestelle." },
+    anzahl_te: { level:"TE", meaning:"Anzahl der Transporteinheiten (Hof-Ebene). TE ≠ Anlieferung: eine TE kann mehrere Anlieferungen enthalten.", formula:"Anzahl distinkter TEs", aggregation:"Summe über den Zeitraum/Ladestelle." },
+  };
+
+  // Begriffsverzeichnis: Basis-Fachbegriffe + automatisch aus METRIC_INFO
+  // abgeleitete Kennzahl-Einträge. Eine Quelle für Infobuttons UND Glossar,
+  // damit sich beide nie widersprechen können.
+  const GLOSSARY_BASE = [
+    { term:"TE (Transporteinheit)", level:"TE", definition:"Eine Transporteinheit kann in SAP EWM mehrere Anlieferungen enthalten. Hof-, Tor-, Andock-, Entlade- und Abfahrtsvorgänge werden TE-bezogen interpretiert." },
+    { term:"Anlieferung", level:"Anlieferung", definition:"Ein der TE zugeordnetes Lieferdokument. Eine TE kann mehrere Anlieferungen enthalten; eine Anlieferung kann wiederum mehrere Positionen enthalten." },
+    { term:"Position", level:"Position", definition:"Kleinste fachliche Rechenebene für Mengen, PA1, Packmittel, WE-Buchung und Einlagerung." },
+    { term:"PA1", level:"Position", definition:"Menge pro Palette bzw. relevante Verpackungsmenge des Produkts für die Palettenberechnung.", formula:"Berechnete volle Paletten je Position = AUFRUNDEN(angelieferte Menge ÷ PA1)" },
+    { term:"Berechnete volle Paletten", level:"Position", definition:"Rechnerische Palettenzahl auf Basis von angelieferter Menge und PA1. Der tatsächliche Lagerort wird dadurch nicht bestimmt.", formula:"AUFRUNDEN(Menge ÷ PA1) je Position, anschließend summieren" },
+    { term:"Median", level:"Statistik", definition:"Der mittlere Wert einer sortierten Verteilung: 50% der Beobachtungen liegen darunter, 50% darüber. Robuster gegen Extremwerte als der Mittelwert." },
+    { term:"P90", level:"Statistik", definition:"90. Perzentil: 90% der Beobachtungen liegen auf oder unter diesem Wert." },
+    { term:"MAD / robuster z-Score", level:"Statistik", definition:"Robuste Ausreißererkennung auf Basis von Median und Median Absolute Deviation — weniger empfindlich gegenüber Extremwerten als Mittelwert/Standardabweichung." },
+    { term:"OTIF", level:"BW", definition:"On Time In Full. Die fachliche Definition wird aus BW übernommen; das Cockpit erfindet keine eigene OTIF-Logik." },
+    { term:"Pünktlichkeit P/N", level:"BW / TE", definition:"BW-Kennzeichen: P = pünktlich, N = nicht pünktlich. Wird als fachlich führende Bewertung verwendet." },
+    { term:"Ladestelle", level:"Dimension", definition:"Analyse-/Filterdimension des Wareneingangs, z. B. Container, Landverkehr oder BSL. Technisch weiterhin dimension_segment/dimension_ladestelle." },
+    { term:"Mindestdatenbasis", level:"Qualität", definition:"Mindestanzahl auswertbarer Beobachtungen, bevor ein Spediteur/Lieferant in einem Ranking erscheint — verhindert, dass kleine Stichproben dominieren." },
+    { term:"Datenqualität & Abdeckung", level:"TE + Position", definition:"Anteil der für eine Analyse benötigten Felder, die im aktiven Filter technisch auswertbar sind. Vorhandensein bedeutet nicht automatisch fachliche Richtigkeit.", formula:"auswertbare Datensätze ÷ relevante Datensätze × 100" },
+  ];
+  const GLOSSARY_ITEMS = (() => {
+    const metricItems = METRICS.map(m => {
+      const x = METRIC_INFO[m.key] || {};
+      return { term: m.label, level: x.level || "Kennzahl", definition: x.meaning || "Kennzahl des Cockpits.", formula: x.formula || "" };
+    });
+    const seen = new Set();
+    return [...GLOSSARY_BASE, ...metricItems].filter(x => {
+      const k = String(x.term).toLowerCase();
+      if (seen.has(k)) return false;
+      seen.add(k); return true;
+    });
+  })();
 
   // Ladeanimation (1:1 aus dem Prozess-Cockpit) — als Konstante gehalten,
   // damit sie nach einem "keine Daten"-Overwrite von #state jederzeit
@@ -263,6 +311,59 @@
     /* Dashboard-Grid */
     main{ flex:1; overflow:auto; padding:14px 16px; position:relative; }
     .grid{ display:grid; grid-template-columns:repeat(auto-fill, minmax(196px, 1fr)); gap:12px; }
+    /* Einklappbare Sekundärbereiche (Prozesszeiten) */
+    .collapse-toggle{ display:flex; align-items:center; gap:6px; width:100%; text-align:left;
+      font:inherit; font-size:12px; font-weight:600; color:var(--ink2); background:transparent;
+      border:1px solid var(--border); border-radius:8px; padding:8px 12px; cursor:pointer;
+      transition:border-color .15s, color .15s;}
+    .collapse-toggle:hover{ border-color:var(--accent); color:var(--ink);}
+    .collapse-arrow{ font-size:10px; color:var(--muted); width:10px; display:inline-block;}
+    .pt-hint{ font-family:var(--font-mono); font-size:9.5px; color:var(--muted); text-transform:uppercase;
+      letter-spacing:.06em; margin-bottom:8px;}
+    .pt-list{ display:flex; flex-direction:column; gap:5px;}
+    .pt-row{ display:flex; justify-content:space-between; align-items:center; padding:5px 0;
+      border-bottom:1px solid var(--border);}
+    .pt-row:last-child{ border-bottom:0;}
+    .pt-label{ font-size:11.5px; color:var(--ink2);}
+    .pt-val{ font-family:var(--font-mono); font-size:12px; font-weight:700; color:var(--ink);}
+    /* Einheitliches Infobutton-System: gleiche Größe/Form/Rahmen überall */
+    .tile-info{ display:inline-flex; align-items:center; justify-content:center; width:14px; height:14px;
+      margin-left:5px; border-radius:50%; border:1px solid var(--border2); background:transparent;
+      color:var(--muted); font-size:9px; font-style:italic; font-family:Georgia,serif; cursor:pointer;
+      vertical-align:middle; transition:border-color .15s, color .15s;}
+    .tile-info:hover, .tile-info:focus-visible{ border-color:var(--accent); color:var(--accent);}
+    /* Zielwert-Panel */
+    .target-panel{ position:absolute; right:16px; top:44px; z-index:40; width:230px; padding:12px 14px;
+      background:var(--panel); border:1px solid var(--border2); border-radius:10px; box-shadow:0 8px 24px rgba(0,0,0,.4);}
+    .target-panel h4{ margin:0 0 8px; font-size:11px; text-transform:uppercase; letter-spacing:.4px; color:var(--muted);}
+    .target-panel label{ display:flex; justify-content:space-between; align-items:center; gap:8px;
+      margin:7px 0; font-size:11px; color:var(--ink2);}
+    .target-panel input{ width:70px; padding:4px 6px; border:1px solid var(--border); border-radius:4px;
+      background:var(--card); color:var(--ink); font:inherit; font-size:11px;}
+    .target-note{ margin-top:8px; padding-top:8px; border-top:1px solid var(--border); font-size:9.5px;
+      color:var(--muted); line-height:1.5;}
+    /* Begriffsverzeichnis */
+    .glossary-backdrop{ position:fixed; inset:0; z-index:9070; background:rgba(0,0,0,.5);}
+    .glossary-panel{ position:fixed; z-index:9080; inset:50% auto auto 50%; transform:translate(-50%,-50%);
+      width:min(520px,92vw); max-height:min(82vh,760px); display:flex; flex-direction:column;
+      background:var(--panel); border:1px solid var(--border2); border-radius:12px;
+      box-shadow:0 20px 60px rgba(0,0,0,.5); overflow:hidden;}
+    .glossary-head{ display:flex; align-items:flex-start; gap:10px; padding:14px 16px 10px; border-bottom:1px solid var(--border);}
+    .glossary-head div{ flex:1;} .glossary-head b{ display:block; color:var(--ink); font-size:14px;}
+    .glossary-head span{ color:var(--muted); font-size:10px; line-height:1.4;}
+    .glossary-close{ border:1px solid var(--border2); border-radius:6px; background:var(--card);
+      color:var(--ink2); cursor:pointer; padding:5px 8px;}
+    .glossary-search{ width:calc(100% - 32px); margin:12px 16px 8px; padding:8px 10px;
+      border:1px solid var(--border2); border-radius:7px; background:var(--card); color:var(--ink); font:inherit;}
+    .glossary-list{ max-height:calc(min(82vh,760px) - 132px); overflow:auto; padding:6px 16px 16px; display:grid; gap:8px;}
+    .glossary-item{ border:1px solid var(--border); border-radius:8px; background:var(--card); padding:9px 10px;}
+    .glossary-term{ display:flex; gap:8px; align-items:center; color:var(--ink); font-weight:700; font-size:11px;}
+    .glossary-level{ margin-left:auto; display:inline-flex; padding:2px 6px; border-radius:999px;
+      background:var(--card2); color:var(--ink2); font:700 9px var(--font-mono);}
+    .glossary-def{ margin-top:5px; color:var(--ink2); font-size:10.5px; line-height:1.45;}
+    .glossary-formula{ margin-top:6px; padding:6px 8px; border-left:3px solid var(--accent);
+      background:var(--accent-dim); color:var(--ink); font-family:var(--font-mono); font-size:10px;}
+    .glossary-empty{ color:var(--muted); text-align:center; padding:26px 8px;}
     .tile{ background:var(--card); border:1px solid var(--border); border-radius:var(--r-md);
       padding:13px 14px 8px; cursor:pointer; transition:border-color .15s var(--ease), transform .1s;
       position:relative; overflow:hidden; }
@@ -456,10 +557,30 @@
           <div class="title">WE Strategie-Cockpit <small id="sub"></small></div>
           <div class="ctrl">
             <button id="btnExport" title="Befunde kopieren">⧉ Export</button>
+            <button id="btnTargets" title="Zielwerte konfigurieren" aria-expanded="false">◎ Ziele</button>
+            <button id="btnGlossary" title="Begriffe &amp; Berechnungen">? Begriffe</button>
             <button id="btnTheme" title="Hell/Dunkel">◐</button>
           </div>
         </div>
       </header>
+      <div class="target-panel" id="targetPanel" hidden aria-label="Zielwerte konfigurieren">
+        <h4>Zielwerte</h4>
+        <label>Ø Standzeit (h) <input type="number" step="0.5" id="tgtDwell"></label>
+        <label>Ø Einlagerung (h) <input type="number" step="0.5" id="tgtPutaway"></label>
+        <label>OTIF-Quote (%) <input type="number" step="1" id="tgtOtif"></label>
+        <label>Pünktlichkeit (%) <input type="number" step="1" id="tgtPuenkt"></label>
+        <label>Ø Wartezeit Tor (h) <input type="number" step="0.5" id="tgtWaitGate"></label>
+        <div class="target-note"><b>Zielquelle:</b> Cockpit-Konfiguration. Werte können später über Widget-Properties/BW-Vorgaben übergeben werden — kein automatisch aus SAP EWM abgeleiteter Systemwert.</div>
+      </div>
+      <div class="glossary-panel" id="glossaryPanel" hidden role="dialog" aria-modal="true" aria-label="Begriffe und Berechnungen">
+        <div class="glossary-head">
+          <div><b>Begriffe &amp; Berechnungen</b><span>Zentrale Definitionen für SAP EWM, BW-Kennzahlen und Cockpit-Berechnungen.</span></div>
+          <button class="glossary-close" id="glossaryClose" type="button">✕</button>
+        </div>
+        <input class="glossary-search" id="glossarySearch" type="search" placeholder="Begriff suchen, z. B. TE, PA1, Standzeit, Median …">
+        <div class="glossary-list" id="glossaryList"></div>
+      </div>
+      <div class="glossary-backdrop" id="glossaryBackdrop" hidden></div>
       <div class="toolbar">
         <span class="tb-lbl">Segment</span>
         <div class="segmented" id="segpick"></div>
@@ -493,11 +614,17 @@
       super();
       this._sh = this.attachShadow({ mode: "open" });
       this._sh.innerHTML = TPL(THEME);
-      this._props = { theme: "dark", aggregation: "week", dauerEinheit: "sekunden" };
+      this._props = {
+        theme: "dark", aggregation: "week", dauerEinheit: "sekunden",
+        // Zielwerte: konfigurierbar über "◎ Ziele" statt fest im Code
+        // verdrahtet — Cockpit-/Fachbereichsvorgabe, keine SAP-EWM-Systemgrenze.
+        targetDwell: 8, targetPutaway: 4, targetOtif: 0.90, targetPuenkt: 0.90, targetWaitGate: 2,
+      };
       this._rows = null;          // aggregierte Perioden-Zeilen
       this._seg = "Gesamt";       // gewähltes Segment
       this._selMetric = "dwell_avg";
       this._detailView = "verlauf";  // verlauf | vergleich | engpass
+      this._showProcessTimes = false; // Prozesszeiten standardmäßig eingeklappt
       this._scrubIdx = null;      // Scrubber-Position (Periodenindex) oder null
       this._playing = false;
       this._applyTheme();
@@ -635,6 +762,12 @@
           anzahl_anl: readVal(row, "value_anzahl_anl"),
           anzahl_pos: readVal(row, "value_anzahl_pos"),
         };
+        // Anzahl TEs ist fachlich eine ANDERE Größe als Anzahl Anlieferungen
+        // (eine TE kann mehrere Anlieferungen enthalten). Legacy-Fallback auf
+        // anzahl_anl, falls das BW-Modell value_anzahl_te noch nicht liefert —
+        // transparent gekennzeichnet, keine stille Gleichsetzung.
+        r.anzahl_te = readVal(row, "value_anzahl_te");
+        if (r.anzahl_te == null) r.anzahl_te = r.anzahl_anl; // Legacy-Fallback: TE ≈ Anlieferung, bis BW-Feld existiert
         const n = r.anzahl_pos || r.anzahl_anl || 0;
         // Dauern (NODIM-Zahl -> Stunden per durOf) als Summe -> Ø (Summe/Positionen).
         for (const [ph, feed] of Object.entries(PHASES)) {
@@ -656,6 +789,26 @@
         r.otif_quote   = readVal(row, "value_otif_quote");
         r.puenkt_quote = readVal(row, "value_puenkt_quote");
         r.voll_quote   = readVal(row, "value_voll_quote");
+
+        // Erweiterte Prozesszeiten (Abschnitt "Prozesszeiten", standardmäßig
+        // eingeklappt). Summen-Feeds als NODIM-Zahl, Divisor Anzahl TEs, je
+        // WE-Buchung->Fertigstellung Divisor Positionen. Fällt auf bereits
+        // vorhandene, verwandte Kennzahl zurück, falls der neue Feed im BW-
+        // Modell noch nicht gebunden ist — so bleibt die Ansicht nutzbar.
+        const nTe = r.anzahl_te || r.anzahl_anl || 0;
+        const avgFeed = (feedId, divisor) => {
+          const sumH = readDur(row, feedId);
+          return (sumH != null && divisor) ? sumH / divisor : null;
+        };
+        r.plan_start_end_avg      = avgFeed("value_dur_plan_start_end", nTe);
+        r.actual_start_end_avg    = avgFeed("value_dur_actual_start_end", nTe);
+        r.arrival_dock_avg        = avgFeed("value_dur_arrival_dock", nTe) ?? r.wait_gate_avg;
+        r.dock_unload_start_avg   = avgFeed("value_dur_dock_unload_start", nTe) ?? r.reaction_avg;
+        r.unload_start_end_avg    = avgFeed("value_dur_unload_start_end", nTe) ?? r.unload_avg;
+        r.unload_end_actual_end_avg = avgFeed("value_dur_unload_end_actual_end", nTe);
+        r.we_booked_completion_avg  = avgFeed("value_dur_we_booked_completion", n) ?? r.putaway_avg;
+        r.arrival_completion_avg  = avgFeed("value_dur_arrival_completion", nTe) ?? r.dwell_avg;
+        r.dock_completion_avg     = avgFeed("value_dur_dock_completion", nTe);
         return r;
       });
     }
@@ -685,6 +838,58 @@
         }));
       // Export
       $("btnExport").addEventListener("click", () => this._exportInsights());
+
+      // Zielwert-Panel
+      const syncTargetInputs = () => {
+        $("tgtDwell").value = this._props.targetDwell ?? "";
+        $("tgtPutaway").value = this._props.targetPutaway ?? "";
+        $("tgtOtif").value = this._props.targetOtif != null ? Math.round(this._props.targetOtif * 100) : "";
+        $("tgtPuenkt").value = this._props.targetPuenkt != null ? Math.round(this._props.targetPuenkt * 100) : "";
+        $("tgtWaitGate").value = this._props.targetWaitGate ?? "";
+      };
+      $("btnTargets").addEventListener("click", () => {
+        const p = $("targetPanel"), open = p.hidden;
+        p.hidden = !open;
+        $("btnTargets").setAttribute("aria-expanded", String(open));
+        if (open) syncTargetInputs();
+      });
+      const bindTarget = (inputId, propKey, isPct) => {
+        $(inputId).addEventListener("change", (e) => {
+          const raw = e.target.value;
+          this._props[propKey] = raw === "" ? null : (isPct ? Number(raw) / 100 : Number(raw));
+          this._render();
+        });
+      };
+      bindTarget("tgtDwell", "targetDwell", false);
+      bindTarget("tgtPutaway", "targetPutaway", false);
+      bindTarget("tgtOtif", "targetOtif", true);
+      bindTarget("tgtPuenkt", "targetPuenkt", true);
+      bindTarget("tgtWaitGate", "targetWaitGate", false);
+
+      // Begriffsverzeichnis
+      const renderGlossary = (filter) => {
+        const q = (filter || "").trim().toLowerCase();
+        const items = q ? GLOSSARY_ITEMS.filter(x =>
+          x.term.toLowerCase().includes(q) || x.definition.toLowerCase().includes(q)) : GLOSSARY_ITEMS;
+        $("glossaryList").innerHTML = items.length
+          ? items.map(x => `<div class="glossary-item">
+              <div class="glossary-term">${esc(x.term)}<span class="glossary-level">${esc(x.level)}</span></div>
+              <div class="glossary-def">${esc(x.definition)}</div>
+              ${x.formula ? `<div class="glossary-formula">${esc(x.formula)}</div>` : ""}
+            </div>`).join("")
+          : `<div class="glossary-empty">Kein Treffer für „${esc(filter)}“.</div>`;
+      };
+      const openGlossary = () => {
+        $("glossaryPanel").hidden = false; $("glossaryBackdrop").hidden = false;
+        $("glossarySearch").value = ""; renderGlossary("");
+        $("glossarySearch").focus();
+      };
+      const closeGlossary = () => { $("glossaryPanel").hidden = true; $("glossaryBackdrop").hidden = true; };
+      $("btnGlossary").addEventListener("click", openGlossary);
+      $("glossaryClose").addEventListener("click", closeGlossary);
+      $("glossaryBackdrop").addEventListener("click", closeGlossary);
+      $("glossarySearch").addEventListener("input", (e) => renderGlossary(e.target.value));
+      this._sh.addEventListener("keydown", (e) => { if (e.key === "Escape") closeGlossary(); });
     }
 
     // ── Datenaufbereitung: Perioden × Segment -> Serien ───────────────────
@@ -839,9 +1044,16 @@
       S.querySelectorAll("#segpick button").forEach(c =>
         c.addEventListener("click", () => { this._seg = c.dataset.seg; this._render(); }));
 
-      // Dashboard-Grid + Detail + Scrubber
+      // Dashboard-Grid + Prozesszeiten (einklappbar) + Detail + Scrubber
       dash.innerHTML = `<div class="grid" id="grid"></div>
-        <div class="detail" id="detailWrap">
+        <div class="collapsible-section" style="margin-top:3mm">
+          <button class="collapse-toggle" id="toggleProcessTimes" type="button" aria-expanded="${this._showProcessTimes}">
+            <span class="collapse-arrow">${this._showProcessTimes ? "▾" : "▸"}</span>
+            ${this._showProcessTimes ? "Prozesszeiten ausblenden" : "Prozesszeiten anzeigen"}
+          </button>
+          <div class="card" id="processTimesCard" ${this._showProcessTimes ? "" : "hidden"}><div id="processTimes"></div></div>
+        </div>
+        <div class="detail" id="detailWrap" style="margin-top:3mm">
           <div class="detail-head">
             <h3 id="detailTitle"></h3>
             <span class="open-hint" id="openHint">▸ Klicken öffnet Detailansicht</span>
@@ -873,10 +1085,56 @@
         this._emitPeriod(this._perioden[i]);
       });
 
+      const ptToggle = this._sh.getElementById("toggleProcessTimes");
+      if (ptToggle) ptToggle.addEventListener("click", () => {
+        this._showProcessTimes = !this._showProcessTimes;
+        const card = this._sh.getElementById("processTimesCard");
+        card.hidden = !this._showProcessTimes;
+        ptToggle.setAttribute("aria-expanded", String(this._showProcessTimes));
+        ptToggle.querySelector(".collapse-arrow").textContent = this._showProcessTimes ? "▾" : "▸";
+        ptToggle.lastChild.textContent = ` ${this._showProcessTimes ? "Prozesszeiten ausblenden" : "Prozesszeiten anzeigen"}`;
+      });
+
       this._renderTiles();
+      this._renderProcessTimes();
       this._renderDetail();
       this._renderInsights();
       this._wireScrubber();
+    }
+
+    /* Erweiterte Prozesszeiten (Plan/Ist-Fenster + alle Detailübergänge bis
+       Fertigstellung). Standardmäßig eingeklappt, siehe Toggle oben. Zeigt
+       den aktuellen Wert der zuletzt sichtbaren Periode für das gewählte
+       Segment — konsistent mit den Haupt-Kacheln. */
+    _renderProcessTimes() {
+      const el = this._sh.getElementById("processTimes");
+      if (!el) return;
+      const rows = this._rows.filter(r => r.periode === this._perioden[this._perioden.length - 1] && r.segment === this._seg);
+      const r = rows[0] || {};
+      const items = [
+        ["plan_start_end_avg", "Geplanter Start → Geplantes Ende"],
+        ["actual_start_end_avg", "Ist-Start → Ist-Ende"],
+        ["arrival_dock_avg", "Ankunft → Am Tor angedockt"],
+        ["dock_unload_start_avg", "Angedockt → Entladen gestartet"],
+        ["unload_start_end_avg", "Entladen gestartet → Entladen beendet"],
+        ["unload_end_actual_end_avg", "Entladen beendet → Tatsächliches Ende"],
+        ["we_booked_completion_avg", "WE gebucht → Fertigstellung"],
+        ["arrival_completion_avg", "Ankunft → Fertigstellung"],
+        ["dock_completion_avg", "Angedockt → Fertigstellung"],
+      ];
+      el.innerHTML = `<div class="pt-hint">Letzte Periode (${esc(this._perioden[this._perioden.length-1])}) · ${esc(this._seg)}</div>
+        <div class="pt-list">${items.map(([k, label]) => {
+          const v = r[k];
+          return `<div class="pt-row"><span class="pt-label">${label}</span><span class="pt-val">${v != null ? v.toFixed(1) + " h" : "–"}</span></div>`;
+        }).join("")}</div>`;
+    }
+
+    /* Zielwert einer Kennzahl auflösen: aus der konfigurierbaren Property
+       (Cockpit-/Fachbereichsvorgabe), nicht fest im Code verdrahtet. */
+    _targetOf(m) {
+      if (!m || !m.targetProp) return null;
+      const v = this._props[m.targetProp];
+      return (v == null || v === "") ? null : Number(v);
     }
 
     _renderTiles() {
@@ -923,9 +1181,10 @@
 
         // Ziel-Status
         let slaHtml = "";
-        if (m.target != null) {
-          const ok = m.lowerBetter ? last <= m.target : last >= m.target;
-          slaHtml = `<span class="sla ${ok?"ok":"miss"}" title="Ziel ${fmtVal(m.target,m)}${m.unit==='%'?'%':m.unit}">${ok?"✓":"✕"} Ziel</span>`;
+        const _tgt = this._targetOf(m);
+        if (_tgt != null) {
+          const ok = m.lowerBetter ? last <= _tgt : last >= _tgt;
+          slaHtml = `<span class="sla ${ok?"ok":"miss"}" title="Ziel ${fmtVal(_tgt,m)}${m.unit==='%'?'%':m.unit}">${ok?"✓":"✕"} Ziel</span>`;
         }
         const yoyHtml = yoy != null
           ? `<span class="yoy ${ (m.lowerBetter? yoy<0 : yoy>0)?"up":"down"}" title="vs. Vorjahr">VJ ${yoy>=0?"+":""}${(yoy*100).toFixed(0)}%</span>`
@@ -935,17 +1194,36 @@
         tile.className = "tile" + (m.key === this._selMetric ? " sel" : "");
         tile.dataset.key = m.key;
         tile.innerHTML = `
-          <div class="m-lbl">${m.label}</div>
+          <div class="m-lbl">${m.label}<button class="tile-info" data-key="${m.key}" type="button"
+            aria-label="Kennzahl ${m.label} erklären" title="Kennzahl erklären">i</button></div>
           <div class="m-val"><b data-count="${last}">${m.pct ? "0.0" : "0"}</b><span class="u">${m.unit}</span>
             <span class="m-delta ${good?"up":"down"}">${rel>=0?"▲":"▼"} ${Math.abs(rel*100).toFixed(0)}%</span></div>
           <div class="m-sub">${slaHtml}${yoyHtml}</div>
           ${this._sparkSvg(pts, m, i)}`;
-        tile.addEventListener("click", () => { this._selMetric = m.key; this._render(); });
+        tile.addEventListener("click", (e) => {
+          if (e.target.closest(".tile-info")) return; // Info-Klick öffnet nur das Glossar, nicht die Detailansicht
+          this._selMetric = m.key; this._render();
+        });
         grid.appendChild(tile);
 
         this._countUp(tile.querySelector("b"), last, m);
         this._animateDraw(tile.querySelector("path.line"), tile.querySelector("circle.head"));
         this._wireSparkHover(tile, pts, m);
+      });
+      // Einheitliches Infobutton-System: jeder "i"-Button auf einer Kachel
+      // öffnet dasselbe Begriffsverzeichnis, vorgefiltert auf die Kennzahl —
+      // eine Quelle für Erklärungen, kein zweites, potenziell abweichendes Popup.
+      grid.querySelectorAll(".tile-info").forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const m = METRICS.find(x => x.key === btn.dataset.key);
+          const search = this._sh.getElementById("glossarySearch");
+          const panel = this._sh.getElementById("glossaryPanel");
+          const backdrop = this._sh.getElementById("glossaryBackdrop");
+          panel.hidden = false; backdrop.hidden = false;
+          search.value = m ? m.label : "";
+          search.dispatchEvent(new Event("input"));
+        });
       });
     }
 
@@ -1142,7 +1420,8 @@
       const all = years.flatMap(y => y.pts).filter(v => v != null);
       if (!all.length) return "";
       let lo = Math.min(...all), hi = Math.max(...all);
-      if (m.target != null) { lo = Math.min(lo, m.target); hi = Math.max(hi, m.target); }
+      const _tgtAxis = this._targetOf(m);
+      if (_tgtAxis != null) { lo = Math.min(lo, _tgtAxis); hi = Math.max(hi, _tgtAxis); }
       if (lo === hi) hi = lo + 1;
       const pad = (hi - lo) * 0.08; lo -= pad; hi += pad;
       const X = (slot) => padL + ((slot - 1) / (slots - 1)) * (W - padL - padR);
@@ -1160,8 +1439,9 @@
         xlab += `<text class="axis-lbl" x="${X(s)}" y="${H-8}" text-anchor="middle">${isMonth?("M"+s):("W"+String(s).padStart(2,"0"))}</text>`;
       // Ziellinie
       let target = "";
-      if (m.target != null) {
-        const ty = Y(m.target);
+      const _tgtLine = this._targetOf(m);
+      if (_tgtLine != null) {
+        const ty = Y(_tgtLine);
         target = `<line x1="${padL}" y1="${ty}" x2="${W-padR}" y2="${ty}" stroke="var(--warn)"
           stroke-width="1.2" stroke-dasharray="5 4" opacity=".7"/>`;
       }
@@ -1435,7 +1715,7 @@
       }
       if (lo === hi) hi = lo + 1;
       // Ziellinie einbeziehen, damit sie sichtbar bleibt
-      const target = m.target != null ? m.target : null;
+      const target = this._targetOf(m);
       if (target != null) { lo = Math.min(lo, target); hi = Math.max(hi, target); }
       const pad = (hi - lo) * 0.08; lo -= pad; hi += pad;
       const clampY = (v) => Math.max(lo, Math.min(hi, v)); // Bandwerte an die Achse klemmen
