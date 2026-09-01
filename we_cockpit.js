@@ -1,5 +1,5 @@
 /* =========================================================================
- * WE-Prozess-Cockpit – SAC Custom Widget (v0.19.0) · Entwickler: Benne
+ * WE-Prozess-Cockpit – SAC Custom Widget (v0.19.2-no-self-dispatch) · Entwickler: Benne
  * Segment-/Schluesselabgleich mit dem Wareneingang-Tracker.
  * ========================================================================= */
 /* =========================================================================
@@ -94,29 +94,27 @@
     "ILW Krefeld BSL / Eigendisposition": "BSL",
     "ILW Krefeld Landverkehr": "Landverkehr",
     "ILW Krefeld Frei Haus / DDP": "Landverkehr",
-    "Eigendisposition": "Eigendisposition",
+    "Eigendisposition": "Sonstige",
+    "Nicht zugeordnet": "Nicht zugeordnet",
   };
   function ladestelleKurz(wert) {
-    if (isNullDim(wert)) return "Eigendisposition";
+    if (isNullDim(wert)) return "Nicht zugeordnet";
     const w = String(wert).trim();
     if (LADESTELLE_KURZ[w]) return LADESTELLE_KURZ[w];
     if (/container|containe/i.test(w)) return "Container";
     if (/bsl/i.test(w)) return "BSL";
     if (/frei haus|ddp|landverk/i.test(w)) return "Landverkehr";
-    if (/eigendispo/i.test(w)) return "Eigendisposition";
-    return w; // z. B. "Nicht zugeordnet" bleibt als eigenes Segment sichtbar
+    if (/eigendispo/i.test(w)) return "Sonstige";
+    if (/nicht zugeordnet/i.test(w)) return "Nicht zugeordnet";
+    return w;
   }
 
   function segmentOf(ladestelle, tm) {
-    // Ladestelle hat Vorrang - identische Kategorien wie im Tracker
+    // Ausschließlich die Ladestelle bestimmt die Kategorie. Ist sie leer,
+    // bleibt die TE sichtbar als "Nicht zugeordnet"; das Transportmittel darf
+    // diese Datenlücke nicht als Landverkehr/Container kaschieren.
     if (!isNullDim(ladestelle)) return ladestelleKurz(ladestelle);
-    // Fallback über das Transportmittel, wenn die Ladestelle nicht gebunden ist
-    if (isNullDim(tm)) return "Eigendisposition";
-    const t = String(tm).toUpperCase();
-    if (t === "BSL") return "BSL";                     // BSL ist eine eigene Kategorie, kein LKW
-    if (t === "SZ" || t.includes("LKW")) return "Landverkehr";
-    if (/G0|CONTAINER|'/.test(t) || /^\d{2}[A-Z]\d$/.test(t)) return "Container";
-    return "Eigendisposition";
+    return "Nicht zugeordnet";
   }
 
   /* Rückrichtung für den Query-Filter: normiertes Segment -> rohe
@@ -125,6 +123,9 @@
   const SEGMENT_TO_LADESTELLE = (() => {
     const rev = {};
     for (const [raw, seg] of Object.entries(LADESTELLE_KURZ)) (rev[seg] ||= []).push(raw);
+    // BW verwendet für nicht zugeordnete Merkmale typischerweise den
+    // Nullmember "#"; weitere tolerierte Darstellungen bleiben als Kandidaten.
+    rev["Nicht zugeordnet"] = ["#", "@NullMember", "Nicht zugeordnet"];
     return rev;
   })();
 
@@ -170,6 +171,19 @@
     /* --- Normalisierung ------------------------------------------------ */
     let lastBeleg = null;
     const positions = [];
+    // Ladestelle auf TE-Ebene auflösen. Wenn sie nur in einer Positionszeile
+    // gefüllt ist, gilt sie für die gesamte TE. Nur wenn in keiner Zeile der TE
+    // eine Ladestelle vorhanden ist, wird die TE "Nicht zugeordnet".
+    const teLadestelle = new Map();
+    let scanBeleg = null;
+    for (const scan of rows) {
+      if (!isNullDim(scan && scan.belegnr)) {
+        const raw = String(scan.belegnr).trim();
+        scanBeleg = raw.replace(/^0+/, "") || raw;
+      }
+      if (scanBeleg && !isNullDim(scan && scan.ladestelle) && !teLadestelle.has(scanBeleg))
+        teLadestelle.set(scanBeleg, scan.ladestelle);
+    }
     for (const r0 of rows) {
       const r = Object.assign({}, r0);
       // Belegnummer/TE nur auf erster Position gefüllt -> forward fill
@@ -190,6 +204,8 @@
       if (!r.ts_we_pos && r.ts_we_buchung) r.ts_we_pos = r.ts_we_buchung;
       // Zeitfenster (geplant_start/ende) hat Vorrang vor Einzeltermin
       if (!r.ts_geplant && r.ts_geplant_ende) r.ts_geplant = r.ts_geplant_ende;
+      const teLade = teLadestelle.get(r.belegnr);
+      r.ladestelle = teLade != null ? teLade : null;
       r.segment = segmentOf(r.ladestelle, r.transportmittel);
       // Alle 7 Schicht/KW-Paare aus dem Export parsen
       r.kw_ankunft = parseKw(r.kw_ankunft); r.kw_andocken = parseKw(r.kw_andocken);
@@ -653,7 +669,7 @@
     BSL: "#8e44ad",
     Container: "#e67e22",
     Landverkehr: "#27ae60",
-    Eigendisposition: "#5d6d7e",
+    "Nicht zugeordnet": "#7f8c8d",
   };
   // Schicht-Farben: Frühschicht (F) warm/hell, Spätschicht (S) kühl/dunkel
   const SH_COLORS = { F: "#f5b041", S: "#5dade2" };
@@ -1176,6 +1192,7 @@
           <option value="">Alle Segmente</option>
           <option value="Container">Container</option>
           <option value="Landverkehr">Landverkehr</option>
+          <option value="Nicht zugeordnet">Nicht zugeordnet</option>
           <option value="BSL">BSL</option>
           <option value="Sonstige">Sonstige</option>
         </select>
