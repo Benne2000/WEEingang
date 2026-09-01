@@ -1,5 +1,5 @@
 /* =========================================================================
- * WE Strategie-Cockpit – SAC Custom Widget (v0.19.1-fixed) · Entwickler: Benne
+ * WE Strategie-Cockpit – SAC Custom Widget (v0.19.6-no-self-dispatch) · Entwickler: Benne
  * Strategische Langzeitsicht auf den Wareneingangsprozess.
  * Erwartet voraggregierte Perioden-Daten (je KW/Monat × Segment), wie sie
  * BW über SUM/MIN/MAX/COUNT liefert. Kein Median (BW-Einschränkung) — das
@@ -103,8 +103,9 @@
 
   const SEG_COLORS = {
     Container: "#e67e22", BSL: "#8e44ad", Landverkehr: "#27ae60",
-    Sonstige: "#5d6d7e", Gesamt: "#c0392b",
+    "Nicht zugeordnet": "#7f8c8d", Sonstige: "#5d6d7e", Gesamt: "#c0392b",
   };
+  const SEGMENT_ORDER = ["BSL", "Container", "Landverkehr", "Nicht zugeordnet", "Sonstige"];
 
   // Phasen für die Engpass-Wanderung (Zusammensetzung der Standzeit)
   const PHASE_KEYS = ["wait_gate", "reaction", "unload", "booking", "putaway"];
@@ -119,15 +120,15 @@
     booking: "booking_n", putaway: "putaway_n", dwell: "dwell_n",
   };
   const PROCESS_TIME_ITEMS = [
-    { key:"plan_start_end_avg", label:"Geplanter Start → Geplantes Ende", weightKey:"anzahl_te" },
-    { key:"actual_start_end_avg", label:"Ist-Start → Ist-Ende", weightKey:"anzahl_te" },
-    { key:"arrival_dock_avg", label:"Ankunft → Am Tor angedockt", weightKey:"anzahl_te" },
-    { key:"dock_unload_start_avg", label:"Angedockt → Entladen gestartet", weightKey:"anzahl_te" },
-    { key:"unload_start_end_avg", label:"Entladen gestartet → Entladen beendet", weightKey:"anzahl_te" },
-    { key:"unload_end_actual_end_avg", label:"Entladen beendet → Tatsächliches Ende", weightKey:"anzahl_te" },
-    { key:"we_booked_completion_avg", label:"WE gebucht → Fertigstellung", weightKey:"anzahl_pos" },
-    { key:"arrival_completion_avg", label:"Ankunft → Fertigstellung", weightKey:"anzahl_te" },
-    { key:"dock_completion_avg", label:"Angedockt → Fertigstellung", weightKey:"anzahl_te" },
+    { key:"plan_start_end_avg", from:"Geplanter Start", to:"Geplantes Ende", group:"Planfenster", level:"TE", weightKey:"anzahl_te" },
+    { key:"actual_start_end_avg", from:"Ist-Start", to:"Ist-Ende", group:"Ist-Fenster", level:"TE", weightKey:"anzahl_te" },
+    { key:"arrival_dock_avg", from:"Ankunft", to:"Am Tor angedockt", group:"Hofprozess", level:"TE", weightKey:"anzahl_te" },
+    { key:"dock_unload_start_avg", from:"Angedockt", to:"Entladen gestartet", group:"Hofprozess", level:"TE", weightKey:"anzahl_te" },
+    { key:"unload_start_end_avg", from:"Entladen gestartet", to:"Entladen beendet", group:"Entladung", level:"TE", weightKey:"anzahl_te" },
+    { key:"unload_end_actual_end_avg", from:"Entladen beendet", to:"Tatsächliches Ende", group:"Entladung", level:"TE", weightKey:"anzahl_te" },
+    { key:"we_booked_completion_avg", from:"WE gebucht", to:"Fertigstellung", group:"Fertigstellung", level:"Position", weightKey:"anzahl_pos" },
+    { key:"arrival_completion_avg", from:"Ankunft", to:"Fertigstellung", group:"Gesamtdurchlauf", level:"TE", weightKey:"anzahl_te" },
+    { key:"dock_completion_avg", from:"Angedockt", to:"Fertigstellung", group:"Gesamtdurchlauf", level:"TE", weightKey:"anzahl_te" },
   ];
   const PHASE_COLOR = {
     wait_gate: "#5d6d7e", reaction: "#2980b9", unload: "#27ae60",
@@ -176,20 +177,23 @@
     "ILW Krefeld Frei Haus / DDP": "Landverkehr",
   };
   function normSegment(s) {
-    // Leer/undefiniert -> "Sonstige", NIE "Gesamt" (das ist die separat
-    // berechnete Summe über alle echten Segmente; würde sich sonst mit
-    // dieser Kategorie überschneiden und Werte doppelt zählen).
-    if (!s) return "Sonstige";
+    // Leere Ladestelle / BW-Nullmember ist eine eigene, sichtbare Kategorie.
+    // Keine Ableitung über das Transportmittel: fehlende Zuordnung soll als
+    // Datenqualitätsmerkmal erhalten bleiben statt in LKW/Container zu fallen.
+    if (s == null) return "Nicht zugeordnet";
     const raw = String(s).trim();
+    if (!raw || ["#", "@NULLMEMBER", "@TOTALMEMBERS", "NULL", "UNDEFINED", "00000000", "000000000000"].includes(raw.toUpperCase()))
+      return "Nicht zugeordnet";
     if (LADESTELLE_KURZ_STRAT[raw]) return LADESTELLE_KURZ_STRAT[raw];
     const u = raw.toUpperCase();
     if (u.includes("CONTAINE")) return "Container";   // trifft auch "CONTAINER" voll
     if (u.includes("LANDVERK") || u.includes("FREI HAUS") || u.includes("DDP")) return "Landverkehr";
     if (u.includes("BSL")) return "BSL";
-    if (u.includes("NICHT ZUGEORDNET")) return "Sonstige";
+    if (u.includes("NICHT ZUGEORDNET")) return "Nicht zugeordnet";
+    if (u.includes("EIGENDISPOSITION")) return "Sonstige";
     if (raw === "Gesamt") return "Sonstige"; // Schutz vor Kollision mit der Summenzeile
-    if (["Container", "BSL", "Landverkehr", "Sonstige"].includes(raw)) return raw;
-    return raw || "Sonstige";
+    if (["Container", "BSL", "Landverkehr", "Nicht zugeordnet", "Sonstige"].includes(raw)) return raw;
+    return raw;
   }
 
   /* Ordnet einen Measure-Namen (interner Name ODER echter BW-Name) dem Feld zu.
@@ -336,16 +340,17 @@
     .collapse-toggle:hover{ border-color:var(--accent); color:var(--ink);}
     .collapse-arrow{ font-size:10px; color:var(--muted); width:10px; display:inline-block;}
     .pt-hint{ font-family:var(--font-mono); font-size:9.5px; color:var(--muted); text-transform:uppercase;
-      letter-spacing:.06em; margin-bottom:8px;}
-    .pt-list{ display:flex; flex-direction:column; gap:5px;}
-    .pt-row{ display:flex; justify-content:space-between; align-items:center; padding:5px 0;
-      border-bottom:1px solid var(--border);}
-    .pt-row:last-child{ border-bottom:0;}
-    .pt-label{ font-size:11.5px; color:var(--ink2);}
-    .pt-val{ font-family:var(--font-mono); font-size:12px; font-weight:700; color:var(--ink);}
+      letter-spacing:.06em; margin:10px 2px 8px;}
+    /* Prozesszeit-Kacheln verwenden bewusst dieselben .grid/.tile-, Wert- und
+       Sparkline-Klassen wie die Hauptkennzahlen. So bleiben Theme, Hover,
+       Responsive-Verhalten und Kompaktmodus dauerhaft identisch. */
+    .process-tile{ cursor:default; }
+    .process-tile .m-lbl{ min-height:24px; line-height:1.35; }
+    .process-tile .m-sub .yoy{ color:var(--ink2); }
     .collapsible-section{ display:block; }
     .collapsible-section .card{ margin-top:6px; padding:10px 12px; background:var(--card);
       border:1px solid var(--border); border-radius:var(--r-md); }
+    .collapsible-section #processTimesCard{ padding:0; background:transparent; border:0; }
     .collapsible-section .card[hidden]{ display:none !important; }
     /* Einheitliches Infobutton-System: gleiche Größe/Form/Rahmen überall */
     .tile-info{ display:inline-flex; align-items:center; justify-content:center; width:14px; height:14px;
@@ -406,13 +411,14 @@
     .tile .m-val .u{ font-size:12px; color:var(--ink2); font-family:var(--font-mono); }
     .tile .m-delta{ font-family:var(--font-mono); font-size:10px; font-weight:600; }
     .tile .m-delta.up{ color:var(--good); } .tile .m-delta.down{ color:var(--bad); }
-    .tile .m-sub{ display:flex; gap:6px; margin:1px 0 0; min-height:15px; }
-    .tile .sla, .tile .yoy{ font-family:var(--font-mono); font-size:9px; font-weight:600;
+    .tile .m-sub{ display:flex; flex-wrap:wrap; gap:6px; row-gap:4px; margin:1px 0 0; min-height:15px; }
+    .tile .sla, .tile .yoy, .tile .te-base{ font-family:var(--font-mono); font-size:9px; font-weight:600;
       padding:1px 6px; border-radius:10px; letter-spacing:.02em; }
     .tile .sla.ok{ color:var(--good); background:color-mix(in srgb, var(--good) 14%, transparent); }
     .tile .sla.miss{ color:var(--bad); background:color-mix(in srgb, var(--bad) 14%, transparent); }
     .tile .yoy.up{ color:var(--good); } .tile .yoy.down{ color:var(--bad); }
     .tile .yoy{ background:var(--card2); }
+    .tile .te-base{ color:var(--blue); background:var(--blue-dim); white-space:nowrap; }
     .tile .spark{ display:block; width:100%; height:52px; margin-top:6px; overflow:visible; }
     .tile .spark path.band{ opacity:.14; stroke:none; }
     .tile .spark path.line{ fill:none; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
@@ -1040,7 +1046,11 @@
       let rows = (this._rows || []).filter(r => r && r.periode != null && r.periode !== "");
       if (this._props.aggregation === "month") rows = this._rollupToMonths(rows);
       const perioden = [...new Set(rows.map(r => r.periode))].sort();
-      const segmente = [...new Set(rows.map(r => r.segment).filter(Boolean))].sort();
+      const segmente = [...new Set(rows.map(r => r.segment).filter(Boolean))].sort((a, b) => {
+        const ai = SEGMENT_ORDER.indexOf(a), bi = SEGMENT_ORDER.indexOf(b);
+        if (ai !== -1 || bi !== -1) return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
+        return String(a).localeCompare(String(b), "de");
+      });
       if (this._seg !== "Gesamt" && !segmente.includes(this._seg)) this._seg = "Gesamt";
       // Lookup: (periode, Ladestelle) -> row
       const idx = {};
@@ -1092,8 +1102,8 @@
         if (!r) { pts.push(null); continue; }
         pts.push({
           per, v: r[metricKey],
-          lo: m.band ? r[m.band[0]] : null,
-          hi: m.band ? r[m.band[1]] : null,
+          lo: m && m.band ? r[m.band[0]] : null,
+          hi: m && m.band ? r[m.band[1]] : null,
         });
       }
       return pts;
@@ -1210,10 +1220,39 @@
       const per = this._perioden[idx];
       const r = (this._seg === "Gesamt" ? this._idx.__gesamt[per] : this._idx[per + "|" + this._seg]) || {};
       el.innerHTML = `<div class="pt-hint">Ausgewählte Periode (${esc(per)}) · ${esc(this._seg === "Gesamt" ? "Alle Ladestellen" : this._seg)}</div>
-        <div class="pt-list">${PROCESS_TIME_ITEMS.map(({key,label}) => {
+        <div class="grid pt-grid">${PROCESS_TIME_ITEMS.map(({key,from,to,group,level}, i) => {
           const v = r[key];
-          return `<div class="pt-row"><span class="pt-label">${label}</span><span class="pt-val">${v != null ? Number(v).toFixed(1) + " h" : "–"}</span></div>`;
+          const pts = this._serie(key);
+          const valid = pts.slice(0, idx + 1).filter(p => p && p.v != null);
+          const base = valid.length > 1
+            ? valid.slice(0, -1).reduce((sum, p) => sum + Number(p.v), 0) / (valid.length - 1)
+            : v;
+          const rel = v != null && base ? (Number(v) - base) / Math.abs(base) : 0;
+          const metric = { key, label:`${from} → ${to}`, unit:"h", lowerBetter:true };
+          const hasData = pts.some(p => p && p.v != null);
+          return `<div class="tile process-tile${v == null ? " tile-nodata" : ""}" data-key="${esc(key)}">
+            <div class="m-lbl">${esc(metric.label)}</div>
+            <div class="m-val"><b>${v != null ? "0" : "–"}</b><span class="u">h</span>
+              ${v != null && valid.length > 1 ? `<span class="m-delta ${rel <= 0 ? "up" : "down"}">${rel >= 0 ? "▲" : "▼"} ${Math.abs(rel * 100).toFixed(0)}%</span>` : ""}
+            </div>
+            <div class="m-sub">${this._teBaseHtml(r)}<span class="yoy">${esc(group)}</span><span class="yoy">Ebene ${esc(level)}</span></div>
+            ${hasData ? this._sparkSvg(pts, metric, i + METRICS.length) : `<div class="nodata-hint">Keine Daten</div>`}
+          </div>`;
         }).join("")}</div>`;
+
+      PROCESS_TIME_ITEMS.forEach(({key,from,to}, i) => {
+        const tile = el.querySelector(`.process-tile[data-key="${key}"]`);
+        if (!tile) return;
+        const value = r[key];
+        const metric = { key, label:`${from} → ${to}`, unit:"h", lowerBetter:true };
+        const pts = this._serie(key);
+        this._countUp(tile.querySelector(".m-val b"), value, metric);
+        const svg = tile.querySelector("svg.spark");
+        if (svg) {
+          this._animateDraw(svg.querySelector("path.line"), svg.querySelector("circle.head"), i * 35);
+          this._wireSparkHover(tile, pts, metric);
+        }
+      });
     }
 
     /* Zielwert einer Kennzahl auflösen: aus der konfigurierbaren Property
@@ -1222,6 +1261,19 @@
       if (!m || !m.targetProp) return null;
       const v = this._props[m.targetProp];
       return (v == null || v === "") ? null : Number(v);
+    }
+
+    /* Einheitliche Datenbasis-Angabe für alle Kacheln. Die Zahl folgt immer
+       der gerade dargestellten Periode und Ladestelle. Auch Kennzahlen auf
+       Positionsebene zeigen damit zusätzlich, wie viele TEs beteiligt waren. */
+    _teBaseText(row) {
+      const n = row && row.anzahl_te != null ? Number(row.anzahl_te) : null;
+      return n != null && Number.isFinite(n)
+        ? `Basis: Σ ${Math.round(n).toLocaleString("de-DE")} TE`
+        : "Basis: Σ – TE";
+    }
+    _teBaseHtml(row) {
+      return `<span class="te-base" title="Summe der Transporteinheiten, auf denen die Kennzahl basiert">${this._teBaseText(row)}</span>`;
     }
 
     _renderTiles() {
@@ -1241,6 +1293,7 @@
         // einem Jahr (falls die Historie so weit reicht).
         let yoy = null;
         const lastPer = valid[valid.length - 1].per;
+        const basisRow = this._seg === "Gesamt" ? this._idx.__gesamt[lastPer] : this._idx[lastPer + "|" + this._seg];
         const pyPer = this._priorYearPeriod(lastPer);
         const prevYear = pyPer ? pts.find(p => p && p.per === pyPer) : null;
         if (prevYear && prevYear.v != null && prevYear.v !== 0)
@@ -1268,7 +1321,7 @@
             aria-label="Kennzahl ${m.label} erklären" title="${esc(infoTitle)}">i</button></div>
           <div class="m-val"><b data-count="${last}">${m.pct ? "0.0" : "0"}</b><span class="u">${m.unit}</span>
             <span class="m-delta ${good?"up":"down"}">${rel>=0?"▲":"▼"} ${Math.abs(rel*100).toFixed(0)}%</span></div>
-          <div class="m-sub">${slaHtml}${yoyHtml}</div>
+          <div class="m-sub">${this._teBaseHtml(basisRow)}${slaHtml}${yoyHtml}</div>
           ${this._sparkSvg(pts, m, i)}`;
         tile.addEventListener("click", (e) => {
           if (e.target.closest(".tile-info")) return; // Info-Klick darf weder Glossar noch Detailansicht öffnen
@@ -2099,6 +2152,8 @@
         const r = this._seg === "Gesamt" ? this._idx.__gesamt[per] : this._idx[per + "|" + this._seg];
         const b = tile.querySelector("b");
         if (b) b.textContent = (r && r[m.key] != null) ? fmtVal(r[m.key], m) : "–";
+        const teBase = tile.querySelector(".te-base");
+        if (teBase) teBase.textContent = this._teBaseText(r);
       });
       // Prozesszeiten folgen derselben ausgewählten Periode wie die Kacheln.
       this._renderProcessTimes();
