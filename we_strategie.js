@@ -1,5 +1,168 @@
+/* BEGIN SHARED UX */
+/* Shared presentation helpers, embedded in each SAC widget at build time. */
+(function () {
+  if (globalThis.WEUX) return;
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const num = n => Number.isFinite(Number(n)) && n != null ? Number(n).toLocaleString('de-DE',{maximumFractionDigits:1}) : 'nicht verfügbar';
+  const topics = {
+    data: ['Datenbasis & Zeitbezug','Historische Auswertung abgeschlossener Wareneingangsvorgänge. Das SAC-Modell liefert ausschließlich WE-relevante Datensätze (R). Z und N sind nicht enthalten.','Die Auswahl erfolgt nach Geplanter Start ab [0WM_SPFRG]. Planstart am 31.08., Fertigstellung am 01.09.: Zuordnung zum August. ISO-Wochen können zwei Monate berühren. Ankunft und Fertigstellung bleiben die Ereignisse für Zeitdifferenzen.','Die BW-Übertragung erfolgt üblicherweise täglich gegen 04:00 Uhr. Anlieferungen werden nach letzter Einlagerung, TEs nach Abfahrt übertragen. Später verfügbare Daten können frühere Planstartperioden ergänzen. Der angezeigte Datenstand muss aus dem tatsächlichen Ladeprozess stammen.'],
+    start: ['So verwendest du die Analyse','1. In der Strategieübersicht Ladestelle und Woche oder Monat wählen. Die Kacheln zeigen den jeweiligen letzten verfügbaren Wert; der Zeitraum steht an der Kachel.','2. Eine Kennzahl wählen, um ihren Verlauf zu untersuchen. Einen Zeitpunkt im Diagramm anklicken, um die zugehörige Detailanalyse zu öffnen.','3. Im Periodenüberblick Qualität und Zeiten prüfen. Reiter führen zu Prozesskette und Ursachenanalysen. „TE-Details“ öffnet die Transporteinheit mit ihren Anlieferungen und Positionen. Zurück führt zur vorherigen Analyse; die Filter bleiben dabei bestehen.'],
+    hierarchy: ['TE → Anlieferung → Position','Eine Transporteinheit (TE) kann mehrere Anlieferungen enthalten; jede Anlieferung kann mehrere Positionen enthalten.','Zeitkennzahlen werden je TE bewertet. OTIF und Mengentreue besitzen getrennte Bewertungen je Anlieferung und Position. Werte verschiedener Ebenen sind nicht direkt addierbar.','„Basis“ zählt die für genau diese Kennzahl bewertbaren Objekte. „Im Filter“ bezeichnet den gesamten ausgewählten Datenumfang. Die Anzahl kann von Kennzahl zu Kennzahl abweichen.'],
+    quality: ['Qualitätswerte richtig lesen','OTIF bedeutet „On Time In Full“: pünktlich und vollständig. Die BW-Kennzeichen werden getrennt für Positionen und Anlieferungen ausgewertet.','Die berechnete Termintreue verwendet Ankunft ≤ Planstart + die angezeigte Toleranz. Auch sehr frühe Ankünfte erfüllen diese Regel. BW-Pünktlichkeit verwendet dagegen P/N. Unterschiedliche Bewertungsbasen können zu unterschiedlichen Quoten führen.','„90 erfüllt / 100 bewertet · 5 ohne Bewertung“ bedeutet 90 %, nicht 90 von 105. Fehlende oder widersprüchliche Bewertungen sind nicht automatisch negativ.'],
+    statistics: ['Statistik & Vergleiche','Ø ist der arithmetische Mittelwert der gültigen Werte. Der Median liegt in der Mitte der sortierten Werte. Beim P75 liegen 75 % der Werte auf oder unter diesem Wert. Die Mediane verschiedener Phasen dürfen nicht zu einer Gesamtdauer addiert werden.','Die auffälligste Prozessphase wird nach Median und Streuung ausgewählt (mindestens 8 gültige Fälle). Das ist ein Analysehinweis, keine bestätigte Ursache.','Ausreißer werden mit Median und robuster Streuung (MAD, gegebenenfalls logarithmisch) in der eingestellten Vergleichsgruppe erkannt. Ein hoher z-Wert beschreibt statistische Abweichung, keinen Datenfehler.'],
+    comparison: ['Pfeile, Trends und Ziele','Strategieübersicht: Der Pfeil vergleicht den letzten verfügbaren Periodenwert mit dem ungewichteten Mittel der vorherigen dargestellten Perioden; erst ab vier gültigen Perioden.','Detailanalyse: Der Pfeil vergleicht den letzten dargestellten Trendabschnitt mit dem nach Fallzahl gewichteten Mittel der vorherigen Trendabschnitte. Das ist kein Vergleich mit genau einer Vorperiode.','Vorjahreswerte vergleichen dieselbe Kalenderwoche oder denselben Monat im Vorjahr. Prozentangaben sind relative Änderungen: von 80 % auf 88 % sind +10 % relativ bzw. +8 Prozentpunkte.','Ziele sind vorläufig und manuell konfiguriert. Die separate fachliche Baseline aus 14 vollständigen Monaten ist noch nicht angebunden. Grün bedeutet günstigere, Rot ungünstigere Entwicklung; eine reine Zunahme von Volumen ist neutral.'],
+    errors: ['Datenfehler & Abdeckung','Ein Fehlerfall ist eine erkannte fehlende, negative oder widersprüchliche Angabe. Mehrere Fehler können dieselbe TE betreffen. Nur betroffene Bewertungen werden ausgeschlossen.','Abdeckung zeigt, ob benötigte Felder vorhanden bzw. bewertbar sind. Hohe Abdeckung bestätigt nicht die fachliche Richtigkeit. Es gibt keinen pauschalen Gesamtprozentsatz über unterschiedliche Prüfungen.','„Nicht bewertbar“ bedeutet: für diese Kennzahl fehlen gültige Werte oder der passende Nenner. Ein gültiger Wert von null bleibt 0. „Zu geringe Basis“ betrifft die Mindestfallzahl einer Statistik.'],
+    units: ['Mengen & Einheiten','Mengen und Volumen werden aus den gelieferten Daten summiert. Eine gemeinsame Einheit darf nur angezeigt werden, wenn das BW-Modell diese bestätigt.','Bei unbekannter oder gemischter Einheit bleiben die Rohsummen als solche gekennzeichnet. Aus Mengen unterschiedlicher Einheiten lässt sich keine gemeinsame Stückzahl ableiten. Kollis bezeichnet die Anzahl der Packstücke. PA1 ist die Menge je Palette für die rechnerische Palettenzahl.'],
+    location: ['Ladestelle','Container, Landverkehr und BSL sind Ausprägungen der Ladestelle.','„Nicht zugeordnet“ enthält TEs, für die keine Ladestelle gepflegt ist. Das ist eine Datenlücke, kein zusätzlicher Prozess.'],
+    ranking: ['Rankings & Mindestbasis','Spediteure werden anhand ihrer bewertbaren BW-Pünktlichkeit verglichen; Lieferanten anhand bewertbarer Positionsmengen. Kleine Fallzahlen können stark schwanken.','Die Mindestbasis steht direkt am jeweiligen Ranking. Nicht aufgeführte Lieferanten oder Spediteure können unter dieser Mindestbasis liegen. Kritische Positionen werden nach absoluter Anzahl gerankt; Anteil und Gesamtbasis helfen beim Einordnen.'],
+    experts: ['Experteneinstellungen','Ausreißerschwelle und Vergleichsgruppe beeinflussen die statistischen Hinweise. Die Toleranz beeinflusst die berechnete Termintreue; BW-Kennzeichen werden nicht verändert.','Einstellungen wirken im Widget. Eine abweichende Toleranz wird sichtbar angezeigt. Fachliche Freigaben und Berechtigungen müssen in SAC geregelt werden.'],
+    shift: ['Schichtvergleich','Die Periodenauswahl bleibt am Planstart ausgerichtet. Innerhalb dieser Auswahl werden die Schichten anhand der jeweiligen BW-Ereignismerkmale betrachtet.','Schichtzeiten und die wöchentliche Mannschaftsrotation sind von der Planstartperiode zu unterscheiden. Die verwendete Schicht steht am Diagramm, beispielsweise Ankunftsschicht.']
+  };
+  const metrics = {
+    dwell_avg:['Ø Standzeit','TE','Aufenthaltsdauer der TE am Standort.','Abfahrt Kontrollpunkt − Ankunft Kontrollpunkt','dwell'],
+    booking_avg:['Ø Vereinnahmung','TE','Kernzeit bis zur abgeschlossenen WE-Buchung der TE.','Letzte WE-Buchung der TE − tatsächliches Entladeende [BWMISTTEE]','booking'],
+    putaway_avg:['Ø Einlagerung · Näherung','TE','Fertigstellung ersetzt vorläufig das genaue HU-Einlagerungsende.','Letzte Fertigstellung aller TE-Positionen − letzte WE-Buchung der TE','putaway'],
+    operative_avg:['Ø Operativer WE · Näherung','TE','Gesamtzeit ab Entladestart bis zur letzten Fertigstellung. Näherung ohne HU-Ende.','Letzte Fertigstellung aller TE-Positionen − Entladestart','operative'],
+    wait_gate_avg:['Ø Wartezeit bis Andocken','TE','Zeit vom Eintreffen bis zum Andocken.','Andocken − Ankunft Kontrollpunkt','wait_gate'],
+    reaction_avg:['Ø Entladevorlaufzeit','TE','Zeit zwischen Andocken und Entladestart.','Entladestart − Andocken','reaction'],
+    unload_avg:['Ø Entladedauer','TE','Zeit für die tatsächliche Entladung.','Tatsächliches Entladeende [BWMISTTEE] − Entladestart','unload'],
+    calc_punctual:['Berechnete Termintreue','TE','Bewertung anhand der Zeitstempel; auch frühe Ankünfte gelten als pünktlich.','TE mit Ankunft ≤ Planstart + eingestellte Toleranz / bewertbare TE × 100','delay'],
+    otif_quote:['OTIF · Anlieferung','Anlieferung','Pünktlich und vollständig gemäß BW.','O / (O + N) × 100','otifDelivery','BW [BWMOTIFA]'],
+    otif_pos_quote:['OTIF · Position','Position','Pünktlich und vollständig gemäß BW, separat je Position.','O / (O + N) × 100','otifPosition','BW [BWMOTIF]'],
+    voll_quote:['Liefervollständigkeit','Anlieferung','Vollständige Anlieferungen gemäß BW.','V / (V + N) × 100','fullDelivery','BW [BWMLIEFV]'],
+    puenkt_quote:['BW-Pünktlichkeit · P/N','TE','Fachliche Pünktlichkeitsbewertung aus BW.','P / (P + N) × 100','punctualTe','BW [BWMLIEFP]'],
+    qty_pos_quote:['Mengentreue · Position','Position','Positionen mit übereinstimmender IST- und SOLL-Menge.','Positionen mit IST = SOLL / vollständig bewertbare Positionen × 100','qtyPosition'],
+    qty_anl_quote:['Mengentreue · Anlieferung','Anlieferung','Eine Anlieferung erfüllt die Regel, wenn alle zugehörigen Positionen mengentreu sind. Über- und Untermengen werden nicht saldiert.','Anlieferungen mit allen Positionen IST = SOLL / vollständig bewertbare Anlieferungen × 100','qtyDelivery'],
+    critical:['Kritische Positionen','Position','Gezählt werden kritische Positionen, nicht unterschiedliche Produkt-IDs.','Anzahl eindeutig gezählter Positionen mit Kategorie oder Freitext für kritische Artikel','critical'],
+    anzahl_te:['Transporteinheiten','TE','Eine TE wird einmal gezählt.','Anzahl eindeutiger TE','anzahl_te'],
+    anzahl_anl:['Anlieferungen','Anlieferung','Eine Anlieferung kann mehrere Positionen enthalten.','Anzahl eindeutiger Anlieferungen','anzahl_anl'],
+    anzahl_pos:['Positionen','Position','Eindeutige Kombination aus Anlieferungs- und Positionsnummer.','Anzahl eindeutiger Positionen','anzahl_pos'],
+    sum_gewicht_t:['Gewicht','Position','Summe der angelieferten Gewichte.','Summe der Gewichte in Tonnen','sum_gewicht_t'],
+    sum_wert_keur:['Warenwert','Position','Summe der angelieferten Warenwerte.','Summe der Warenwerte in Tausend Euro','sum_wert_keur']
+  };
+  for(const [key,from,to] of [
+    ['plan_start_end','Geplanter Start','Geplantes Ende'],['actual_start_end','Ist-Start','Ist-Ende'],['arrival_dock','Ankunft','Andocken'],['dock_unload_start','Andocken','Entladestart'],['unload_start_end','Entladestart','Entladeende'],['unload_end_actual_end','Entladeende','Tatsächliches Ende'],['we_booked_completion','WE gebucht','Letzte Fertigstellung'],['arrival_completion','Ankunft','Letzte Fertigstellung'],['dock_completion','Andocken','Letzte Fertigstellung']
+  ]) metrics[key+'_avg']=[from+' → '+to,'TE','Ergänzende Prozesszeit der ausgewählten Planstartperiode. Fertigstellung ist eine Näherung für das Einlagerungsende.',to+' − '+from,key,'BW-Dauer bzw. daraus gebildeter Mittelwert; Quelle und Bewertungsnenner müssen passend im Modell gebunden sein.'];
+  const css = `
+    :host{--accent:#65b8e8;--accent-strong:#2785bb;--accent-border:rgba(101,184,232,.45);--band:rgba(101,184,232,.10);--muted:#b1b9cb;--bad:#f07870;--good:#60d79c;--warn:#edbe67;}
+    :host([data-theme=light]){--accent:#14618e;--accent-strong:#15547b;--muted:#555f70;--band:rgba(20,97,142,.07);--bad:#b62f29;--good:#167343;--warn:#8c6000;}
+    .titlebar{flex-wrap:wrap}.title{font-family:var(--font);font-size:16px;letter-spacing:0;text-transform:none;color:var(--ink)}
+    .ctrl{flex-wrap:wrap}.ctrl button{min-height:32px;font-size:12px}.brand-dot{animation:none}
+    .kpi .lbl,.m-lbl,.card h3,.tp-k small,.gauge .gs,.kpi .sub,.te-base,.m-sub,.tb-lbl,.dh-fact-l,.pk-hint,.cfg .hint{font-family:var(--font)!important;font-size:12px!important;letter-spacing:0!important;text-transform:none!important;line-height:1.45}
+    .card h3{font-size:14px!important;color:var(--ink)!important}.kpi .val{flex-wrap:wrap}.kpis{grid-template-columns:repeat(auto-fit,minmax(205px,1fr))}.tile{min-height:150px;min-width:0}.grid{grid-template-columns:repeat(auto-fit,minmax(280px,1fr))}.compact .grid{grid-template-columns:minmax(0,1fr)}
+    .tile .te-base{white-space:normal;max-width:100%;overflow-wrap:anywhere}.tile .m-sub{flex-wrap:wrap}.tile .m-lbl{display:flex;flex-wrap:wrap;gap:4px;align-items:center}.tile .m-lbl .ux-badge{margin-left:auto}.kpi .d.neutral,.m-delta.neutral{color:var(--muted)!important}
+    nav{height:auto!important;min-height:44px;flex-wrap:wrap!important;overflow:visible!important;gap:4px!important;padding-block:6px!important}nav button{height:36px!important;padding:0 10px!important;font-size:12px!important}
+    .ux-context{padding:10px 14px;background:var(--panel);border-bottom:1px solid var(--border);font-size:12px;color:var(--ink2);line-height:1.6;flex:none}
+    .tile-info{display:none!important}.m-delta[hidden],.sla[hidden],.yoy[hidden]{display:none!important}.gauge .gv{font-size:22px}.tp-k small{overflow-wrap:anywhere}
+    .ux-context strong{color:var(--ink)}.ux-context .ux-context-row{display:flex;gap:8px 14px;flex-wrap:wrap;align-items:center}.ux-context small{font-size:11px}.ux-meta{font-size:12px;color:var(--muted);margin:4px 0}
+    .ux-info{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;min-width:28px;border:1px solid var(--accent);border-radius:50%;background:transparent;color:var(--accent);cursor:pointer;font:600 13px var(--font);vertical-align:middle;margin-left:6px}
+    .ux-badge{display:inline-block;font-size:11px;padding:2px 7px;border-radius:4px;color:var(--ink2);border:1px solid var(--border);margin-right:5px}.ux-detail-hint{font-size:11px;color:var(--accent);display:block;margin-top:5px}
+    .ux-expand{border:1px solid var(--border);border-radius:8px;padding:10px 12px;background:var(--panel);margin:10px 0}.ux-expand>summary{cursor:pointer;font-size:13px;color:var(--ink);padding:4px}.ux-expand[open]>summary{margin-bottom:10px}
+    .ux-dialog{width:min(660px,94vw);max-height:85vh;padding:22px;background:var(--panel);color:var(--ink);border:1px solid var(--border);border-radius:12px;font:14px/1.6 var(--font);overflow:auto}.ux-dialog::backdrop{background:rgba(0,0,0,.65)}
+    .ux-dialog h2{font-size:20px;margin:0 0 14px}.ux-dialog h3{font-size:14px;margin-bottom:2px}.ux-dialog p{margin:4px 0 13px}.ux-dialog button,.ux-dialog input{font:inherit}.ux-dialog input{width:100%;padding:10px;color:var(--ink);background:var(--card);border:1px solid var(--border);border-radius:5px}.ux-dialog button{padding:7px 12px;border:1px solid var(--border);background:var(--card);color:var(--ink);border-radius:5px;cursor:pointer}.ux-dialog .ux-close{float:right}.ux-help-index{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.ux-help-content{clear:both}.ux-dialog dl{display:grid;grid-template-columns:130px 1fr;gap:9px;margin-top:15px}.ux-dialog dt{font-weight:600}.ux-dialog dd{margin:0}.ux-dialog footer{border-top:1px solid var(--border);padding-top:10px}
+    .ctxbar{flex-wrap:wrap;font:12px var(--font);padding:8px 14px}.ctxbar button{min-height:32px;font-size:12px}.crumbs{position:sticky;top:-12px;z-index:5;background:var(--bg);padding:8px 0;display:flex;gap:12px;align-items:center;flex-wrap:wrap}.back{min-height:36px;font-size:13px!important}
+    .sla{color:var(--muted)!important;background:transparent!important}.m-delta{font-size:11px!important}.cfg{max-height:75vh;overflow:auto;width:min(310px,90%)}.cfg input,.cfg select{min-height:32px}.cfg label{font-size:12px}.finding.warn{border-color:var(--warn)}.finding.warn i{background:var(--warn)}
+    .ux-table-hint{padding:7px 0;font-size:12px;color:var(--muted)}[data-drill]:focus-visible,[data-goto]:focus-visible,.tile:focus-visible,button:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+    .ux-late{color:var(--warn)}.ux-error{color:var(--bad);border-left:3px solid var(--bad);padding:5px 9px;margin-top:7px}.compact .ux-context{padding:8px}.compact .ux-context-row{gap:4px}.compact .ux-context .ux-long{display:none}
+    .ux-table-controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0}.ux-table-controls input,.ux-table-controls select,.ux-table-controls button{font:12px var(--font);color:var(--ink);background:var(--card);border:1px solid var(--border2);padding:7px 10px;border-radius:5px;min-height:34px}.ux-table-controls input{flex:1;min-width:180px}.ux-table-controls button{cursor:pointer}.ux-table-controls button:disabled{opacity:.45;cursor:default}.ux-table-wrap{overflow:auto;max-height:520px}.ux-table-wrap th{position:sticky;top:0;z-index:1;background:var(--panel)}.ux-table-wrap td{font-size:12px!important}.ux-table-wrap td .back{font-size:12px!important}.ux-number{text-align:right;font-variant-numeric:tabular-nums}.ux-deviation-negative{color:var(--warn)}.ux-deviation-positive{color:var(--accent)}
+    .sch-kpis{grid-template-columns:repeat(auto-fit,minmax(75px,1fr))}.sch-kpis small,.sch-h{font-family:var(--font)!important;font-size:12px!important;letter-spacing:0!important;text-transform:none!important;line-height:1.5}.sch-kpis>div b{overflow:visible!important;text-overflow:clip!important;overflow-wrap:normal;word-break:normal}.rank-severity,.rank-n{font-size:11px!important;line-height:1.5}.row{min-width:0}.row>.card{min-width:0}
+    .ux-table-wrap th{font-family:var(--font);font-size:12px;letter-spacing:0;text-transform:none}.ux-table-wrap .back{background:transparent;border:0;color:var(--accent);text-decoration:underline;padding:2px 0;cursor:pointer;min-height:28px}.ux-kpis-home{border:0;padding:0;margin:0}.ux-kpis-home>summary{display:none}
+    @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+    @media(max-width:700px){.ux-dialog dl{grid-template-columns:1fr}.ux-dialog dd{margin-bottom:6px}.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.kpi{padding:9px}.kpi .val b{font-size:20px}.title small{display:block;margin-left:0}.ctxbar button{margin-left:0}.card{min-width:0}.ux-context{font-size:11px}}
+  `;
+  const info = (key,label='Erklärung öffnen') => `<button type="button" class="ux-info" data-help="${esc(key)}" aria-label="${esc(label)}">i</button>`;
+  function range(per){
+    let m=/^(\d{4})-(\d{2})$/.exec(per||'');
+    if(m)return {from:`${m[1]}-${m[2]}-01`,to:new Date(Date.UTC(+m[1],+m[2],0)).toISOString().slice(0,10)};
+    m=/^(\d{4})-W(\d{2})$/.exec(per||'');if(!m)return {};
+    const d=new Date(Date.UTC(+m[1],0,4));d.setUTCDate(d.getUTCDate()-(d.getUTCDay()||7)+1+(+m[2]-1)*7);
+    const from=d.toISOString().slice(0,10);d.setUTCDate(d.getUTCDate()+6);return {from,to:d.toISOString().slice(0,10)};
+  }
+  const date=s=>/^\d{4}-\d{2}-\d{2}$/.test(s||'')?s.slice(8,10)+'.'+s.slice(5,7)+'.'+s.slice(0,4):s||'–';
+  function state(w,type){
+    const ctx=w._periodContext;
+    const per=type==='strategy'?(w._rows?.length?w._perioden?.[w._scrubIdx ?? w._perioden.length-1]:null):ctx?.periode;
+    const seg=type==='strategy'?w._seg:ctx?.segment;
+    const r=ctx?.manual?{from:ctx.von,to:ctx.bis}:range(per);
+    return {per,seg:!seg||seg==='Gesamt'?'Alle Ladestellen':seg,range:r.from?`${date(r.from)} – ${date(r.to)}`:'Gesamter geladener Datenbestand'};
+  }
+  function open(w,key,trigger){
+    const S=w._sh||w._shadow,d=S.getElementById('ux-help');if(!d)return;
+    w._uxTrigger=trigger||S.activeElement;
+    const m=metrics[key],k=w._model?.kpis;
+    let title,body;
+    if(m){
+      title=m[0];let basis=trigger?.closest('.kpi,.tile,.gauge')?.querySelector('.sub,.te-base,.gs')?.textContent;
+      if(!basis&&k){const stat=k.phaseStats[m[4]]||k.quality[m[4]];basis=stat?`${num(stat.n)} ${m[1]}`:m[4]==='critical'?`${num(k.nPositions)} Positionen · ${num(k.nKritTes)} TE betroffen`:null;}
+      const source=m[5]||(w._uxType==='strategy'?'BW-Aggregate; periodisch im Widget mit passenden Bewertungsnennern zusammengefasst.':'Im Widget aus BW-Zeitstempeln oder Mengen berechnet.');
+      const fields=[['Bedeutung',m[2]],['Formel',key==='calc_punctual'?m[3]+` (aktuell ${num(k?.tolMin ?? w._props.toleranzMin ?? 30)} Minuten)`:m[3]],['Ebene',m[1]],['Zeitbezug','Geplanter Start ab; '+state(w,w._uxType).range],['Datenbasis',basis||'Der passende Bewertungsnenner steht an der Kennzahl.'],['Ausschlüsse','Fehlende, widersprüchliche oder unlogische Angaben werden für die betroffene Bewertung ausgeschlossen. Statistische Auffälligkeit allein ist kein Datenfehler.'],['Quelle',source]];
+      body=`<dl>${fields.map(([a,b])=>`<dt>${esc(a)}</dt><dd>${esc(b)}</dd>`).join('')}</dl>`;
+    } else if(topics[key]) {title=topics[key][0];body=topics[key].slice(1).map(t=>`<p>${esc(t)}</p>`).join('');}
+    else {title='Hilfe & Begriffe';body='<p>Wähle ein Thema oder suche nach einer Kennzahl.</p><input type="search" id="ux-search" placeholder="Suchen: TE, OTIF, Median, Zeitbezug …" aria-label="Hilfethemen suchen"><div class="ux-help-index" id="ux-help-index"></div>';}
+    d.innerHTML=`<button type="button" class="ux-close" data-help-close>Schließen ×</button><h2 id="ux-help-title">${esc(title)}</h2><div class="ux-help-content">${body}</div><footer><button type="button" data-help="index">Alle Hilfethemen</button></footer>`;
+    const input=d.querySelector('#ux-search');if(input){const draw=()=>{const q=input.value.toLocaleLowerCase('de-DE');d.querySelector('#ux-help-index').innerHTML=[...Object.entries(topics),...Object.entries(metrics)].filter(([,v])=>v.join(' ').toLocaleLowerCase('de-DE').includes(q)).map(([key,v])=>`<button type="button" data-help="${esc(key)}">${esc(v[0])}</button>`).join('')||'<p>Kein Treffer.</p>';};input.addEventListener('input',draw);draw();}
+    if(!d.open){w._uxReturnFocus=w._uxTrigger;d.showModal();} (input||d.querySelector('[data-help-close]')).focus();
+  }
+  function mount(w,type){
+    const S=w._sh||w._shadow;if(!S||S.getElementById('ux-style'))return;
+    w._uxType=type;const style=document.createElement('style');style.id='ux-style';style.textContent=css;S.appendChild(style);
+    const d=document.createElement('dialog');d.id='ux-help';d.className='ux-dialog';d.setAttribute('aria-labelledby','ux-help-title');S.appendChild(d);
+    d.addEventListener('close',()=>w._uxReturnFocus?.isConnected&&w._uxReturnFocus.focus());
+    const ctrl=S.querySelector('.ctrl');if(ctrl)ctrl.insertAdjacentHTML('afterbegin','<button type="button" data-help="data">Datenbasis</button><button type="button" data-help="index">? Hilfe</button>');
+    const header=S.querySelector('header'),context=document.createElement('div');context.id='ux-context';context.className='ux-context';header?.after(context);
+    if(type==='process') {
+      const tiles=S.getElementById('kpis'),panel=document.createElement('details');panel.id='ux-overview-kpis';panel.innerHTML='<summary>Kennzahlen der ausgewählten Periode anzeigen</summary>';
+      tiles.before(panel);panel.appendChild(tiles);
+      panel.addEventListener('toggle',()=>{if(w._mode!=='puls'&&!w._detail)w._uxKpisOpen=panel.open;});
+    }
+    S.addEventListener('click',e=>{const help=e.target.closest('[data-help],.tile-info,#btnGlossary');if(help){e.preventDefault();e.stopImmediatePropagation();open(w,help.dataset.help||help.dataset.key||'index',help);return;}if(e.target.closest('[data-help-close]')){d.close();return;}
+      const drill=e.target.closest('[data-drill]');if(drill&&!e.target.closest('.pk-seg')){e.preventDefault();e.stopImmediatePropagation();w.openDetail?.(drill.dataset.drill);return;}
+      if(e.target.closest('.kpi[data-goto="puls"]')){w._uxPanels||={};w._uxPanels.quality=true;}
+      const seg=e.target.closest('.pk-seg');if(seg){e.preventDefault();e.stopImmediatePropagation();open(w,'statistics',seg);const a=new Date(+seg.dataset.a),b=new Date(+seg.dataset.b);d.querySelector('h2').textContent=seg.dataset.ph||'Prozessphase';d.querySelector('.ux-help-content').innerHTML=`<p>${esc(seg.dataset.info)}</p><p><b>Dauer:</b> ${num((b-a)/3600000)} h</p><p><b>Von:</b> ${esc(a.toLocaleString('de-DE'))}<br><b>Bis:</b> ${esc(b.toLocaleString('de-DE'))}</p>`;return;}
+    },true);
+    S.addEventListener('keydown',e=>{if((e.key==='Enter'||e.key===' ')&&!e.target.matches('button,input,select,summary,textarea')){const target=e.target.closest('[data-goto],.tile,[data-drill],.pk-seg');if(target){e.preventDefault();target.dispatchEvent(new MouseEvent('click',{bubbles:true,composed:true}));}}});
+    const cfg=S.getElementById('cfg');if(cfg){cfg.insertAdjacentHTML('beforeend','<button type="button" data-help="experts">Einstellungen erklären</button><button type="button" id="ux-cfg-reset">Standardeinstellungen wiederherstellen</button>');S.getElementById('ux-cfg-reset').onclick=()=>{Object.assign(w._props,{madThreshold:3.5,toleranzMin:30,baselineMode:'segment',teamEvenFrueh:'Team A',teamOddFrueh:'Team B'});w._syncCfg();w._rebuild();};}
+    const glossary=S.getElementById('btnGlossary');if(glossary)glossary.hidden=true;
+  }
+  function update(w,type){
+    mount(w,type);const S=w._sh||w._shadow;if(!S?.querySelector)return;const context=S.getElementById('ux-context');if(!context)return;
+    const st=state(w,type),k=w._model?.kpis;
+    const data=w._props?.dataAsOf;const source=w._uxDemo?'Beispieldaten · keine BW-Verbindung':data?`Datenstand: ${data}`:'Datenstand: nicht übermittelt';
+    context.innerHTML=`<div class="ux-context-row"><strong>${type==='strategy'?'Strategieübersicht':'Detailanalyse'}${w._detail?' → TE '+esc(w._detail):''}</strong><span>${esc(st.per||'')}${st.per?' · ':''}${esc(st.range)}</span><span>${esc(st.seg)}</span></div><div class="ux-context-row"><span>Zeitbezug: <strong>Geplanter Start ab</strong></span><span>${esc(source)}</span>${info('data','Datenbasis und Zeitbezug erklären')}</div>${k?`<div class="ux-meta">${num(k.nTes)} TE · ${num(k.nAnlieferungen)} Anlieferungen · ${num(k.nPositions)} Positionen ${info('hierarchy','Berechnungsebenen erklären')}</div>`:''}`;
+    if(w._filterError)context.insertAdjacentHTML('beforeend',`<div class="ux-error" role="alert">${esc(w._filterError)}</div>`);
+    const sub=S.getElementById('sub');if(sub&&type==='process')sub.textContent='Historische Wareneingangsanalyse';
+    S.querySelectorAll('[data-goto],.tile:not(.process-tile):not(.tile-nodata),[data-drill],.pk-seg').forEach(el=>{el.setAttribute('tabindex','0');el.setAttribute('role','button');});
+    if(type==='process'){
+      const tiles=S.getElementById('kpis'),panel=S.getElementById('ux-overview-kpis');
+      if(tiles)tiles.hidden=!!w._detail;
+      if(panel){panel.hidden=!!w._detail||!k;panel.className=w._mode==='puls'?'ux-kpis-home':'ux-expand';panel.open=w._mode==='puls'||!!w._uxKpisOpen;}
+    }
+    S.querySelectorAll('.tile').forEach(el=>{const m=metrics[el.dataset.key];if(m&&!el.querySelector('.ux-badge'))el.querySelector('.m-lbl')?.insertAdjacentHTML('beforeend',`<span class="ux-badge">${esc(m[1])}</span>${info(el.dataset.key,m[0]+' erklären')}`);if(!el.classList.contains('process-tile')&&!el.classList.contains('tile-nodata')&&!el.querySelector('.ux-detail-hint'))el.insertAdjacentHTML('beforeend','<span class="ux-detail-hint">Verlauf ansehen ›</span>');});
+    S.querySelectorAll('.card h3').forEach(h=>{if(h.querySelector('[data-help]'))return;const t=h.textContent;const key=/Datenqualität|Datenfehler/.test(t)?'errors':/Qualität|OTIF|Mengentreue|Pünktlich/i.test(t)?'quality':/Median|Auffällig|Engpass|z-Score|MAD/.test(t)?'statistics':/Ranking|Top 10|Flop 10/.test(t)?'ranking':/Schicht/.test(t)?'shift':/Durchsatz|Mengen|Volumen/.test(t)?'units':/Prozess|Phasen/.test(t)?'hierarchy':null;if(key)h.insertAdjacentHTML('beforeend',info(key));});
+    S.querySelectorAll('#segpick [data-seg="Nicht zugeordnet"]').forEach(el=>el.title='TEs ohne gepflegte Ladestelle');
+    const tabs=S.getElementById('tabs');if(tabs){tabs.setAttribute('aria-label','Analysebereiche');tabs.querySelectorAll('button').forEach(b=>b.setAttribute('aria-current',b.classList.contains('on')?'page':'false'));}
+    for(const [id,label] of [['ptbl','Positionen dieser TE · Diagnosedetails'],['bdat','Weitere Belegdaten'],['krit-table','Kritische Positionen · Einzeldaten']]){
+      const el=S.getElementById(id);const card=el?.closest('.card');if(!card||card.parentElement?.matches('details'))continue;
+      const panel=document.createElement('details');panel.className='ux-expand';panel.dataset.uxPanel=id;const summary=document.createElement('summary');summary.textContent=label;panel.appendChild(summary);card.before(panel);panel.appendChild(card);
+    }
+    S.querySelectorAll('details[data-ux-panel]').forEach(panel=>{if(panel.dataset.bound)return;panel.dataset.bound='1';panel.open=!!w._uxPanels?.[panel.dataset.uxPanel];panel.addEventListener('toggle',()=>{w._uxPanels||={};w._uxPanels[panel.dataset.uxPanel]=panel.open;});});
+    S.querySelectorAll('.kpi .val b').forEach(b=>{if(b.textContent==='–'){b.textContent='Nicht bewertbar';b.style.fontSize='16px';}});
+    const filter=S.getElementById('btnFilter');if(filter)filter.setAttribute('aria-expanded',String(!S.getElementById('filterpanel').hidden));
+    const settings=S.getElementById('btnCfg');if(settings){settings.hidden=w._props.allowExpertSettings!==true;settings.setAttribute('aria-expanded',String(!S.getElementById('cfg').hidden));if(settings.hidden)S.getElementById('cfg').hidden=true;}
+    const targets=S.getElementById('btnTargets');if(targets){targets.hidden=w._props.allowExpertSettings!==true;if(targets.hidden)S.getElementById('targetPanel').hidden=true;}
+    const main=S.getElementById('main');if(w._detail&&main&&w._uxLastDetail!==w._detail)main.scrollTop=0;w._uxLastDetail=w._detail;
+  }
+  function install(K,type){const render=K.prototype._render;K.prototype._render=function(...args){const result=render.apply(this,args);if((this._sh||this._shadow)?.querySelector)update(this,type);return result;};
+    K.prototype.setDataAsOf=function(value){this._props.dataAsOf=String(value||'');this._render();};
+    const test=K.prototype.setTestData;if(test)K.prototype.setTestData=function(...args){this._uxDemo=true;return test.apply(this,args);};
+    const binding=Object.getOwnPropertyDescriptor(K.prototype,'myDataSource');if(binding?.set)Object.defineProperty(K.prototype,'myDataSource',{...binding,set(value){this._uxDemo=false;return binding.set.call(this,value);}});
+    if(type==='strategy')K.prototype._countUp=function(el,target,m){if(!el)return;el.textContent=target==null||!Number.isFinite(target)?'–':target.toLocaleString('de-DE',{minimumFractionDigits:m.unit===''?0:1,maximumFractionDigits:m.unit===''?0:1});if(m.pct&&target!=null)el.textContent=(target*100).toLocaleString('de-DE',{minimumFractionDigits:1,maximumFractionDigits:1});};
+  }
+  globalThis.WEUX={esc,num,topics,metrics,info,range,date,state,open,update,install};
+})();
+/* END SHARED UX */
 /* =========================================================================
- * WE Strategie-Cockpit – SAC Custom Widget (v0.19.6-no-self-dispatch) · Entwickler: Benne
+ * WE Strategie-Cockpit – SAC Custom Widget (v0.23.0-planstart) · Entwickler: Benne
  * Strategische Langzeitsicht auf den Wareneingangsprozess.
  * Erwartet voraggregierte Perioden-Daten (je KW/Monat × Segment), wie sie
  * BW über SUM/MIN/MAX/COUNT liefert. Kein Median (BW-Einschränkung) — das
@@ -12,9 +175,15 @@
   // ── Kennzahl-Definitionen: was in den Kacheln als Trend läuft ──────────
   const METRICS = [
     { key: "dwell_avg",     label: "Ø Standzeit",      unit: "h",  band: ["dwell_min","dwell_max"],     lowerBetter: true,  targetProp: "targetDwell", weightKey: "dwell_n" },
-    { key: "putaway_avg",   label: "Ø Einlagerung",    unit: "h",  band: ["putaway_min","putaway_max"], lowerBetter: true,  targetProp: "targetPutaway", weightKey: "putaway_n" },
-    { key: "otif_quote",    label: "OTIF-Quote",       unit: "%",  pct: true,                            lowerBetter: false, targetProp: "targetOtif", weightKey: "otif_n" },
-    { key: "puenkt_quote",  label: "Pünktlichkeit",    unit: "%",  pct: true,                            lowerBetter: false, targetProp: "targetPuenkt", weightKey: "puenkt_n" },
+    { key: "booking_avg",   label: "Ø Vereinnahmung", unit: "h", lowerBetter: true, weightKey: "booking_n" },
+    { key: "putaway_avg",   label: "Ø Einlagerung · Näherung", unit: "h",  band: ["putaway_min","putaway_max"], lowerBetter: true,  targetProp: "targetPutaway", weightKey: "putaway_n" },
+    { key: "operative_avg", label: "Ø Operativer WE · Näherung", unit: "h", lowerBetter: true, weightKey:"operative_n" },
+    { key: "otif_quote",    label: "OTIF · Anlieferung", unit: "%",  pct: true, lowerBetter: false, targetProp: "targetOtif", weightKey: "otif_n" },
+    { key: "otif_pos_quote",label: "OTIF · Position", unit:"%", pct:true, lowerBetter:false, weightKey:"otif_pos_n" },
+    { key: "voll_quote",    label: "Liefervollständigkeit", unit:"%", pct:true, lowerBetter:false, weightKey:"voll_n" },
+    { key: "qty_pos_quote", label: "Mengentreue · Position", unit:"%", pct:true, lowerBetter:false, weightKey:"qty_pos_n" },
+    { key: "qty_anl_quote", label: "Mengentreue · Anlieferung", unit:"%", pct:true, lowerBetter:false, weightKey:"qty_anl_n" },
+    { key: "puenkt_quote",  label: "BW-Pünktlichkeit · P/N", unit: "%", pct: true, lowerBetter: false, targetProp: "targetPuenkt", weightKey: "puenkt_n" },
     { key: "wait_gate_avg", label: "Ø Wartezeit bis Andocken", unit: "h", band: ["wait_gate_min","wait_gate_max"], lowerBetter: true, targetProp: "targetWaitGate", weightKey: "wait_gate_n" },
     { key: "sum_gewicht_t", label: "Durchsatz Gewicht",unit: "t",  sum: true,                            lowerBetter: false },
     { key: "sum_wert_keur", label: "Warenwert",        unit: "k€", sum: true,                            lowerBetter: false },
@@ -28,13 +197,19 @@
      bewusst kurz (TE / Position / TE+Position / BW), volle Erklärung im Popup. */
   const METRIC_INFO = {
     dwell_avg: { level:"TE", meaning:"Aufenthaltsdauer einer Transporteinheit am Standort.", formula:"Abfahrt vom Kontrollpunkt − Ankunft am Kontrollpunkt", aggregation:"Mittelwert über alle TEs der Periode/Ladestelle." },
-    putaway_avg: { level:"Position", meaning:"Zeit von der WE-Buchung einer Position bis zu deren Einlagerung/Fertigstellung.", formula:"Fertigstellung/Einlagerung − WE-Buchung", aggregation:"Mittelwert über alle Positionen." },
-    otif_quote: { level:"BW-Kennzahl", meaning:"On Time In Full. Fachliche Definition und Bewertung stammt aus BW.", formula:"BW-Kennzahl, nicht lokal neu berechnet", aggregation:"Wie von BW geliefert." },
+    booking_avg: {level:"TE", meaning:"Kernzeit der Vereinnahmung je TE.", formula:"WE gebucht (Abschluss der TE) − tatsächliches Ende Entladen [BWMISTTEE]", aggregation:"Mittelwert gültiger TE-Zeiten; jede TE einmal."},
+    putaway_avg: { level:"TE", meaning:"Zeit bis zur letzten Fertigstellung aller Positionen der TE. Näherung, solange HU-Daten fehlen.", formula:"MAX(Fertigstellung aller TE-Positionen) − WE gebucht (TE)", aggregation:"Mittelwert gültiger TE-Zeiten; jede TE einmal." },
+    operative_avg: {level:"TE", meaning:"Operativer Wareneingang bis zur letzten Fertigstellung der TE (Näherung).", formula:"MAX(Fertigstellung aller TE-Positionen) − Entladen gestartet", aggregation:"Mittelwert je TE; Zuordnung zu Geplanter Start ab."},
+    otif_quote: { level:"Anlieferung", meaning:"OTIF je Anlieferung aus BW [BWMOTIFA].", formula:"O / (O + N)", aggregation:"Jede Anlieferung einmal, gewichtet mit bewerteten Anlieferungen." },
+    otif_pos_quote: {level:"Position", meaning:"OTIF pro Position aus BW [BWMOTIF].", formula:"O / (O + N)", aggregation:"Distinct Belegnummer + Positionsnummer; eigener Bewertungsnenner."},
+    voll_quote: {level:"Anlieferung", meaning:"Liefervollständigkeit aus BW [BWMLIEFV].", formula:"V / (V + N)", aggregation:"Jede Anlieferung einmal; nur bewertete Anlieferungen."},
+    qty_pos_quote: {level:"Position", meaning:"Anteil mengentreuer Positionen.", formula:"Positionen mit IST = SOLL / vollständig bewertete Positionen", aggregation:"Distinct Belegnummer + Positionsnummer."},
+    qty_anl_quote: {level:"Anlieferung", meaning:"Anteil Anlieferungen, deren Positionen alle mengentreu sind.", formula:"Anlieferungen mit allen Positionen IST = SOLL / vollständig bewertete Anlieferungen", aggregation:"Keine Nettierung von Über- und Unterlieferungen."},
     puenkt_quote: { level:"BW / TE", meaning:"Anteil der TEs mit BW-Kennzeichen P (pünktlich).", formula:"P / (P + N) × 100", aggregation:"Über alle bewerteten TEs der Periode/Ladestelle." },
     wait_gate_avg: { level:"TE", meaning:"Zeit vom Eintreffen der TE am Kontrollpunkt bis zum Andocken am Tor.", formula:"Andocken − Ankunft am Kontrollpunkt", aggregation:"Mittelwert über alle TEs." },
     sum_gewicht_t: { level:"Position", meaning:"Summe des angelieferten Gewichts.", formula:"Σ Gewicht je Position", aggregation:"Summe über den Zeitraum/Ladestelle." },
     sum_wert_keur: { level:"Position", meaning:"Summe des Warenwerts der Anlieferungen.", formula:"Σ Wert je Position", aggregation:"Summe über den Zeitraum/Ladestelle." },
-    anzahl_pos: { level:"Position", meaning:"Anzahl der angelieferten Positionen.", formula:"Anzahl Positionszeilen", aggregation:"Summe über den Zeitraum/Ladestelle." },
+    anzahl_pos: { level:"Position", meaning:"Anzahl der angelieferten Positionen.", formula:"COUNT DISTINCT (Belegnummer + Positionsnummer)", aggregation:"BW muss jeden Schlüssel eindeutig einer Periode und Ladestelle zuordnen." },
     anzahl_anl: { level:"Anlieferung", meaning:"Anzahl der Anlieferungen (Lieferdokumente). Eine TE kann mehrere Anlieferungen enthalten.", formula:"Anzahl distinkter Anlieferungen", aggregation:"Summe über den Zeitraum/Ladestelle." },
     anzahl_te: { level:"TE", meaning:"Anzahl der Transporteinheiten (Hof-Ebene). TE ≠ Anlieferung: eine TE kann mehrere Anlieferungen enthalten.", formula:"Anzahl distinkter TEs", aggregation:"Summe über den Zeitraum/Ladestelle." },
   };
@@ -45,7 +220,7 @@
   const GLOSSARY_BASE = [
     { term:"TE (Transporteinheit)", level:"TE", definition:"Eine Transporteinheit kann in SAP EWM mehrere Anlieferungen enthalten. Hof-, Tor-, Andock-, Entlade- und Abfahrtsvorgänge werden TE-bezogen interpretiert." },
     { term:"Anlieferung", level:"Anlieferung", definition:"Ein der TE zugeordnetes Lieferdokument. Eine TE kann mehrere Anlieferungen enthalten; eine Anlieferung kann wiederum mehrere Positionen enthalten." },
-    { term:"Position", level:"Position", definition:"Kleinste fachliche Rechenebene für Mengen, PA1, Packmittel, WE-Buchung und Einlagerung." },
+    { term:"Position", level:"Position", definition:"Eindeutig durch Belegnummer + Positionsnummer. Rechenebene für Mengen, PA1 und OTIF pro Position; Fertigstellungen bestimmen gemeinsam den Abschluss der TE." },
     { term:"PA1", level:"Position", definition:"Menge pro Palette bzw. relevante Verpackungsmenge des Produkts für die Palettenberechnung.", formula:"Berechnete volle Paletten je Position = AUFRUNDEN(angelieferte Menge ÷ PA1)" },
     { term:"Berechnete volle Paletten", level:"Position", definition:"Rechnerische Palettenzahl auf Basis von angelieferter Menge und PA1. Der tatsächliche Lagerort wird dadurch nicht bestimmt.", formula:"AUFRUNDEN(Menge ÷ PA1) je Position, anschließend summieren" },
     { term:"Median", level:"Statistik", definition:"Der mittlere Wert einer sortierten Verteilung: 50% der Beobachtungen liegen darunter, 50% darüber. Robuster gegen Extremwerte als der Mittelwert." },
@@ -103,32 +278,31 @@
 
   const SEG_COLORS = {
     Container: "#e67e22", BSL: "#8e44ad", Landverkehr: "#27ae60",
-    "Nicht zugeordnet": "#7f8c8d", Sonstige: "#5d6d7e", Gesamt: "#c0392b",
+    "Nicht zugeordnet": "#7f8c8d", Sonstige: "#5d6d7e", Gesamt: "var(--accent)",
   };
   const SEGMENT_ORDER = ["BSL", "Container", "Landverkehr", "Nicht zugeordnet", "Sonstige"];
 
-  // Phasen für die Engpass-Wanderung (Zusammensetzung der Standzeit)
+  // Phasenmittelwerte je TE für die Engpass-Analyse (keine Standzeit-Summe).
   const PHASE_KEYS = ["wait_gate", "reaction", "unload", "booking", "putaway"];
   const PHASE_LABEL = {
     wait_gate: "Wartezeit bis Andocken", reaction: "Reaktionszeit", unload: "Entladedauer",
-    booking: "Buchungsverzug", putaway: "Einlagerung",
+    booking: "Vereinnahmung", putaway: "Einlagerung (Näherung)",
   };
-  // Fachliche Gewichtung der Phasen: Hof-/Entladephasen auf TE-Ebene,
-  // Buchung/Einlagerung auf Positionsebene. Diese Trennung ist zentral.
+  // Jede Hauptphase wird über ihre tatsächlich gültigen TE-Zeiten gewichtet.
   const PHASE_WEIGHT_KEY = {
     wait_gate: "wait_gate_n", reaction: "reaction_n", unload: "unload_n",
-    booking: "booking_n", putaway: "putaway_n", dwell: "dwell_n",
+    booking: "booking_n", putaway: "putaway_n", dwell: "dwell_n", operative:"operative_n",
   };
   const PROCESS_TIME_ITEMS = [
-    { key:"plan_start_end_avg", from:"Geplanter Start", to:"Geplantes Ende", group:"Planfenster", level:"TE", weightKey:"anzahl_te" },
-    { key:"actual_start_end_avg", from:"Ist-Start", to:"Ist-Ende", group:"Ist-Fenster", level:"TE", weightKey:"anzahl_te" },
-    { key:"arrival_dock_avg", from:"Ankunft", to:"Am Tor angedockt", group:"Hofprozess", level:"TE", weightKey:"anzahl_te" },
-    { key:"dock_unload_start_avg", from:"Angedockt", to:"Entladen gestartet", group:"Hofprozess", level:"TE", weightKey:"anzahl_te" },
-    { key:"unload_start_end_avg", from:"Entladen gestartet", to:"Entladen beendet", group:"Entladung", level:"TE", weightKey:"anzahl_te" },
-    { key:"unload_end_actual_end_avg", from:"Entladen beendet", to:"Tatsächliches Ende", group:"Entladung", level:"TE", weightKey:"anzahl_te" },
-    { key:"we_booked_completion_avg", from:"WE gebucht", to:"Fertigstellung", group:"Fertigstellung", level:"Position", weightKey:"anzahl_pos" },
-    { key:"arrival_completion_avg", from:"Ankunft", to:"Fertigstellung", group:"Gesamtdurchlauf", level:"TE", weightKey:"anzahl_te" },
-    { key:"dock_completion_avg", from:"Angedockt", to:"Fertigstellung", group:"Gesamtdurchlauf", level:"TE", weightKey:"anzahl_te" },
+    { key:"plan_start_end_avg", from:"Geplanter Start", to:"Geplantes Ende", group:"Planfenster", level:"TE", weightKey:"plan_start_end_n" },
+    { key:"actual_start_end_avg", from:"Ist-Start", to:"Ist-Ende", group:"Ist-Fenster", level:"TE", weightKey:"actual_start_end_n" },
+    { key:"arrival_dock_avg", from:"Ankunft", to:"Am Tor angedockt", group:"Hofprozess", level:"TE", weightKey:"arrival_dock_n" },
+    { key:"dock_unload_start_avg", from:"Angedockt", to:"Entladen gestartet", group:"Hofprozess", level:"TE", weightKey:"dock_unload_start_n" },
+    { key:"unload_start_end_avg", from:"Entladen gestartet", to:"Entladen beendet", group:"Zusatzzeit", level:"TE", weightKey:"unload_start_end_n" },
+    { key:"unload_end_actual_end_avg", from:"Entladen beendet", to:"Tatsächliches Ende", group:"Zusatzzeit", level:"TE", weightKey:"unload_end_actual_end_n" },
+    { key:"we_booked_completion_avg", from:"WE gebucht (TE)", to:"Letzte Fertigstellung", group:"Näherung", level:"TE", weightKey:"we_booked_completion_n" },
+    { key:"arrival_completion_avg", from:"Ankunft", to:"Letzte Fertigstellung", group:"Gesamtdurchlauf", level:"TE", weightKey:"arrival_completion_n" },
+    { key:"dock_completion_avg", from:"Angedockt", to:"Letzte Fertigstellung", group:"Gesamtdurchlauf", level:"TE", weightKey:"dock_completion_n" },
   ];
   const PHASE_COLOR = {
     wait_gate: "#5d6d7e", reaction: "#2980b9", unload: "#27ae60",
@@ -137,11 +311,6 @@
   // Farben für die Jahreslinien im Jahresvergleich (jüngstes Jahr = kräftigstes Rot)
   const YEAR_COLORS = ["#8b90a0", "#5dade2", "#e67e22", "#c0392b"];
 
-  /* Ordnet einen Measure-Namen (wie im SAC-Modell benannt) dem internen
-     Feldnamen zu, den das Widget erwartet. Tolerant gegenüber Groß-/
-     Kleinschreibung, Umlauten, Leer-/Sonderzeichen. Der Nutzer benennt die
-     Measures im Modell erkennbar (z. B. "dwell_avg", "OTIF Quote",
-     "Standzeit Mittel"); die Zuordnung greift über Schlüsselwörter. */
   // Periode normalisieren: "02.2026" (KW.Jahr) -> "2026-W02"; sonst unverändert.
   function normPeriode(p) {
     if (!p) return p;
@@ -195,72 +364,6 @@
     if (["Container", "BSL", "Landverkehr", "Nicht zugeordnet", "Sonstige"].includes(raw)) return raw;
     return raw;
   }
-
-  /* Ordnet einen Measure-Namen (interner Name ODER echter BW-Name) dem Feld zu.
-     Rückgabe: { field, durationSum?, scale? } oder null.
-       durationSum: Wert ist eine Summe von Stunden -> Ø = Summe/Anzahl.
-       scale:       Faktor (z. B. KG->t = 0.001, EUR->k€ = 0.001). */
-  function mapMeasureName(name) {
-    if (!name) return null;
-    const s = String(name).toLowerCase()
-      .replace(/ä/g,"a").replace(/ö/g,"o").replace(/ü/g,"u").replace(/ß/g,"ss")
-      .replace(/[^a-z0-9]+/g, "_");
-    const F = (field, extra) => Object.assign({ field }, extra || {});
-
-    // 1) exakte interne Namen (fertige Ø/Min/Max) direkt akzeptieren
-    const known = new Set([
-      "anzahl_pos","anzahl_anl","otif_quote","puenkt_quote","voll_quote",
-      "sum_menge","sum_gewicht_t","sum_wert_keur","sum_volumen",
-      ...PHASE_KEYS.flatMap(p => [`${p}_avg`,`${p}_min`,`${p}_max`,`${p}_n`]),
-      "dwell_avg","dwell_min","dwell_max","dwell_n",
-    ]);
-    if (known.has(s)) return F(s);
-
-    // 2) Echte BW-Dauer-Namen -> Phase (als SUMME, wird später /Anzahl gerechnet)
-    //    Reihenfolge wichtig: spezifische Muster zuerst.
-    const durMap = [
-      [["ankunft","einlagerung"], "dwell"],          // Dauer Ankunft Kontrollpunkt ... Einlagerung Ende
-      [["ankunft","andocken"], "wait_gate"],         // Dauer Ankunft Kontrollpunkt bis Andocken Tor
-      [["andocken","entladen"], "reaction"],         // Dauer Andocken Tor bis Entladen gestartet
-      [["entladen","beendet"], "unload"],            // Dauer Entladen gestartet Entladen beendet
-      [["ende_entladen","gebucht"], "booking"],      // Dauer Ende Entladen WE gebucht
-      [["entladen","gebucht"], "booking"],           // Fallback Buchung
-      [["einlagerung","gebucht"], "putaway"],        // Dauer Einlagerung bis WE gebucht
-      [["verweildauer"], "dwell"],                   // Verweildauer (falls als Dauer-Summe genutzt)
-    ];
-    if (s.includes("dauer") || s.includes("verweildauer")) {
-      for (const [needles, phase] of durMap)
-        if (needles.every(x => s.includes(x))) return F(`${phase}_avg`, { durationSum: true });
-    }
-
-    // 3) Phase + Aggregat generisch (fertige Werte, keine Summe)
-    const phaseSyn = {
-      wait_gate: ["wait_gate","wartezeit","tor"], reaction: ["reaction","reaktion"],
-      unload: ["unload","entlad"], booking: ["booking","buchung"],
-      putaway: ["putaway","einlager"], dwell: ["dwell","standzeit","durchlauf","verweil"],
-    };
-    const aggSyn = { avg:["avg","mittel","durchschnitt","mean","_o_"], min:["min","lowest","tiefst"], max:["max","highest","hoechst"], n:["_n","count","cnt"] };
-    for (const [p, syns] of Object.entries(phaseSyn)) {
-      if (syns.some(x => s.includes(x))) {
-        let agg = "avg"; for (const [a, asyns] of Object.entries(aggSyn)) if (asyns.some(x => s.includes(x))) { agg = a; break; }
-        return F(`${p}_${agg}`);
-      }
-    }
-    // 4) Quoten
-    if (s.includes("otif")) return F("otif_quote");
-    if (s.includes("puenkt") || s.includes("punkt")) return F("puenkt_quote");
-    if (s.includes("vollst")) return F("voll_quote");
-    // 5) Summen / Zähler (mit Einheiten-Umrechnung)
-    if (s.includes("ladungsgewicht") || (s.includes("gewicht") && !s.includes("stk"))) return F("sum_gewicht_t", { scale: 0.001 }); // KG->t
-    if (s.includes("wert") && !s.includes("stk")) return F("sum_wert_keur", { scale: 0.001 }); // EUR->k€
-    if (s.includes("volumen") && !s.includes("stk")) return F("sum_volumen");
-    if (s.includes("menge") && s.includes("ist")) return F("sum_menge");
-    if (s.includes("menge") && !s.includes("abw") && !s.includes("soll")) return F("sum_menge");
-    if (s.includes("lieferungsanzahl") || s.includes("anlief")) return F("anzahl_anl");
-    if (s.includes("liefpos") || s.includes("position")) return F("anzahl_pos");
-    return null;
-  }
-
 
   const THEME = `
     :host{
@@ -520,6 +623,25 @@
     .state-icon{ font-size:30px; opacity:.4; }
     .state-txt{ font-family:var(--font-mono); font-size:11px; letter-spacing:.1em;
       text-transform:uppercase; color:var(--muted); }
+    .alert-view{ padding:12px; }
+    .alert-head{ display:flex; align-items:flex-start; justify-content:space-between; gap:12px;
+      padding:12px 14px; margin-bottom:10px; border:1px solid var(--accent-border);
+      border-left:4px solid var(--warn); border-radius:var(--r-md); background:var(--card); }
+    .alert-head.n{ border-left-color:var(--blue); }
+    .alert-head b{ display:block; font-size:14px; color:var(--ink); }
+    .alert-head span{ display:block; margin-top:4px; font-size:11px; color:var(--muted); }
+    .alert-count{ flex:0 0 auto; font-family:var(--font-mono); font-size:20px; font-weight:700; color:var(--warn); }
+    .alert-head.n .alert-count{ color:var(--blue); }
+    .alert-table-wrap{ overflow:auto; max-height:560px; border:1px solid var(--border); border-radius:var(--r-md); }
+    .alert-table{ width:100%; border-collapse:collapse; background:var(--card); font-size:11px; }
+    .alert-table th{ position:sticky; top:0; z-index:1; padding:8px 9px; text-align:left;
+      background:var(--card2); color:var(--muted); font-size:9px; text-transform:uppercase; letter-spacing:.08em; }
+    .alert-table td{ padding:8px 9px; border-top:1px solid var(--border); color:var(--ink2); }
+    .alert-table td.mono{ font-family:var(--font-mono); color:var(--ink); }
+    .alert-code{ display:inline-block; min-width:22px; padding:2px 6px; border-radius:10px;
+      text-align:center; font-weight:700; color:#111; background:var(--warn); }
+    .alert-code.n{ color:#fff; background:var(--blue); }
+    .alert-note{ padding:14px; color:var(--muted); font-size:11px; text-align:center; }
     /* ═══ WE-Ladeanimation (1:1 aus dem Prozess-Cockpit übernommen) ═══ */
     .we-loader{ display:flex; flex-direction:column; align-items:center; gap:26px;}
     .we-loader-scene{ position:relative; width:280px; height:90px;}
@@ -584,10 +706,10 @@
       <header>
         <div class="titlebar">
           <span class="brand-dot"></span>
-          <div class="title">WE Strategie-Cockpit <small id="sub"></small></div>
+          <div class="title">WE · Strategieübersicht <small id="sub"></small></div>
           <div class="ctrl">
-            <button id="btnExport" title="Befunde kopieren">⧉ Export</button>
-            <button id="btnTargets" title="Zielwerte konfigurieren" aria-expanded="false">◎ Ziele</button>
+            <button id="btnExport" title="Befunde in die Zwischenablage kopieren">⧉ Befunde kopieren</button>
+            <button id="btnTargets" title="Vorläufige Zielwerte konfigurieren" aria-expanded="false">◎ Vorläufige Ziele</button>
             <button id="btnGlossary" title="Begriffe &amp; Berechnungen" aria-expanded="false" aria-controls="glossaryPanel">? Begriffe</button>
             <button id="btnTheme" title="Hell/Dunkel">◐</button>
           </div>
@@ -600,7 +722,7 @@
         <label>OTIF-Quote (%) <input type="number" step="1" id="tgtOtif"></label>
         <label>Pünktlichkeit (%) <input type="number" step="1" id="tgtPuenkt"></label>
         <label>Ø Wartezeit bis Andocken (h) <input type="number" step="0.5" id="tgtWaitGate"></label>
-        <div class="target-note"><b>Zielquelle:</b> Cockpit-Konfiguration. Werte können später über Widget-Properties/BW-Vorgaben übergeben werden — kein automatisch aus SAP EWM abgeleiteter Systemwert.</div>
+        <div class="target-note"><b>Übergangslösung:</b> Diese Werte sind manuell konfiguriert. Die beschlossene fachliche Baseline verwendet je Standort 14 vollständige historische Monate; die letzten 6 Wochen vor dem Vergleichszeitraum bleiben unberücksichtigt. Dafür muss BW einen separaten Baseline-Datenbestand liefern.</div>
       </div>
       <div class="glossary-panel" id="glossaryPanel" hidden role="dialog" aria-modal="true" aria-label="Begriffe und Berechnungen">
         <div class="glossary-head">
@@ -615,7 +737,7 @@
         <span class="tb-lbl">Ladestelle</span>
         <div class="segmented" id="segpick"></div>
         <span class="spacer"></span>
-        <span class="tb-lbl">Zeitraster</span>
+        <span class="tb-lbl">Geplanter Start ab · Zeitraster</span>
         <div class="segmented" id="aggpick">
           <button data-agg="week" class="on">Woche</button>
           <button data-agg="month">Monat</button>
@@ -632,10 +754,10 @@
   // ── Hilfen ─────────────────────────────────────────────────────────────
   const fmtVal = (v, m) => {
     if (v == null || isNaN(v)) return "–";
-    if (m.pct) return (v * 100).toFixed(1);
+    if (m.pct) return (v * 100).toLocaleString('de-DE', {minimumFractionDigits:1, maximumFractionDigits:1});
     if (m.unit === "t" || m.unit === "k€") return v >= 1000 ? (v/1000).toFixed(1)+"k" : Math.round(v).toString();
     if (m.unit === "") return Math.round(v).toLocaleString("de-DE");
-    return v.toFixed(1);
+    return v.toLocaleString('de-DE',{minimumFractionDigits:1,maximumFractionDigits:1});
   };
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
@@ -674,6 +796,7 @@
       Object.assign(this._props, changed || {});
       if (changed && "theme" in changed) this._applyTheme();
       if (changed && "aggregation" in changed) this._render();
+
       if (changed && "dauerEinheit" in changed && this._dataBinding) {
         // Einheit geändert -> vorhandene Bindung neu verarbeiten
         this.myDataSource = this._dataBinding;
@@ -686,6 +809,7 @@
           || (changed.dataBindings && changed.dataBindings.myDataSource)
           || null;
         if (binding) this.myDataSource = binding;
+
       }
     }
     onCustomWidgetResize() { this._render(); }
@@ -738,6 +862,7 @@
       }
       this._render();
     }
+
     /* refreshData() zeigt bewusst sofort wieder die Ladeanimation (statt
        stumm auf die alten Daten zu warten), damit ein Reload genauso
        Feedback gibt wie der allererste Ladevorgang. */
@@ -810,29 +935,25 @@
         return v === "" || v == null ? null : String(v).trim();
       };
       const PHASES = { wait_gate:"value_dur_wait_gate", reaction:"value_dur_reaction", unload:"value_dur_unload",
-                       booking:"value_dur_booking", putaway:"value_dur_putaway", dwell:"value_dur_dwell" };
+                       booking:"value_dur_booking", putaway:"value_dur_putaway", dwell:"value_dur_dwell", operative:"value_dur_operative" };
 
       return data.map((row) => {
         const r = {
-          periode: normPeriode(readDim(row, "dimension_periode")),
+          periode: readDim(row, "dimension_periode"),
           segment: normSegment(readDim(row, "dimension_segment")),
           anzahl_anl: readVal(row, "value_anzahl_anl"),
           anzahl_pos: readVal(row, "value_anzahl_pos"),
         };
         // Anzahl TEs ist fachlich eine ANDERE Größe als Anzahl Anlieferungen
-        // (eine TE kann mehrere Anlieferungen enthalten). Legacy-Fallback auf
-        // anzahl_anl, falls das BW-Modell value_anzahl_te noch nicht liefert —
-        // transparent gekennzeichnet, keine stille Gleichsetzung.
+        // (eine TE kann mehrere Anlieferungen enthalten). Es gibt deshalb
+        // bewusst keinen Fallback TE = Anlieferung.
         r.anzahl_te = readVal(row, "value_anzahl_te");
-        if (r.anzahl_te == null) r.anzahl_te = r.anzahl_anl; // Legacy-Fallback: TE ≈ Anlieferung, bis BW-Feld existiert
-        const nTe = r.anzahl_te || r.anzahl_anl || 0; // Legacy-Fallback nur solange value_anzahl_te fehlt
-        const nPos = r.anzahl_pos || 0;
-        // Dauer-Summen fachlich korrekt teilen: Hof/Entladen = TE, Buchung/Einlagerung = Position.
-        const phaseCount = { wait_gate:nTe, reaction:nTe, unload:nTe, booking:nPos, putaway:nPos, dwell:nTe };
+        // Der Nenner muss exakt zur im BW je TE gebildeten Dauersumme passen.
+        // Gesamte TE-/Positionsanzahlen sind bei fehlenden Zeiten ungeeignet.
         for (const [ph, feed] of Object.entries(PHASES)) {
           const sumH = readDur(row, feed);
-          const cnt = phaseCount[ph] || 0;
-          r[`${ph}_avg`] = (sumH != null && cnt > 0) ? sumH / cnt : null;
+          const cnt = readVal(row, `value_${ph}_n`);
+          r[`${ph}_avg`] = (sumH != null && sumH >= 0 && cnt > 0) ? sumH / cnt : null;
           r[`${ph}_n`] = cnt;
           r[`${ph}_min`] = null; r[`${ph}_max`] = null;
         }
@@ -850,34 +971,29 @@
           if (v == null || !Number.isFinite(Number(v))) return null;
           v = Number(v);
           if (Math.abs(v) > 1 && Math.abs(v) <= 100) v /= 100;
-          return v;
+          return v >= 0 && v <= 1 ? v : null;
         };
-        r.otif_quote   = normQuote(readVal(row, "value_otif_quote"));
-        r.puenkt_quote = normQuote(readVal(row, "value_puenkt_quote"));
-        r.voll_quote   = normQuote(readVal(row, "value_voll_quote"));
-        // Optionale fachliche Nenner; falls nicht gebunden, TE-Anzahl als transparenter Fallback.
-        r.otif_n   = readVal(row, "value_otif_n")   ?? nTe;
-        r.puenkt_n = readVal(row, "value_puenkt_n") ?? nTe;
-        r.voll_n   = readVal(row, "value_voll_n")   ?? nTe;
+        for (const q of ["otif", "otif_pos", "puenkt", "voll", "qty_pos", "qty_anl"]) {
+          r[q + "_n"] = readVal(row, `value_${q}_n`);
+          r[q + "_quote"] = r[q + "_n"] > 0 ? normQuote(readVal(row, `value_${q}_quote`)) : null;
+        }
 
-        // Erweiterte Prozesszeiten (Abschnitt "Prozesszeiten", standardmäßig
-        // eingeklappt). Summen-Feeds als NODIM-Zahl, Divisor Anzahl TEs, je
-        // WE-Buchung->Fertigstellung Divisor Positionen. Fällt auf bereits
-        // vorhandene, verwandte Kennzahl zurück, falls der neue Feed im BW-
-        // Modell noch nicht gebunden ist — so bleibt die Ansicht nutzbar.
-        const avgFeed = (feedId, divisor) => {
-          const sumH = readDur(row, feedId);
-          return (sumH != null && divisor) ? sumH / divisor : null;
-        };
-        r.plan_start_end_avg      = avgFeed("value_dur_plan_start_end", nTe);
-        r.actual_start_end_avg    = avgFeed("value_dur_actual_start_end", nTe);
-        r.arrival_dock_avg        = avgFeed("value_dur_arrival_dock", nTe) ?? r.wait_gate_avg;
-        r.dock_unload_start_avg   = avgFeed("value_dur_dock_unload_start", nTe) ?? r.reaction_avg;
-        r.unload_start_end_avg    = avgFeed("value_dur_unload_start_end", nTe) ?? r.unload_avg;
-        r.unload_end_actual_end_avg = avgFeed("value_dur_unload_end_actual_end", nTe);
-        r.we_booked_completion_avg  = avgFeed("value_dur_we_booked_completion", nPos) ?? r.putaway_avg;
-        r.arrival_completion_avg  = avgFeed("value_dur_arrival_completion", nTe) ?? r.dwell_avg;
-        r.dock_completion_avg     = avgFeed("value_dur_dock_completion", nTe);
+        // Jede Dauersumme benötigt den eigenen gültigen TE-Nenner.
+        // Nur fachlich identische Zeitspannen dürfen denselben Feed nutzen.
+        for (const item of PROCESS_TIME_ITEMS) {
+          const stem = item.key.replace(/_avg$/, "");
+          const count = readVal(row, `value_${stem}_n`);
+          const sumH = readDur(row, `value_dur_${stem}`);
+          r[item.weightKey] = count;
+          r[item.key] = sumH != null && sumH >= 0 && count > 0 ? sumH / count : null;
+        }
+        // Nur tatsächlich identische Phasen dürfen sich ersetzen.
+        for (const [stem, phase] of [["arrival_dock","wait_gate"], ["dock_unload_start","reaction"], ["we_booked_completion","putaway"]]) {
+          if (r[stem + "_avg"] == null && r[phase + "_avg"] != null) {
+            r[stem + "_avg"] = r[phase + "_avg"];
+            r[stem + "_n"] = r[phase + "_n"];
+          }
+        }
         return r;
       });
     }
@@ -890,9 +1006,9 @@
     setTestData(rows) {
       if (typeof rows === "string") { try { rows = JSON.parse(rows); } catch { rows = []; } }
       this._rows = Array.isArray(rows) ? rows : [];
+      this._preparedRows=null;
       this._render();
     }
-
     _wire() {
       const $ = (id) => this._sh.getElementById(id);
       $("btnTheme").addEventListener("click", () =>
@@ -968,83 +1084,68 @@
     }
 
     // ── Datenaufbereitung: Perioden × Segment -> Serien ───────────────────
-    // Ordnet eine ISO-Wochenperiode ("2025-W07") ihrem Monat zu, über den
-    // Donnerstag der Woche (ISO-Konvention: die Woche gehört zum Jahr/Monat
-    // ihres Donnerstags). So landen KW53/KW01 im richtigen Monat.
-    _weekToMonth(per) {
-      const m = /^(\d{4})-W(\d{2})$/.exec(per);
-      if (!m) return per; // schon Monatsformat o. ä.
-      const year = +m[1], week = +m[2];
-      const jan4 = new Date(Date.UTC(year, 0, 4));
-      const day = (jan4.getUTCDay() + 6) % 7; // Mo=0
-      const week1Mon = new Date(jan4); week1Mon.setUTCDate(jan4.getUTCDate() - day);
-      const thu = new Date(week1Mon);
-      thu.setUTCDate(week1Mon.getUTCDate() + (week - 1) * 7 + 3);
-      return `${thu.getUTCFullYear()}-${String(thu.getUTCMonth() + 1).padStart(2, "0")}`;
+    // Input: local calendar day derived in BW from [0WM_SPFRG].
+    _planPeriod(value) {
+      const raw=String(value || "").trim();
+      let m=/^(\d{4})-?(\d{2})-?(\d{2})$/.exec(raw);
+      if (!m) { const de=/^(\d{2})\.(\d{2})\.(\d{4})$/.exec(raw); if(de) m=[de[0],de[3],de[2],de[1]]; }
+      if (!m) return null;
+      const d=new Date(Date.UTC(+m[1],+m[2]-1,+m[3]));
+      if(d.getUTCFullYear()!==+m[1]||d.getUTCMonth()!==+m[2]-1||d.getUTCDate()!==+m[3]) return null;
+      if(this._props.aggregation==='month') return m[1]+'-'+m[2];
+      d.setUTCDate(d.getUTCDate()+4-(d.getUTCDay()||7));
+      const year=d.getUTCFullYear();
+      const week=Math.ceil((((d-new Date(Date.UTC(year,0,1)))/86400000)+1)/7);
+      return year+'-W'+String(week).padStart(2,'0');
     }
 
     // N-gewichteter Mittelwert, aber nur über tatsächlich vorhandene Werte.
     // Fehlende Kennzahlen dürfen den Nenner NICHT künstlich vergrößern.
     _weightedAvg(rows, valueKey, weightKey) {
       let num = 0, den = 0;
-      const fallback = [];
       for (const r of rows) {
         const v = r && r[valueKey];
         if (v == null || !Number.isFinite(Number(v))) continue;
-        fallback.push(Number(v));
         const w = Number(r[weightKey]);
-        if (Number.isFinite(w) && w > 0) { num += Number(v) * w; den += w; }
+        if (!Number.isFinite(w) || w <= 0) return null;
+        num += Number(v) * w; den += w;
       }
-      if (den > 0) return num / den;
-      return fallback.length ? fallback.reduce((a,b)=>a+b,0) / fallback.length : null;
+      return den > 0 ? num / den : null;
     }
 
-    // Verdichtet Wochenzeilen zu Monatszeilen. Aggregationsregeln wie BW:
-    // Summen addieren, Mittelwerte fachlich n-gewichtet, Min=LOWEST, Max=HIGHEST.
-    _rollupToMonths(rows) {
-      const groups = {};
-      for (const r of rows) {
-        if (!r || !r.periode) continue;
-        const key = this._weekToMonth(r.periode) + "|" + r.segment;
-        (groups[key] ||= []).push(r);
-      }
-      const out = [];
-      for (const key in groups) {
-        const g = groups[key];
-        const splitAt = key.lastIndexOf("|");
-        const per = key.slice(0, splitAt), seg = key.slice(splitAt + 1);
-        const row = { periode: per, segment: seg };
-        // Zähler und optionale Bewertungsnenner addieren.
-        for (const k of ["anzahl_pos","anzahl_anl","anzahl_te","otif_n","puenkt_n","voll_n"])
-          row[k] = g.reduce((a,r)=>a + (Number(r[k]) || 0), 0);
-
-        for (const m of METRICS) {
-          if (m.sum) row[m.key] = g.reduce((a, r) => a + (Number(r[m.key]) || 0), 0);
-          else row[m.key] = this._weightedAvg(g, m.key, m.weightKey || "anzahl_pos");
-          if (m.band) {
-            const mins = g.map(r => r[m.band[0]]).filter(v => v != null && Number.isFinite(Number(v)));
-            const maxs = g.map(r => r[m.band[1]]).filter(v => v != null && Number.isFinite(Number(v)));
-            row[m.band[0]] = mins.length ? Math.min(...mins) : null;
-            row[m.band[1]] = maxs.length ? Math.max(...maxs) : null;
+    _aggregateRows(rows, periode, segment) {
+      const out = {periode, segment};
+      const sumKnown = key => rows.every(r => r[key] != null && Number.isFinite(Number(r[key])))
+        ? rows.reduce((sum,r) => sum + Number(r[key]), 0) : null;
+      for (const key of ["anzahl_te","anzahl_anl","anzahl_pos","sum_menge","sum_volumen", ...METRICS.filter(m => m.sum).map(m => m.key)])
+        out[key] = sumKnown(key);
+      const items = [...METRICS.filter(m => !m.sum), ...Object.keys(PHASE_WEIGHT_KEY).map(ph => ({key:ph + "_avg", weightKey:ph + "_n"})), ...PROCESS_TIME_ITEMS];
+      for (const item of items) {
+        out[item.key] = this._weightedAvg(rows, item.key, item.weightKey);
+        const valid = rows.filter(r => r[item.key] != null && Number.isFinite(Number(r[item.key])) && Number(r[item.weightKey]) > 0);
+        out[item.weightKey] = out[item.key] == null ? null : valid.reduce((sum,r) => sum + Number(r[item.weightKey]), 0);
+        if (item.band) {
+          for (const [i,key] of item.band.entries()) {
+            const values = valid.map(r => r[key]).filter(v => v != null && Number.isFinite(Number(v)));
+            out[key] = values.length ? (i === 0 ? Math.min(...values) : Math.max(...values)) : null;
           }
         }
-        // Phasen fachlich TE- bzw. positionsgewichtet.
-        for (const ph of PHASE_KEYS) {
-          const k = ph + "_avg";
-          row[k] = this._weightedAvg(g, k, PHASE_WEIGHT_KEY[ph]);
-          row[ph + "_n"] = g.reduce((a,r)=>a + (Number(r[ph + "_n"]) || 0), 0);
-        }
-        // Erweiterte Prozesszeiten müssen auch in Monatsansicht erhalten bleiben.
-        for (const p of PROCESS_TIME_ITEMS)
-          row[p.key] = this._weightedAvg(g, p.key, p.weightKey);
-        out.push(row);
       }
       return out;
     }
 
     _prepare() {
-      let rows = (this._rows || []).filter(r => r && r.periode != null && r.periode !== "");
-      if (this._props.aggregation === "month") rows = this._rollupToMonths(rows);
+      this._invalidPlanDays = (this._rows || []).filter(r => !this._planPeriod(r.periode)).length;
+      let rows = (this._rows || []).map(r => ({...r,
+        periode:this._planPeriod(r.periode), segment:normSegment(r.segment)})).filter(r => r.periode);
+      const groups = new Map();
+      for (const r of rows) {
+        const key = r.periode + "|" + r.segment;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(r);
+      }
+      rows = [...groups.values()].map(g => this._aggregateRows(g, g[0].periode, g[0].segment));
+
       const perioden = [...new Set(rows.map(r => r.periode))].sort();
       const segmente = [...new Set(rows.map(r => r.segment).filter(Boolean))].sort((a, b) => {
         const ai = SEGMENT_ORDER.indexOf(a), bi = SEGMENT_ORDER.indexOf(b);
@@ -1061,26 +1162,7 @@
       for (const per of perioden) {
         const segRows = segmente.map(x => idx[per + "|" + x]).filter(Boolean);
         if (!segRows.length) continue;
-        const g = { periode: per, segment: "Gesamt" };
-        for (const k of ["anzahl_pos","anzahl_anl","anzahl_te","otif_n","puenkt_n","voll_n"])
-          g[k] = segRows.reduce((a,r)=>a + (Number(r[k]) || 0), 0);
-        for (const m of METRICS) {
-          if (m.sum) g[m.key] = segRows.reduce((a,r)=>a + (Number(r[m.key]) || 0), 0);
-          else g[m.key] = this._weightedAvg(segRows, m.key, m.weightKey || "anzahl_pos");
-          if (m.band) {
-            const mins = segRows.map(r=>r[m.band[0]]).filter(v=>v != null && Number.isFinite(Number(v)));
-            const maxs = segRows.map(r=>r[m.band[1]]).filter(v=>v != null && Number.isFinite(Number(v)));
-            g[m.band[0]] = mins.length ? Math.min(...mins) : null;
-            g[m.band[1]] = maxs.length ? Math.max(...maxs) : null;
-          }
-        }
-        for (const ph of PHASE_KEYS) {
-          const k = ph + "_avg";
-          g[k] = this._weightedAvg(segRows, k, PHASE_WEIGHT_KEY[ph]);
-          g[ph + "_n"] = segRows.reduce((a,r)=>a + (Number(r[ph + "_n"]) || 0), 0);
-        }
-        for (const p of PROCESS_TIME_ITEMS)
-          g[p.key] = this._weightedAvg(segRows, p.key, p.weightKey);
+        const g = this._aggregateRows(segRows, per, "Gesamt");
         gesamt[per] = g;
       }
       idx.__gesamt = gesamt;
@@ -1089,6 +1171,7 @@
       this._segmente = ["Gesamt", ...segmente];
       this._idx = idx;
       this._segList = segmente; // ohne "Gesamt", für Overlay
+      this._preparedRows=this._rows;this._preparedAggregation=this._props.aggregation;
     }
 
     // Serie für eine Kennzahl im aktuell gewählten Segment
@@ -1110,6 +1193,7 @@
     }
 
     _render() {
+      this._stopPlay();
       const S = this._sh;
       const state = S.getElementById("state");
       const dash = S.getElementById("dash");
@@ -1132,18 +1216,28 @@
         state.hidden = false;
         state.innerHTML = `<div class="state-icon">🔗</div>
           <div class="state-txt">${this._rows.length} Zeilen empfangen, aber keine Periode erkannt.<br>
-          Prüfe die Zuweisung des Feeds <b>dimension_periode</b> (Kalenderwoche) im Builder.</div>`;
+          Prüfe die Zuweisung des Feeds <b>dimension_periode</b> (Planstart-Kalendertag) im Builder.</div>`;
         dash.innerHTML = ""; this._stopLoaderSteps(); return;
       }
       state.hidden = true;
       this._stopLoaderSteps();
-      this._prepare();
+      if(this._preparedRows!==this._rows || this._preparedAggregation!==this._props.aggregation) {
+        this._scrubIdx=null;
+        this._prepare();
+      }
+
+      if (!this._perioden.length) {
+        state.hidden = false;
+        state.innerHTML = `<div class="state-icon">⌕</div><div class="state-txt">Keine gültigen Planstart-Tagesdaten vorhanden.</div>`;
+        dash.innerHTML = "";
+        return;
+      }
 
       // Untertitel
       const von = this._perioden[0], bis = this._perioden[this._perioden.length - 1];
-      S.getElementById("sub").textContent = `${this._perioden.length} Perioden · ${von} – ${bis}`;
+      S.getElementById("sub").textContent = `${this._perioden.length} Perioden · ${von} – ${bis} · Geplanter Start ab${this._invalidPlanDays ? ` · ${this._invalidPlanDays} Zeilen ohne gültigen Planstart ausgeschlossen` : ""}`;
 
-      // Segment-Auswahl (Segmented-Control mit Farbpunkten)
+// Segment-Auswahl (Segmented-Control mit Farbpunkten)
       S.getElementById("segpick").innerHTML = this._segmente.map(s =>
         `<button data-seg="${esc(s)}" class="${s===this._seg?"on":""}" style="${s===this._seg?`color:${SEG_COLORS[s]||"var(--ink)"}`:""}">
            <i style="background:${SEG_COLORS[s]||"#888"}"></i>${esc(s)}</button>`).join("");
@@ -1220,7 +1314,7 @@
       const per = this._perioden[idx];
       const r = (this._seg === "Gesamt" ? this._idx.__gesamt[per] : this._idx[per + "|" + this._seg]) || {};
       el.innerHTML = `<div class="pt-hint">Ausgewählte Periode (${esc(per)}) · ${esc(this._seg === "Gesamt" ? "Alle Ladestellen" : this._seg)}</div>
-        <div class="grid pt-grid">${PROCESS_TIME_ITEMS.map(({key,from,to,group,level}, i) => {
+        <div class="grid pt-grid">${PROCESS_TIME_ITEMS.map(({key,from,to,group,level,weightKey}, i) => {
           const v = r[key];
           const pts = this._serie(key);
           const valid = pts.slice(0, idx + 1).filter(p => p && p.v != null);
@@ -1235,7 +1329,7 @@
             <div class="m-val"><b>${v != null ? "0" : "–"}</b><span class="u">h</span>
               ${v != null && valid.length > 1 ? `<span class="m-delta ${rel <= 0 ? "up" : "down"}">${rel >= 0 ? "▲" : "▼"} ${Math.abs(rel * 100).toFixed(0)}%</span>` : ""}
             </div>
-            <div class="m-sub">${this._teBaseHtml(r)}<span class="yoy">${esc(group)}</span><span class="yoy">Ebene ${esc(level)}</span></div>
+            <div class="m-sub">${this._teBaseHtml(r, {key,weightKey,level})}<span class="yoy">${esc(group)}</span><span class="yoy">Ebene ${esc(level)}</span></div>
             ${hasData ? this._sparkSvg(pts, metric, i + METRICS.length) : `<div class="nodata-hint">Keine Daten</div>`}
           </div>`;
         }).join("")}</div>`;
@@ -1272,8 +1366,16 @@
         ? `Basis: Σ ${Math.round(n).toLocaleString("de-DE")} TE`
         : "Basis: Σ – TE";
     }
-    _teBaseHtml(row) {
-      return `<span class="te-base" title="Summe der Transporteinheiten, auf denen die Kennzahl basiert">${this._teBaseText(row)}</span>`;
+    _teBaseHtml(row, metric) {
+      const info = metric && (METRIC_INFO[metric.key] || metric);
+      const level = info && info.level;
+      const n = metric && row && row[metric.weightKey];
+      const validN = n != null && Number.isFinite(Number(n));
+      const basis = metric && metric.weightKey
+        ? `Basis: ${validN ? Math.round(n).toLocaleString("de-DE") : "–"} ${level === "Position" ? "Pos." : level === "Anlieferung" ? "Anl." : "TE"}` : "";
+      const total = row && row.anzahl_te != null ? Math.round(row.anzahl_te).toLocaleString("de-DE") : "–";
+      const label = level === "TE" && metric && metric.weightKey ? basis : `${basis ? basis + " · " : ""}Im Filter: Σ ${total} TE`;
+      return `<span class="te-base" title="Basis bezeichnet den passenden Bewertungsnenner. TE im Filter ist die Gesamtzahl der Transporteinheiten im ausgewählten Zeitraum.">${label}</span>`;
     }
 
     _renderTiles() {
@@ -1282,7 +1384,14 @@
       METRICS.forEach((m, i) => {
         const pts = this._serie(m.key);
         const valid = pts.filter(p => p && p.v != null);
-        if (!valid.length) return;
+        if (!valid.length) {
+          const empty = document.createElement("div");
+          empty.className = "tile tile-nodata";
+          empty.dataset.key = m.key;
+          empty.innerHTML = `<div class="m-lbl">${esc(m.label)}</div><div class="m-val"><b>–</b><span class="u">${m.unit}</span></div><div class="nodata-hint">Wert oder passende Datenbasis fehlt</div>`;
+          grid.appendChild(empty);
+          return;
+        }
         const last = valid[valid.length - 1].v;
         const base = valid.length > 3
           ? valid.slice(0, -1).reduce((a, p) => a + p.v, 0) / (valid.length - 1) : last;
@@ -1304,7 +1413,7 @@
         const _tgt = this._targetOf(m);
         if (_tgt != null) {
           const ok = m.lowerBetter ? last <= _tgt : last >= _tgt;
-          slaHtml = `<span class="sla ${ok?"ok":"miss"}" title="Ziel ${fmtVal(_tgt,m)}${m.unit==='%'?'%':m.unit}">${ok?"✓":"✕"} Ziel</span>`;
+          slaHtml = `<span class="sla ${ok?"ok":"miss"}" title="Vorläufiges manuelles Ziel ${fmtVal(_tgt,m)}${m.unit==='%'?'%':m.unit}">${ok?"✓":"✕"} Vorläufiges Ziel</span>`;
         }
         const yoyHtml = yoy != null
           ? `<span class="yoy ${ (m.lowerBetter? yoy<0 : yoy>0)?"up":"down"}" title="vs. Vorjahr">VJ ${yoy>=0?"+":""}${(yoy*100).toFixed(0)}%</span>`
@@ -1313,6 +1422,7 @@
         const tile = document.createElement("div");
         tile.className = "tile" + (m.key === this._selMetric ? " sel" : "");
         tile.dataset.key = m.key;
+        tile.dataset.period = lastPer;
         const mi = METRIC_INFO[m.key] || {};
         const infoTitle = [mi.meaning || "Kennzahl des Cockpits.", mi.formula ? `Formel: ${mi.formula}` : ""]
           .filter(Boolean).join(" · ");
@@ -1320,8 +1430,8 @@
           <div class="m-lbl">${m.label}<button class="tile-info" data-key="${m.key}" type="button"
             aria-label="Kennzahl ${m.label} erklären" title="${esc(infoTitle)}">i</button></div>
           <div class="m-val"><b data-count="${last}">${m.pct ? "0.0" : "0"}</b><span class="u">${m.unit}</span>
-            <span class="m-delta ${good?"up":"down"}">${rel>=0?"▲":"▼"} ${Math.abs(rel*100).toFixed(0)}%</span></div>
-          <div class="m-sub">${this._teBaseHtml(basisRow)}${slaHtml}${yoyHtml}</div>
+            <span class="m-delta ${m.sum||Math.round(Math.abs(rel*100))===0?'neutral':good?'up':'down'}" title="Vergleich mit dem ungewichteten Mittel der vorherigen dargestellten Perioden">${valid.length>3?`${Math.round(Math.abs(rel*100))===0?'=':rel>=0?'▲':'▼'} ${Math.abs(rel*100).toFixed(0)}% · Verlauf`:'Vergleich: zu geringe Basis'}</span></div>
+          <div class="m-sub">${this._teBaseHtml(basisRow, m)}${slaHtml}${yoyHtml}</div>
           ${this._sparkSvg(pts, m, i)}`;
         tile.addEventListener("click", (e) => {
           if (e.target.closest(".tile-info")) return; // Info-Klick darf weder Glossar noch Detailansicht öffnen
@@ -2087,6 +2197,7 @@
        Story-Skript beim Öffnen der Detailansicht aufgerufen, mit exitCompact()
        wieder zurück. */
     setCompact(periode) {
+      this._stopPlay();
       this._compact = true;
       const root = this._sh.querySelector(".root");
       if (root) root.classList.add("compact");
@@ -2096,13 +2207,16 @@
       this._renderSelHead(periode);
     }
     exitCompact() {
+      this._stopPlay();
       this._compact = false;
       const root = this._sh.querySelector(".root");
       if (root) root.classList.remove("compact");
       const sh = this._sh.getElementById("selHead");
       if (sh) sh.hidden = true;
       // Scrubber ans Ende zurück
-      this._scrubIdx = null; this._applyScrub();
+      this._scrubIdx = this._perioden.length-1;
+      const scrub=this._sh.getElementById('scrub');if(scrub)scrub.value=this._scrubIdx;
+      this._applyScrub();
     }
     _renderSelHead(periode) {
       const el = this._sh.getElementById("selHead");
@@ -2123,7 +2237,7 @@
     _wireScrubber() {
       const scrub = this._sh.getElementById("scrub");
       const play = this._sh.getElementById("play");
-      scrub.addEventListener("input", () => { this._scrubIdx = +scrub.value; this._applyScrub(); });
+      scrub.addEventListener("input", () => { this._stopPlay(); this._scrubIdx = +scrub.value; this._applyScrub(); });
       play.addEventListener("click", () => this._playing ? this._stopPlay() : this._startPlay());
       if (this._scrubIdx == null || this._scrubIdx < 0 || this._scrubIdx >= this._perioden.length)
         this._scrubIdx = this._perioden.length - 1;
@@ -2153,20 +2267,29 @@
         const b = tile.querySelector("b");
         if (b) b.textContent = (r && r[m.key] != null) ? fmtVal(r[m.key], m) : "–";
         const teBase = tile.querySelector(".te-base");
-        if (teBase) teBase.textContent = this._teBaseText(r);
+        if (teBase) teBase.outerHTML = this._teBaseHtml(r, m);
+        tile.querySelectorAll('.m-delta,.sla,.yoy').forEach(el=>el.hidden=tile.dataset.period!==per);
+        let periodLabel=tile.querySelector('.ux-period');
+        if(!periodLabel){periodLabel=document.createElement('div');periodLabel.className='ux-meta ux-period';tile.appendChild(periodLabel);}
+        periodLabel.textContent='Zeitraum: '+(per||'nicht verfügbar');
       });
       // Prozesszeiten folgen derselben ausgewählten Periode wie die Kacheln.
       this._renderProcessTimes();
+      if(this._sh.getElementById('ux-context')) WEUX.update(this,'strategy');
     }
 
     _startPlay() {
+      this._stopPlay();
+      if (!this._perioden.length) return;
       this._playing = true;
       this._sh.getElementById("play").textContent = "⏸";
       const scrub = this._sh.getElementById("scrub");
       if (this._scrubIdx == null || this._scrubIdx >= this._perioden.length - 1) this._scrubIdx = 0;
+      scrub.value = this._scrubIdx;
+      this._applyScrub();
       this._playTimer = setInterval(() => {
+        if (this._scrubIdx >= this._perioden.length - 1) { this._stopPlay(); return; }
         this._scrubIdx++;
-        if (this._scrubIdx >= this._perioden.length) { this._stopPlay(); return; }
         scrub.value = this._scrubIdx;
         this._applyScrub();
       }, 380);
@@ -2178,5 +2301,6 @@
     }
   }
 
+  WEUX.install(WEStrategie, 'strategy');
   if (!customElements.get("we-strategie")) customElements.define("we-strategie", WEStrategie);
 })();
