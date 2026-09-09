@@ -1,5 +1,168 @@
+/* BEGIN SHARED UX */
+/* Shared presentation helpers, embedded in each SAC widget at build time. */
+(function () {
+  if (globalThis.WEUX) return;
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const num = n => Number.isFinite(Number(n)) && n != null ? Number(n).toLocaleString('de-DE',{maximumFractionDigits:1}) : 'nicht verfügbar';
+  const topics = {
+    data: ['Datenbasis & Zeitbezug','Historische Auswertung abgeschlossener Wareneingangsvorgänge. Das SAC-Modell liefert ausschließlich WE-relevante Datensätze (R). Z und N sind nicht enthalten.','Die Auswahl erfolgt nach Geplanter Start ab [0WM_SPFRG]. Planstart am 31.08., Fertigstellung am 01.09.: Zuordnung zum August. ISO-Wochen können zwei Monate berühren. Ankunft und Fertigstellung bleiben die Ereignisse für Zeitdifferenzen.','Die BW-Übertragung erfolgt üblicherweise täglich gegen 04:00 Uhr. Anlieferungen werden nach letzter Einlagerung, TEs nach Abfahrt übertragen. Später verfügbare Daten können frühere Planstartperioden ergänzen. Der angezeigte Datenstand muss aus dem tatsächlichen Ladeprozess stammen.'],
+    start: ['So verwendest du die Analyse','1. In der Strategieübersicht Ladestelle und Woche oder Monat wählen. Die Kacheln zeigen den jeweiligen letzten verfügbaren Wert; der Zeitraum steht an der Kachel.','2. Eine Kennzahl wählen, um ihren Verlauf zu untersuchen. Einen Zeitpunkt im Diagramm anklicken, um die zugehörige Detailanalyse zu öffnen.','3. Im Periodenüberblick Qualität und Zeiten prüfen. Reiter führen zu Prozesskette und Ursachenanalysen. „TE-Details“ öffnet die Transporteinheit mit ihren Anlieferungen und Positionen. Zurück führt zur vorherigen Analyse; die Filter bleiben dabei bestehen.'],
+    hierarchy: ['TE → Anlieferung → Position','Eine Transporteinheit (TE) kann mehrere Anlieferungen enthalten; jede Anlieferung kann mehrere Positionen enthalten.','Zeitkennzahlen werden je TE bewertet. OTIF und Mengentreue besitzen getrennte Bewertungen je Anlieferung und Position. Werte verschiedener Ebenen sind nicht direkt addierbar.','„Basis“ zählt die für genau diese Kennzahl bewertbaren Objekte. „Im Filter“ bezeichnet den gesamten ausgewählten Datenumfang. Die Anzahl kann von Kennzahl zu Kennzahl abweichen.'],
+    quality: ['Qualitätswerte richtig lesen','OTIF bedeutet „On Time In Full“: pünktlich und vollständig. Die BW-Kennzeichen werden getrennt für Positionen und Anlieferungen ausgewertet.','Die berechnete Termintreue verwendet Ankunft ≤ Planstart + die angezeigte Toleranz. Auch sehr frühe Ankünfte erfüllen diese Regel. BW-Pünktlichkeit verwendet dagegen P/N. Unterschiedliche Bewertungsbasen können zu unterschiedlichen Quoten führen.','„90 erfüllt / 100 bewertet · 5 ohne Bewertung“ bedeutet 90 %, nicht 90 von 105. Fehlende oder widersprüchliche Bewertungen sind nicht automatisch negativ.'],
+    statistics: ['Statistik & Vergleiche','Ø ist der arithmetische Mittelwert der gültigen Werte. Der Median liegt in der Mitte der sortierten Werte. Beim P75 liegen 75 % der Werte auf oder unter diesem Wert. Die Mediane verschiedener Phasen dürfen nicht zu einer Gesamtdauer addiert werden.','Die auffälligste Prozessphase wird nach Median und Streuung ausgewählt (mindestens 8 gültige Fälle). Das ist ein Analysehinweis, keine bestätigte Ursache.','Ausreißer werden mit Median und robuster Streuung (MAD, gegebenenfalls logarithmisch) in der eingestellten Vergleichsgruppe erkannt. Ein hoher z-Wert beschreibt statistische Abweichung, keinen Datenfehler.'],
+    comparison: ['Pfeile, Trends und Ziele','Strategieübersicht: Der Pfeil vergleicht den letzten verfügbaren Periodenwert mit dem ungewichteten Mittel der vorherigen dargestellten Perioden; erst ab vier gültigen Perioden.','Detailanalyse: Der Pfeil vergleicht den letzten dargestellten Trendabschnitt mit dem nach Fallzahl gewichteten Mittel der vorherigen Trendabschnitte. Das ist kein Vergleich mit genau einer Vorperiode.','Vorjahreswerte vergleichen dieselbe Kalenderwoche oder denselben Monat im Vorjahr. Prozentangaben sind relative Änderungen: von 80 % auf 88 % sind +10 % relativ bzw. +8 Prozentpunkte.','Ziele sind vorläufig und manuell konfiguriert. Die separate fachliche Baseline aus 14 vollständigen Monaten ist noch nicht angebunden. Grün bedeutet günstigere, Rot ungünstigere Entwicklung; eine reine Zunahme von Volumen ist neutral.'],
+    errors: ['Datenfehler & Abdeckung','Ein Fehlerfall ist eine erkannte fehlende, negative oder widersprüchliche Angabe. Mehrere Fehler können dieselbe TE betreffen. Nur betroffene Bewertungen werden ausgeschlossen.','Abdeckung zeigt, ob benötigte Felder vorhanden bzw. bewertbar sind. Hohe Abdeckung bestätigt nicht die fachliche Richtigkeit. Es gibt keinen pauschalen Gesamtprozentsatz über unterschiedliche Prüfungen.','„Nicht bewertbar“ bedeutet: für diese Kennzahl fehlen gültige Werte oder der passende Nenner. Ein gültiger Wert von null bleibt 0. „Zu geringe Basis“ betrifft die Mindestfallzahl einer Statistik.'],
+    units: ['Mengen & Einheiten','Mengen und Volumen werden aus den gelieferten Daten summiert. Eine gemeinsame Einheit darf nur angezeigt werden, wenn das BW-Modell diese bestätigt.','Bei unbekannter oder gemischter Einheit bleiben die Rohsummen als solche gekennzeichnet. Aus Mengen unterschiedlicher Einheiten lässt sich keine gemeinsame Stückzahl ableiten. Kollis bezeichnet die Anzahl der Packstücke. PA1 ist die Menge je Palette für die rechnerische Palettenzahl.'],
+    location: ['Ladestelle','Container, Landverkehr und BSL sind Ausprägungen der Ladestelle.','„Nicht zugeordnet“ enthält TEs, für die keine Ladestelle gepflegt ist. Das ist eine Datenlücke, kein zusätzlicher Prozess.'],
+    ranking: ['Rankings & Mindestbasis','Spediteure werden anhand ihrer bewertbaren BW-Pünktlichkeit verglichen; Lieferanten anhand bewertbarer Positionsmengen. Kleine Fallzahlen können stark schwanken.','Die Mindestbasis steht direkt am jeweiligen Ranking. Nicht aufgeführte Lieferanten oder Spediteure können unter dieser Mindestbasis liegen. Kritische Positionen werden nach absoluter Anzahl gerankt; Anteil und Gesamtbasis helfen beim Einordnen.'],
+    experts: ['Experteneinstellungen','Ausreißerschwelle und Vergleichsgruppe beeinflussen die statistischen Hinweise. Die Toleranz beeinflusst die berechnete Termintreue; BW-Kennzeichen werden nicht verändert.','Einstellungen wirken im Widget. Eine abweichende Toleranz wird sichtbar angezeigt. Fachliche Freigaben und Berechtigungen müssen in SAC geregelt werden.'],
+    shift: ['Schichtvergleich','Die Periodenauswahl bleibt am Planstart ausgerichtet. Innerhalb dieser Auswahl werden die Schichten anhand der jeweiligen BW-Ereignismerkmale betrachtet.','Schichtzeiten und die wöchentliche Mannschaftsrotation sind von der Planstartperiode zu unterscheiden. Die verwendete Schicht steht am Diagramm, beispielsweise Ankunftsschicht.']
+  };
+  const metrics = {
+    dwell_avg:['Ø Standzeit','TE','Aufenthaltsdauer der TE am Standort.','Abfahrt Kontrollpunkt − Ankunft Kontrollpunkt','dwell'],
+    booking_avg:['Ø Vereinnahmung','TE','Kernzeit bis zur abgeschlossenen WE-Buchung der TE.','Letzte WE-Buchung der TE − tatsächliches Entladeende [BWMISTTEE]','booking'],
+    putaway_avg:['Ø Einlagerung · Näherung','TE','Fertigstellung ersetzt vorläufig das genaue HU-Einlagerungsende.','Letzte Fertigstellung aller TE-Positionen − letzte WE-Buchung der TE','putaway'],
+    operative_avg:['Ø Operativer WE · Näherung','TE','Gesamtzeit ab Entladestart bis zur letzten Fertigstellung. Näherung ohne HU-Ende.','Letzte Fertigstellung aller TE-Positionen − Entladestart','operative'],
+    wait_gate_avg:['Ø Wartezeit bis Andocken','TE','Zeit vom Eintreffen bis zum Andocken.','Andocken − Ankunft Kontrollpunkt','wait_gate'],
+    reaction_avg:['Ø Entladevorlaufzeit','TE','Zeit zwischen Andocken und Entladestart.','Entladestart − Andocken','reaction'],
+    unload_avg:['Ø Entladedauer','TE','Zeit für die tatsächliche Entladung.','Tatsächliches Entladeende [BWMISTTEE] − Entladestart','unload'],
+    calc_punctual:['Berechnete Termintreue','TE','Bewertung anhand der Zeitstempel; auch frühe Ankünfte gelten als pünktlich.','TE mit Ankunft ≤ Planstart + eingestellte Toleranz / bewertbare TE × 100','delay'],
+    otif_quote:['OTIF · Anlieferung','Anlieferung','Pünktlich und vollständig gemäß BW.','O / (O + N) × 100','otifDelivery','BW [BWMOTIFA]'],
+    otif_pos_quote:['OTIF · Position','Position','Pünktlich und vollständig gemäß BW, separat je Position.','O / (O + N) × 100','otifPosition','BW [BWMOTIF]'],
+    voll_quote:['Liefervollständigkeit','Anlieferung','Vollständige Anlieferungen gemäß BW.','V / (V + N) × 100','fullDelivery','BW [BWMLIEFV]'],
+    puenkt_quote:['BW-Pünktlichkeit · P/N','TE','Fachliche Pünktlichkeitsbewertung aus BW.','P / (P + N) × 100','punctualTe','BW [BWMLIEFP]'],
+    qty_pos_quote:['Mengentreue · Position','Position','Positionen mit übereinstimmender IST- und SOLL-Menge.','Positionen mit IST = SOLL / vollständig bewertbare Positionen × 100','qtyPosition'],
+    qty_anl_quote:['Mengentreue · Anlieferung','Anlieferung','Eine Anlieferung erfüllt die Regel, wenn alle zugehörigen Positionen mengentreu sind. Über- und Untermengen werden nicht saldiert.','Anlieferungen mit allen Positionen IST = SOLL / vollständig bewertbare Anlieferungen × 100','qtyDelivery'],
+    critical:['Kritische Positionen','Position','Gezählt werden kritische Positionen, nicht unterschiedliche Produkt-IDs.','Anzahl eindeutig gezählter Positionen mit Kategorie oder Freitext für kritische Artikel','critical'],
+    anzahl_te:['Transporteinheiten','TE','Eine TE wird einmal gezählt.','Anzahl eindeutiger TE','anzahl_te'],
+    anzahl_anl:['Anlieferungen','Anlieferung','Eine Anlieferung kann mehrere Positionen enthalten.','Anzahl eindeutiger Anlieferungen','anzahl_anl'],
+    anzahl_pos:['Positionen','Position','Eindeutige Kombination aus Anlieferungs- und Positionsnummer.','Anzahl eindeutiger Positionen','anzahl_pos'],
+    sum_gewicht_t:['Gewicht','Position','Summe der angelieferten Gewichte.','Summe der Gewichte in Tonnen','sum_gewicht_t'],
+    sum_wert_keur:['Warenwert','Position','Summe der angelieferten Warenwerte.','Summe der Warenwerte in Tausend Euro','sum_wert_keur']
+  };
+  for(const [key,from,to] of [
+    ['plan_start_end','Geplanter Start','Geplantes Ende'],['actual_start_end','Ist-Start','Ist-Ende'],['arrival_dock','Ankunft','Andocken'],['dock_unload_start','Andocken','Entladestart'],['unload_start_end','Entladestart','Entladeende'],['unload_end_actual_end','Entladeende','Tatsächliches Ende'],['we_booked_completion','WE gebucht','Letzte Fertigstellung'],['arrival_completion','Ankunft','Letzte Fertigstellung'],['dock_completion','Andocken','Letzte Fertigstellung']
+  ]) metrics[key+'_avg']=[from+' → '+to,'TE','Ergänzende Prozesszeit der ausgewählten Planstartperiode. Fertigstellung ist eine Näherung für das Einlagerungsende.',to+' − '+from,key,'BW-Dauer bzw. daraus gebildeter Mittelwert; Quelle und Bewertungsnenner müssen passend im Modell gebunden sein.'];
+  const css = `
+    :host{--accent:#65b8e8;--accent-strong:#2785bb;--accent-border:rgba(101,184,232,.45);--band:rgba(101,184,232,.10);--muted:#b1b9cb;--bad:#f07870;--good:#60d79c;--warn:#edbe67;}
+    :host([data-theme=light]){--accent:#14618e;--accent-strong:#15547b;--muted:#555f70;--band:rgba(20,97,142,.07);--bad:#b62f29;--good:#167343;--warn:#8c6000;}
+    .titlebar{flex-wrap:wrap}.title{font-family:var(--font);font-size:16px;letter-spacing:0;text-transform:none;color:var(--ink)}
+    .ctrl{flex-wrap:wrap}.ctrl button{min-height:32px;font-size:12px}.brand-dot{animation:none}
+    .kpi .lbl,.m-lbl,.card h3,.tp-k small,.gauge .gs,.kpi .sub,.te-base,.m-sub,.tb-lbl,.dh-fact-l,.pk-hint,.cfg .hint{font-family:var(--font)!important;font-size:12px!important;letter-spacing:0!important;text-transform:none!important;line-height:1.45}
+    .card h3{font-size:14px!important;color:var(--ink)!important}.kpi .val{flex-wrap:wrap}.kpis{grid-template-columns:repeat(auto-fit,minmax(205px,1fr))}.tile{min-height:150px;min-width:0}.grid{grid-template-columns:repeat(auto-fit,minmax(280px,1fr))}.compact .grid{grid-template-columns:minmax(0,1fr)}
+    .tile .te-base{white-space:normal;max-width:100%;overflow-wrap:anywhere}.tile .m-sub{flex-wrap:wrap}.tile .m-lbl{display:flex;flex-wrap:wrap;gap:4px;align-items:center}.tile .m-lbl .ux-badge{margin-left:auto}.kpi .d.neutral,.m-delta.neutral{color:var(--muted)!important}
+    nav{height:auto!important;min-height:44px;flex-wrap:wrap!important;overflow:visible!important;gap:4px!important;padding-block:6px!important}nav button{height:36px!important;padding:0 10px!important;font-size:12px!important}
+    .ux-context{padding:10px 14px;background:var(--panel);border-bottom:1px solid var(--border);font-size:12px;color:var(--ink2);line-height:1.6;flex:none}
+    .tile-info{display:none!important}.m-delta[hidden],.sla[hidden],.yoy[hidden]{display:none!important}.gauge .gv{font-size:22px}.tp-k small{overflow-wrap:anywhere}
+    .ux-context strong{color:var(--ink)}.ux-context .ux-context-row{display:flex;gap:8px 14px;flex-wrap:wrap;align-items:center}.ux-context small{font-size:11px}.ux-meta{font-size:12px;color:var(--muted);margin:4px 0}
+    .ux-info{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;min-width:28px;border:1px solid var(--accent);border-radius:50%;background:transparent;color:var(--accent);cursor:pointer;font:600 13px var(--font);vertical-align:middle;margin-left:6px}
+    .ux-badge{display:inline-block;font-size:11px;padding:2px 7px;border-radius:4px;color:var(--ink2);border:1px solid var(--border);margin-right:5px}.ux-detail-hint{font-size:11px;color:var(--accent);display:block;margin-top:5px}
+    .ux-expand{border:1px solid var(--border);border-radius:8px;padding:10px 12px;background:var(--panel);margin:10px 0}.ux-expand>summary{cursor:pointer;font-size:13px;color:var(--ink);padding:4px}.ux-expand[open]>summary{margin-bottom:10px}
+    .ux-dialog{width:min(660px,94vw);max-height:85vh;padding:22px;background:var(--panel);color:var(--ink);border:1px solid var(--border);border-radius:12px;font:14px/1.6 var(--font);overflow:auto}.ux-dialog::backdrop{background:rgba(0,0,0,.65)}
+    .ux-dialog h2{font-size:20px;margin:0 0 14px}.ux-dialog h3{font-size:14px;margin-bottom:2px}.ux-dialog p{margin:4px 0 13px}.ux-dialog button,.ux-dialog input{font:inherit}.ux-dialog input{width:100%;padding:10px;color:var(--ink);background:var(--card);border:1px solid var(--border);border-radius:5px}.ux-dialog button{padding:7px 12px;border:1px solid var(--border);background:var(--card);color:var(--ink);border-radius:5px;cursor:pointer}.ux-dialog .ux-close{float:right}.ux-help-index{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.ux-help-content{clear:both}.ux-dialog dl{display:grid;grid-template-columns:130px 1fr;gap:9px;margin-top:15px}.ux-dialog dt{font-weight:600}.ux-dialog dd{margin:0}.ux-dialog footer{border-top:1px solid var(--border);padding-top:10px}
+    .ctxbar{flex-wrap:wrap;font:12px var(--font);padding:8px 14px}.ctxbar button{min-height:32px;font-size:12px}.crumbs{position:sticky;top:-12px;z-index:5;background:var(--bg);padding:8px 0;display:flex;gap:12px;align-items:center;flex-wrap:wrap}.back{min-height:36px;font-size:13px!important}
+    .sla{color:var(--muted)!important;background:transparent!important}.m-delta{font-size:11px!important}.cfg{max-height:75vh;overflow:auto;width:min(310px,90%)}.cfg input,.cfg select{min-height:32px}.cfg label{font-size:12px}.finding.warn{border-color:var(--warn)}.finding.warn i{background:var(--warn)}
+    .ux-table-hint{padding:7px 0;font-size:12px;color:var(--muted)}[data-drill]:focus-visible,[data-goto]:focus-visible,.tile:focus-visible,button:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+    .ux-late{color:var(--warn)}.ux-error{color:var(--bad);border-left:3px solid var(--bad);padding:5px 9px;margin-top:7px}.compact .ux-context{padding:8px}.compact .ux-context-row{gap:4px}.compact .ux-context .ux-long{display:none}
+    .ux-table-controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0}.ux-table-controls input,.ux-table-controls select,.ux-table-controls button{font:12px var(--font);color:var(--ink);background:var(--card);border:1px solid var(--border2);padding:7px 10px;border-radius:5px;min-height:34px}.ux-table-controls input{flex:1;min-width:180px}.ux-table-controls button{cursor:pointer}.ux-table-controls button:disabled{opacity:.45;cursor:default}.ux-table-wrap{overflow:auto;max-height:520px}.ux-table-wrap th{position:sticky;top:0;z-index:1;background:var(--panel)}.ux-table-wrap td{font-size:12px!important}.ux-table-wrap td .back{font-size:12px!important}.ux-number{text-align:right;font-variant-numeric:tabular-nums}.ux-deviation-negative{color:var(--warn)}.ux-deviation-positive{color:var(--accent)}
+    .sch-kpis{grid-template-columns:repeat(auto-fit,minmax(75px,1fr))}.sch-kpis small,.sch-h{font-family:var(--font)!important;font-size:12px!important;letter-spacing:0!important;text-transform:none!important;line-height:1.5}.sch-kpis>div b{overflow:visible!important;text-overflow:clip!important;overflow-wrap:normal;word-break:normal}.rank-severity,.rank-n{font-size:11px!important;line-height:1.5}.row{min-width:0}.row>.card{min-width:0}
+    .ux-table-wrap th{font-family:var(--font);font-size:12px;letter-spacing:0;text-transform:none}.ux-table-wrap .back{background:transparent;border:0;color:var(--accent);text-decoration:underline;padding:2px 0;cursor:pointer;min-height:28px}.ux-kpis-home{border:0;padding:0;margin:0}.ux-kpis-home>summary{display:none}
+    @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+    @media(max-width:700px){.ux-dialog dl{grid-template-columns:1fr}.ux-dialog dd{margin-bottom:6px}.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.kpi{padding:9px}.kpi .val b{font-size:20px}.title small{display:block;margin-left:0}.ctxbar button{margin-left:0}.card{min-width:0}.ux-context{font-size:11px}}
+  `;
+  const info = (key,label='Erklärung öffnen') => `<button type="button" class="ux-info" data-help="${esc(key)}" aria-label="${esc(label)}">i</button>`;
+  function range(per){
+    let m=/^(\d{4})-(\d{2})$/.exec(per||'');
+    if(m)return {from:`${m[1]}-${m[2]}-01`,to:new Date(Date.UTC(+m[1],+m[2],0)).toISOString().slice(0,10)};
+    m=/^(\d{4})-W(\d{2})$/.exec(per||'');if(!m)return {};
+    const d=new Date(Date.UTC(+m[1],0,4));d.setUTCDate(d.getUTCDate()-(d.getUTCDay()||7)+1+(+m[2]-1)*7);
+    const from=d.toISOString().slice(0,10);d.setUTCDate(d.getUTCDate()+6);return {from,to:d.toISOString().slice(0,10)};
+  }
+  const date=s=>/^\d{4}-\d{2}-\d{2}$/.test(s||'')?s.slice(8,10)+'.'+s.slice(5,7)+'.'+s.slice(0,4):s||'–';
+  function state(w,type){
+    const ctx=w._periodContext;
+    const per=type==='strategy'?(w._rows?.length?w._perioden?.[w._scrubIdx ?? w._perioden.length-1]:null):ctx?.periode;
+    const seg=type==='strategy'?w._seg:ctx?.segment;
+    const r=ctx?.manual?{from:ctx.von,to:ctx.bis}:range(per);
+    return {per,seg:!seg||seg==='Gesamt'?'Alle Ladestellen':seg,range:r.from?`${date(r.from)} – ${date(r.to)}`:'Gesamter geladener Datenbestand'};
+  }
+  function open(w,key,trigger){
+    const S=w._sh||w._shadow,d=S.getElementById('ux-help');if(!d)return;
+    w._uxTrigger=trigger||S.activeElement;
+    const m=metrics[key],k=w._model?.kpis;
+    let title,body;
+    if(m){
+      title=m[0];let basis=trigger?.closest('.kpi,.tile,.gauge')?.querySelector('.sub,.te-base,.gs')?.textContent;
+      if(!basis&&k){const stat=k.phaseStats[m[4]]||k.quality[m[4]];basis=stat?`${num(stat.n)} ${m[1]}`:m[4]==='critical'?`${num(k.nPositions)} Positionen · ${num(k.nKritTes)} TE betroffen`:null;}
+      const source=m[5]||(w._uxType==='strategy'?'BW-Aggregate; periodisch im Widget mit passenden Bewertungsnennern zusammengefasst.':'Im Widget aus BW-Zeitstempeln oder Mengen berechnet.');
+      const fields=[['Bedeutung',m[2]],['Formel',key==='calc_punctual'?m[3]+` (aktuell ${num(k?.tolMin ?? w._props.toleranzMin ?? 30)} Minuten)`:m[3]],['Ebene',m[1]],['Zeitbezug','Geplanter Start ab; '+state(w,w._uxType).range],['Datenbasis',basis||'Der passende Bewertungsnenner steht an der Kennzahl.'],['Ausschlüsse','Fehlende, widersprüchliche oder unlogische Angaben werden für die betroffene Bewertung ausgeschlossen. Statistische Auffälligkeit allein ist kein Datenfehler.'],['Quelle',source]];
+      body=`<dl>${fields.map(([a,b])=>`<dt>${esc(a)}</dt><dd>${esc(b)}</dd>`).join('')}</dl>`;
+    } else if(topics[key]) {title=topics[key][0];body=topics[key].slice(1).map(t=>`<p>${esc(t)}</p>`).join('');}
+    else {title='Hilfe & Begriffe';body='<p>Wähle ein Thema oder suche nach einer Kennzahl.</p><input type="search" id="ux-search" placeholder="Suchen: TE, OTIF, Median, Zeitbezug …" aria-label="Hilfethemen suchen"><div class="ux-help-index" id="ux-help-index"></div>';}
+    d.innerHTML=`<button type="button" class="ux-close" data-help-close>Schließen ×</button><h2 id="ux-help-title">${esc(title)}</h2><div class="ux-help-content">${body}</div><footer><button type="button" data-help="index">Alle Hilfethemen</button></footer>`;
+    const input=d.querySelector('#ux-search');if(input){const draw=()=>{const q=input.value.toLocaleLowerCase('de-DE');d.querySelector('#ux-help-index').innerHTML=[...Object.entries(topics),...Object.entries(metrics)].filter(([,v])=>v.join(' ').toLocaleLowerCase('de-DE').includes(q)).map(([key,v])=>`<button type="button" data-help="${esc(key)}">${esc(v[0])}</button>`).join('')||'<p>Kein Treffer.</p>';};input.addEventListener('input',draw);draw();}
+    if(!d.open){w._uxReturnFocus=w._uxTrigger;d.showModal();} (input||d.querySelector('[data-help-close]')).focus();
+  }
+  function mount(w,type){
+    const S=w._sh||w._shadow;if(!S||S.getElementById('ux-style'))return;
+    w._uxType=type;const style=document.createElement('style');style.id='ux-style';style.textContent=css;S.appendChild(style);
+    const d=document.createElement('dialog');d.id='ux-help';d.className='ux-dialog';d.setAttribute('aria-labelledby','ux-help-title');S.appendChild(d);
+    d.addEventListener('close',()=>w._uxReturnFocus?.isConnected&&w._uxReturnFocus.focus());
+    const ctrl=S.querySelector('.ctrl');if(ctrl)ctrl.insertAdjacentHTML('afterbegin','<button type="button" data-help="data">Datenbasis</button><button type="button" data-help="index">? Hilfe</button>');
+    const header=S.querySelector('header'),context=document.createElement('div');context.id='ux-context';context.className='ux-context';header?.after(context);
+    if(type==='process') {
+      const tiles=S.getElementById('kpis'),panel=document.createElement('details');panel.id='ux-overview-kpis';panel.innerHTML='<summary>Kennzahlen der ausgewählten Periode anzeigen</summary>';
+      tiles.before(panel);panel.appendChild(tiles);
+      panel.addEventListener('toggle',()=>{if(w._mode!=='puls'&&!w._detail)w._uxKpisOpen=panel.open;});
+    }
+    S.addEventListener('click',e=>{const help=e.target.closest('[data-help],.tile-info,#btnGlossary');if(help){e.preventDefault();e.stopImmediatePropagation();open(w,help.dataset.help||help.dataset.key||'index',help);return;}if(e.target.closest('[data-help-close]')){d.close();return;}
+      const drill=e.target.closest('[data-drill]');if(drill&&!e.target.closest('.pk-seg')){e.preventDefault();e.stopImmediatePropagation();w.openDetail?.(drill.dataset.drill);return;}
+      if(e.target.closest('.kpi[data-goto="puls"]')){w._uxPanels||={};w._uxPanels.quality=true;}
+      const seg=e.target.closest('.pk-seg');if(seg){e.preventDefault();e.stopImmediatePropagation();open(w,'statistics',seg);const a=new Date(+seg.dataset.a),b=new Date(+seg.dataset.b);d.querySelector('h2').textContent=seg.dataset.ph||'Prozessphase';d.querySelector('.ux-help-content').innerHTML=`<p>${esc(seg.dataset.info)}</p><p><b>Dauer:</b> ${num((b-a)/3600000)} h</p><p><b>Von:</b> ${esc(a.toLocaleString('de-DE'))}<br><b>Bis:</b> ${esc(b.toLocaleString('de-DE'))}</p>`;return;}
+    },true);
+    S.addEventListener('keydown',e=>{if((e.key==='Enter'||e.key===' ')&&!e.target.matches('button,input,select,summary,textarea')){const target=e.target.closest('[data-goto],.tile,[data-drill],.pk-seg');if(target){e.preventDefault();target.dispatchEvent(new MouseEvent('click',{bubbles:true,composed:true}));}}});
+    const cfg=S.getElementById('cfg');if(cfg){cfg.insertAdjacentHTML('beforeend','<button type="button" data-help="experts">Einstellungen erklären</button><button type="button" id="ux-cfg-reset">Standardeinstellungen wiederherstellen</button>');S.getElementById('ux-cfg-reset').onclick=()=>{Object.assign(w._props,{madThreshold:3.5,toleranzMin:30,baselineMode:'segment',teamEvenFrueh:'Team A',teamOddFrueh:'Team B'});w._syncCfg();w._rebuild();};}
+    const glossary=S.getElementById('btnGlossary');if(glossary)glossary.hidden=true;
+  }
+  function update(w,type){
+    mount(w,type);const S=w._sh||w._shadow;if(!S?.querySelector)return;const context=S.getElementById('ux-context');if(!context)return;
+    const st=state(w,type),k=w._model?.kpis;
+    const data=w._props?.dataAsOf;const source=w._uxDemo?'Beispieldaten · keine BW-Verbindung':data?`Datenstand: ${data}`:'Datenstand: nicht übermittelt';
+    context.innerHTML=`<div class="ux-context-row"><strong>${type==='strategy'?'Strategieübersicht':'Detailanalyse'}${w._detail?' → TE '+esc(w._detail):''}</strong><span>${esc(st.per||'')}${st.per?' · ':''}${esc(st.range)}</span><span>${esc(st.seg)}</span></div><div class="ux-context-row"><span>Zeitbezug: <strong>Geplanter Start ab</strong></span><span>${esc(source)}</span>${info('data','Datenbasis und Zeitbezug erklären')}</div>${k?`<div class="ux-meta">${num(k.nTes)} TE · ${num(k.nAnlieferungen)} Anlieferungen · ${num(k.nPositions)} Positionen ${info('hierarchy','Berechnungsebenen erklären')}</div>`:''}`;
+    if(w._filterError)context.insertAdjacentHTML('beforeend',`<div class="ux-error" role="alert">${esc(w._filterError)}</div>`);
+    const sub=S.getElementById('sub');if(sub&&type==='process')sub.textContent='Historische Wareneingangsanalyse';
+    S.querySelectorAll('[data-goto],.tile:not(.process-tile):not(.tile-nodata),[data-drill],.pk-seg').forEach(el=>{el.setAttribute('tabindex','0');el.setAttribute('role','button');});
+    if(type==='process'){
+      const tiles=S.getElementById('kpis'),panel=S.getElementById('ux-overview-kpis');
+      if(tiles)tiles.hidden=!!w._detail;
+      if(panel){panel.hidden=!!w._detail||!k;panel.className=w._mode==='puls'?'ux-kpis-home':'ux-expand';panel.open=w._mode==='puls'||!!w._uxKpisOpen;}
+    }
+    S.querySelectorAll('.tile').forEach(el=>{const m=metrics[el.dataset.key];if(m&&!el.querySelector('.ux-badge'))el.querySelector('.m-lbl')?.insertAdjacentHTML('beforeend',`<span class="ux-badge">${esc(m[1])}</span>${info(el.dataset.key,m[0]+' erklären')}`);if(!el.classList.contains('process-tile')&&!el.classList.contains('tile-nodata')&&!el.querySelector('.ux-detail-hint'))el.insertAdjacentHTML('beforeend','<span class="ux-detail-hint">Verlauf ansehen ›</span>');});
+    S.querySelectorAll('.card h3').forEach(h=>{if(h.querySelector('[data-help]'))return;const t=h.textContent;const key=/Datenqualität|Datenfehler/.test(t)?'errors':/Qualität|OTIF|Mengentreue|Pünktlich/i.test(t)?'quality':/Median|Auffällig|Engpass|z-Score|MAD/.test(t)?'statistics':/Ranking|Top 10|Flop 10/.test(t)?'ranking':/Schicht/.test(t)?'shift':/Durchsatz|Mengen|Volumen/.test(t)?'units':/Prozess|Phasen/.test(t)?'hierarchy':null;if(key)h.insertAdjacentHTML('beforeend',info(key));});
+    S.querySelectorAll('#segpick [data-seg="Nicht zugeordnet"]').forEach(el=>el.title='TEs ohne gepflegte Ladestelle');
+    const tabs=S.getElementById('tabs');if(tabs){tabs.setAttribute('aria-label','Analysebereiche');tabs.querySelectorAll('button').forEach(b=>b.setAttribute('aria-current',b.classList.contains('on')?'page':'false'));}
+    for(const [id,label] of [['ptbl','Positionen dieser TE · Diagnosedetails'],['bdat','Weitere Belegdaten'],['krit-table','Kritische Positionen · Einzeldaten']]){
+      const el=S.getElementById(id);const card=el?.closest('.card');if(!card||card.parentElement?.matches('details'))continue;
+      const panel=document.createElement('details');panel.className='ux-expand';panel.dataset.uxPanel=id;const summary=document.createElement('summary');summary.textContent=label;panel.appendChild(summary);card.before(panel);panel.appendChild(card);
+    }
+    S.querySelectorAll('details[data-ux-panel]').forEach(panel=>{if(panel.dataset.bound)return;panel.dataset.bound='1';panel.open=!!w._uxPanels?.[panel.dataset.uxPanel];panel.addEventListener('toggle',()=>{w._uxPanels||={};w._uxPanels[panel.dataset.uxPanel]=panel.open;});});
+    S.querySelectorAll('.kpi .val b').forEach(b=>{if(b.textContent==='–'){b.textContent='Nicht bewertbar';b.style.fontSize='16px';}});
+    const filter=S.getElementById('btnFilter');if(filter)filter.setAttribute('aria-expanded',String(!S.getElementById('filterpanel').hidden));
+    const settings=S.getElementById('btnCfg');if(settings){settings.hidden=w._props.allowExpertSettings!==true;settings.setAttribute('aria-expanded',String(!S.getElementById('cfg').hidden));if(settings.hidden)S.getElementById('cfg').hidden=true;}
+    const targets=S.getElementById('btnTargets');if(targets){targets.hidden=w._props.allowExpertSettings!==true;if(targets.hidden)S.getElementById('targetPanel').hidden=true;}
+    const main=S.getElementById('main');if(w._detail&&main&&w._uxLastDetail!==w._detail)main.scrollTop=0;w._uxLastDetail=w._detail;
+  }
+  function install(K,type){const render=K.prototype._render;K.prototype._render=function(...args){const result=render.apply(this,args);if((this._sh||this._shadow)?.querySelector)update(this,type);return result;};
+    K.prototype.setDataAsOf=function(value){this._props.dataAsOf=String(value||'');this._render();};
+    const test=K.prototype.setTestData;if(test)K.prototype.setTestData=function(...args){this._uxDemo=true;return test.apply(this,args);};
+    const binding=Object.getOwnPropertyDescriptor(K.prototype,'myDataSource');if(binding?.set)Object.defineProperty(K.prototype,'myDataSource',{...binding,set(value){this._uxDemo=false;return binding.set.call(this,value);}});
+    if(type==='strategy')K.prototype._countUp=function(el,target,m){if(!el)return;el.textContent=target==null||!Number.isFinite(target)?'–':target.toLocaleString('de-DE',{minimumFractionDigits:m.unit===''?0:1,maximumFractionDigits:m.unit===''?0:1});if(m.pct&&target!=null)el.textContent=(target*100).toLocaleString('de-DE',{minimumFractionDigits:1,maximumFractionDigits:1});};
+  }
+  globalThis.WEUX={esc,num,topics,metrics,info,range,date,state,open,update,install};
+})();
+/* END SHARED UX */
 /* =========================================================================
- * WE-Prozess-Cockpit – SAC Custom Widget (v0.19.2-no-self-dispatch) · Entwickler: Benne
+ * WE-Prozess-Cockpit – SAC Custom Widget (v0.24.0-planstart) · Entwickler: Benne
  * Segment-/Schluesselabgleich mit dem Wareneingang-Tracker.
  * ========================================================================= */
 /* =========================================================================
@@ -35,27 +198,57 @@
     if (isNullDim(v)) return null;
     if (v instanceof Date) return isNaN(v) ? null : v;
     const s = String(v).trim().replace(/\s+/g, " "); // mehrfache Leerzeichen -> eins (Januar-Export: "dd.mm.yyyy  hh:mm:ss")
+    const makeDate = (y, mo, day, h = 0, mi = 0, sec = 0) => {
+      const d = new Date(y, mo - 1, day, h, mi, sec);
+      return d.getFullYear() === y && d.getMonth() === mo - 1 && d.getDate() === day
+        && d.getHours() === h && d.getMinutes() === mi && d.getSeconds() === sec ? d : null;
+    };
     // dd.mm.yyyy hh:mm(:ss)  — ein oder mehrere Trennzeichen, Sekunden optional
     let m = s.match(/^(\d{2})\.(\d{2})\.(\d{4})[ T](\d{2}):(\d{2})(?::(\d{2}))?/);
-    if (m) return new Date(+m[3], +m[2] - 1, +m[1], +m[4], +m[5], +(m[6] || 0));
+    if (m) return makeDate(+m[3], +m[2], +m[1], +m[4], +m[5], +(m[6] || 0));
     m = s.match(/^(\d{2})\.(\d{2})\.(\d{4})$/); // nur Datum
-    if (m) return new Date(+m[3], +m[2] - 1, +m[1]);
+    if (m) return makeDate(+m[3], +m[2], +m[1]);
     // SAP-intern: "20250520073700" (YYYYMMDDHHmmss)
     if (/^\d{14}$/.test(s))
-      return new Date(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8), +s.slice(8, 10), +s.slice(10, 12), +s.slice(12, 14));
+      return makeDate(+s.slice(0, 4), +s.slice(4, 6), +s.slice(6, 8), +s.slice(8, 10), +s.slice(10, 12), +s.slice(12, 14));
     // SAP-Datum: "20250520"
     if (/^\d{8}$/.test(s))
-      return new Date(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8));
+      return makeDate(+s.slice(0, 4), +s.slice(4, 6), +s.slice(6, 8));
     // ISO 8601: "2025-05-20T07:37:00" oder mit Leerzeichen
+    m = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?/);
+    if (!m || !makeDate(+m[1], +m[2], +m[3], +(m[4] || 0), +(m[5] || 0), +(m[6] || 0))) return null;
     const d = new Date(s.replace(" ", "T"));
     return isNaN(d) ? null : d;
   }
 
   function parseKw(v) {
-    // "12.2022" -> {kw:12, jahr:2022}
-    if (v == null || v === "#" || v === "") return null;
-    const m = String(v).trim().match(/^(\d{1,2})\.(\d{4})$/);
-    return m ? { kw: +m[1], jahr: +m[2] } : null;
+    if (isNullDim(v)) return null;
+    const s=String(v).trim();
+    const display=/^(\d{1,2})\.(\d{4})$/.exec(s), code=/^(\d{4})(?:-W)?(\d{2})$/.exec(s);
+    const jahr=display?+display[2]:code?+code[1]:0, kw=display?+display[1]:code?+code[2]:0;
+    if(kw<1||kw>53||jahr<1900||jahr>9999)return null;
+    const jan1=new Date(Date.UTC(jahr,0,1)).getUTCDay();
+    const leap=jahr%4===0&&(jahr%100!==0||jahr%400===0);
+    return kw===53 && jan1!==4 && !(jan1===3&&leap) ? null : {kw,jahr};
+  }
+
+  function parsePlanDay(v) {
+    if(isNullDim(v))return null;
+    const s=v instanceof Date && Number.isFinite(v.getTime()) ? v.toISOString().slice(0,10) : String(v).trim();
+    const m=/^(\d{4})-?(\d{2})-?(\d{2})$/.exec(s);
+    if(!m)return null;
+    const d=new Date(Date.UTC(+m[1],+m[2]-1,+m[3]));
+    return d.getUTCFullYear()===+m[1]&&d.getUTCMonth()===+m[2]-1&&d.getUTCDate()===+m[3]?d:null;
+  }
+
+  function palletCount(ist, pa1) {
+    if(!Number.isFinite(ist)||ist<0||!Number.isFinite(pa1)||pa1<=0)return null;
+    const quotient=ist/pa1;
+    if(!Number.isFinite(quotient))return null;
+    // Exakte Vielfache dürfen durch Gleitkomma-Rauschen nicht eine Palette mehr ergeben.
+    const nearest=Math.round(quotient),epsilon=Number.EPSILON*Math.max(1,Math.abs(quotient))*4;
+    const rounded=(nearest!==0||quotient===0)&&Math.abs(quotient-nearest)<=epsilon?nearest:Math.ceil(quotient);
+    return Number.isSafeInteger(rounded)?rounded:null;
   }
 
   function median(a) {
@@ -108,6 +301,7 @@
     if (/nicht zugeordnet/i.test(w)) return "Nicht zugeordnet";
     return w;
   }
+  function mean(a) { return a.length ? a.reduce((sum, v) => sum + v, 0) / a.length : null; }
 
   function segmentOf(ladestelle, tm) {
     // Ausschließlich die Ladestelle bestimmt die Kategorie. Ist sie leer,
@@ -141,13 +335,16 @@
   }
 
   const PHASES = {
-    wait_gate: { label: "Wartezeit Tor",  from: "ts_ankunft",        to: "ts_angedockt",     level: "delivery" },
-    reaction:  { label: "Reaktionszeit",  from: "ts_angedockt",      to: "ts_entladen_start", level: "delivery" },
-    unload:    { label: "Entladedauer",   from: "ts_entladen_start", to: "ts_entladen_ende_eff", level: "delivery" },
-    booking:   { label: "Buchungsverzug", from: "ts_entladen_ende_eff", to: "ts_we_pos",     level: "position" },
-    putaway:   { label: "Einlagerung",    from: "ts_we_pos",         to: "ts_einlagerung",   level: "position" },
-    dwell:     { label: "Standzeit",      from: "ts_ankunft",        to: "ts_abfahrt",       level: "delivery" },
-    delay:     { label: "Verspätung",     from: "ts_geplant",        to: "ts_ankunft",       level: "delivery" },
+    wait_gate: { label: "Wartezeit Tor",  from: "ts_ankunft",        to: "ts_angedockt",     level: "te" },
+    reaction:  { label: "Reaktionszeit",  from: "ts_angedockt",      to: "ts_entladen_start", level: "te" },
+    unload:    { label: "Entladedauer",   from: "ts_entladen_start", to: "ts_entladen_ende_eff", level: "te" },
+    // Die beiden folgenden KPI-Phasen werden je DISTINCT TE gebildet.
+    // Positionszeitpunkte liefern nur den jeweils letzten Abschluss der TE.
+    booking:   { label: "Vereinnahmung",  from: "ts_entladen_ende_eff", to: "ts_we_buchung_last", level: "te" },
+    putaway:   { label: "Einlagerung",    from: "ts_we_buchung_last", to: "ts_einlagerung_last", level: "te" },
+    operative: { label: "Operativer WE",  from: "ts_entladen_start", to: "ts_einlagerung_last", level: "te" },
+    dwell:     { label: "Standzeit",      from: "ts_ankunft",        to: "ts_abfahrt",       level: "te" },
+    delay:     { label: "Verspätung",     from: "ts_geplant",        to: "ts_ankunft",       level: "te" },
   };
 
   function hoursBetween(row, from, to) {
@@ -158,7 +355,11 @@
 
   /**
    * Kernfunktion: kanonische Zeilen -> Analysemodell.
-   * rows: [{belegnr,pos,lieferant,frachtfuehrer,transportmittel,hwg,land,
+   * Verbindliche Schlüsselhierarchie:
+   *   belegnr     = TE            [0WM_TUNUM]
+   *   anlieferung = Anlieferung   [0WM_DOCNO]
+   *   positionKey = Anlieferung + Position [0WM_DOCNO]+[0WM_ITEMNO]
+   * rows: [{belegnr,anlieferung,pos,lieferant,frachtfuehrer,transportmittel,hwg,land,
    *         ts_*, sh_entl,kw_entl, sh_we,kw_we, sh_einl,kw_einl,
    *         menge_ist, menge_soll}]
    */
@@ -170,70 +371,71 @@
 
     /* --- Normalisierung ------------------------------------------------ */
     let lastBeleg = null;
-    const positions = [];
-    // Ladestelle auf TE-Ebene auflösen. Wenn sie nur in einer Positionszeile
-    // gefüllt ist, gilt sie für die gesamte TE. Nur wenn in keiner Zeile der TE
-    // eine Ladestelle vorhanden ist, wird die TE "Nicht zugeordnet".
-    const teLadestelle = new Map();
-    let scanBeleg = null;
-    for (const scan of rows) {
-      if (!isNullDim(scan && scan.belegnr)) {
-        const raw = String(scan.belegnr).trim();
-        scanBeleg = raw.replace(/^0+/, "") || raw;
-      }
-      if (scanBeleg && !isNullDim(scan && scan.ladestelle) && !teLadestelle.has(scanBeleg))
-        teLadestelle.set(scanBeleg, scan.ladestelle);
-    }
-    for (const r0 of rows) {
+    let lastAnlieferung = null;
+    const rawPositions = [];
+    const hierarchyErrors = [];
+    const normTe = (v) => {
+      if (isNullDim(v)) return null;
+      const raw = String(v).trim();
+      return raw.replace(/^0+/, "") || raw;
+    };
+    const normId = (v) => isNullDim(v) ? null : String(v).trim();
+
+    // SAC liefert vollständige Schlüssel je Zeile. Leere Schlüssel bleiben
+    // unzugeordnet. Nur explizit aktiviertes fillDownKeys für einen Export
+    // mit unterdrückten Wiederholungen darf leere Strings auffüllen; niemals #.
+    for (let sourceIndex = 0; sourceIndex < rows.length; sourceIndex++) {
+      const r0 = rows[sourceIndex];
       const r = Object.assign({}, r0);
-      // Belegnummer/TE nur auf erster Position gefüllt -> forward fill
-      // Führende Nullen entfernen: BW liefert die TE mal als "0010000189647",
-      // mal als "10000189647". Der Tracker normalisiert genauso - nur dann
-      // beziehen sich beide Widgets auf denselben Schlüssel (und die
-      // Deduplizierung je Anlieferung zerfällt nicht in zwei Gruppen).
-      if (!isNullDim(r.belegnr)) {
-        const raw = String(r.belegnr).trim();
-        lastBeleg = raw.replace(/^0+/, "") || raw;
+      const explicitTe = normTe(r.belegnr);
+      if (explicitTe) {
+        if (lastBeleg !== explicitTe) lastAnlieferung = null;
+        lastBeleg = explicitTe;
       }
-      r.belegnr = lastBeleg;
-      for (const k of Object.keys(r)) if (k.startsWith("ts_")) r[k] = parseTs(r[k]);
-      // Korrekturfeld "Tatsächliches Ende" hat Vorrang
-      r.ts_entladen_ende_eff = r.ts_entladen_tat || r.ts_entladen_ende;
-      // Fallback: Wenn nur der TE-weite WE-Buchungszeitpunkt gebunden ist
-      // (altes Feed dimension_ts_we_buchung), diesen für die Positionsebene nutzen.
-      if (!r.ts_we_pos && r.ts_we_buchung) r.ts_we_pos = r.ts_we_buchung;
+      r.belegnr = explicitTe || (cfg.fillDownKeys === true && r.belegnr === "" ? lastBeleg : null);
+      const explicitAnlieferung = normId(r.anlieferung);
+      if (explicitAnlieferung) lastAnlieferung = explicitAnlieferung;
+      r.anlieferung = explicitAnlieferung || (cfg.fillDownKeys === true && r.anlieferung === "" ? lastAnlieferung : null);
+      r.pos = normId(r.pos);
+      r._sourceIndex = sourceIndex;
+      for (const k of Object.keys(r)) if (k.startsWith("ts_")) r[k] = k==='ts_planstart_tag'?parsePlanDay(r[k]):parseTs(r[k]);
+      for (const k of Object.keys(r)) if (k.startsWith('sh_')) r[k]=isNullDim(r[k])?null:String(r[k]).trim().toUpperCase();
+      // Planstart-Tagesmerkmal wird im Modell in Standortzeitzone abgeleitet.
+      // Ohne Tagesmerkmal bleiben Testdaten über ihren Planstart auswertbar.
+      // Fachliche Festlegung: ausschließlich tatsächliches Ende [BWMISTTEE].
+      r.ts_entladen_ende_eff = r.ts_entladen_tat;
       // Zeitfenster (geplant_start/ende) hat Vorrang vor Einzeltermin
       if (!r.ts_geplant && r.ts_geplant_ende) r.ts_geplant = r.ts_geplant_ende;
-      const teLade = teLadestelle.get(r.belegnr);
-      r.ladestelle = teLade != null ? teLade : null;
-      r.segment = segmentOf(r.ladestelle, r.transportmittel);
       // Alle 7 Schicht/KW-Paare aus dem Export parsen
       r.kw_ankunft = parseKw(r.kw_ankunft); r.kw_andocken = parseKw(r.kw_andocken);
       r.kw_entl_start = parseKw(r.kw_entl_start); r.kw_entl_tat = parseKw(r.kw_entl_tat);
       r.kw_entl = parseKw(r.kw_entl); r.kw_we = parseKw(r.kw_we); r.kw_einl = parseKw(r.kw_einl);
+      r.kw_fertigstellung = parseKw(r.kw_fertigstellung);
       // Team je Phase = Team, dessen Schicht bei ENDE der Phase lief (Konvention wie zuvor).
       // sh_ankunft/kw_ankunft hat keine Phase, die dort endet -> kein team_*, bleibt nur als
       // Ankunfts-Schicht für Volumen-Auswertungen (z.B. "Anlieferungen je Schicht") erhalten.
       r.team_wait     = teamOf(r.sh_andocken, r.kw_andocken, cfg);       // Wartezeit Tor endet bei Andocken
       r.team_reaction = teamOf(r.sh_entl_start, r.kw_entl_start, cfg);  // Reaktionszeit endet bei Entladen-Start
-      r.team_unload   = teamOf(r.sh_entl_tat || r.sh_entl, r.kw_entl_tat || r.kw_entl, cfg); // Entladedauer: tats. Ende bevorzugt
-      r.sh_unload_eff = r.sh_entl_tat || r.sh_entl; // gleiche Präferenz für Schichtlage-Einordnung in teamStats
-      r.team_booking  = teamOf(r.sh_we, r.kw_we, cfg);                  // Buchungsverzug ~ Schicht bei WE gebucht
+      r.team_unload   = teamOf(r.sh_entl_tat, r.kw_entl_tat, cfg);
+      r.sh_unload_eff = r.sh_entl_tat;
+      r.team_booking  = teamOf(r.sh_we, r.kw_we, cfg);                  // Vereinnahmung endet bei WE gebucht
       r.team_entl     = teamOf(r.sh_entl, r.kw_entl, cfg);              // (Kompatibilität: bisheriges Feld)
-      r.team_putaway  = teamOf(r.sh_einl, r.kw_einl, cfg);
+      // Solange HU-/Bestandsartdaten fehlen, ist die Fertigstellung der
+      // Position die vereinbarte Näherung für das Einlagerungsende.
+      r.team_putaway  = teamOf(r.sh_fertigstellung || r.sh_einl, r.kw_fertigstellung || r.kw_einl, cfg);
       r.team_einl     = r.team_putaway;                                  // (Kompatibilität: bisheriges Feld)
       r.menge_ist = num(r.menge_ist); r.menge_soll = num(r.menge_soll);
       r.pa1 = num(r.pa1);
+      for(const key of ['gewicht','volumen','wert_eur','anzahl_kollis','anzahl_mitarbeiter']) r[key]=num(r[key]);
       // Einheitliche Palettenlogik im gesamten Cockpit: je Position auf volle
       // Paletten AUFRUNDEN, danach erst summieren (nicht erst Mengen summieren
       // und einmal runden — nicht verhandelbare Regel aus dem Fachkonzept).
-      r.paletten = (r.menge_ist != null && r.pa1 > 0) ? Math.ceil(r.menge_ist / r.pa1) : null;
+      r.paletten = palletCount(r.menge_ist,r.pa1);
       // Business-geflaggte Sonderfälle (keine statistischen Ausreißer, sondern im SAP markiert)
       r.isDiffLieferung = !isNull(r.processcode);
       // BSL-Prozess (Belegart PDI/ZBLE bzw. Ladestelle/Transportmittel BSL):
-      // hier darf die WE-Buchung VOR dem Entladeende liegen (legitime
-      // Prozessabwandlung, kein Datenfehler). Belegart ist das zuverlässigste
-      // Merkmal, weil die Ladestelle bei BSL oft nicht gesetzt ist.
+      // Das Segment ist ein Merkmal. Negative Zeitspannen bleiben auch bei
+      // BSL ungültig und werden nicht auf null Stunden gesetzt.
       r.isBSL = /ZBLE/i.test(String(r.belegart || "")) ||
                 String(r.transportmittel || "").toUpperCase() === "BSL" ||
                 r.segment === "BSL";
@@ -241,15 +443,172 @@
       // nicht ein gesetztes Kennzeichen - daher wie leer behandeln.
       const kritLeer = (v) => isNullDim(v) || String(v).trim() === "Nicht zugeordnet";
       r.isKritArt = !kritLeer(r.kategorie_krit_art) || !kritLeer(r.freitext_krit_art);
-      r.qty_dev = (r.menge_ist != null && r.menge_soll != null) ? r.menge_ist - r.menge_soll : null;
-      r.qty_dev_pct = (r.qty_dev != null && r.menge_soll) ? (100 * r.qty_dev) / r.menge_soll : null;
-      positions.push(r);
+      r.qty_dev = null; r.qty_dev_pct = null; // erst nach Positions-Deduplizierung
+      // OTIF besitzt zwei fachlich verschiedene Ebenen. Der bisherige
+      // sap_otif-Name bleibt ausschließlich als Legacy-Fallback für das
+      // Anlieferungskennzeichen erhalten.
+      r.sap_otif_position = r.sap_otif_position == null ? null : String(r.sap_otif_position).trim().toUpperCase();
+      r.sap_otif_anlieferung = r.sap_otif_anlieferung != null
+        ? String(r.sap_otif_anlieferung).trim().toUpperCase()
+        : (r.sap_otif != null ? String(r.sap_otif).trim().toUpperCase() : null);
+      r.sap_puenktlich = r.sap_puenktlich == null ? null : String(r.sap_puenktlich).trim().toUpperCase();
+      r.sap_vollstaendig = r.sap_vollstaendig == null ? null : String(r.sap_vollstaendig).trim().toUpperCase();
+
+      rawPositions.push(r);
     }
 
-    /* --- Anlieferungen (Hofprozess) deduplizieren ----------------------- */
+    // Ladestelle auf TE-Ebene auflösen. Wenn sie nur in einer Positionszeile
+    // gefüllt ist, gilt sie für die gesamte TE. Nur wenn in keiner Zeile der TE
+    // eine Ladestelle vorhanden ist, wird die TE "Nicht zugeordnet".
+    const teLadestelle = new Map();
+    for (const r of rawPositions)
+      if (r.belegnr && !isNullDim(r.ladestelle) && !teLadestelle.has(r.belegnr))
+        teLadestelle.set(r.belegnr, r.ladestelle);
+    for (const r of rawPositions) {
+      const teLade = r.belegnr ? teLadestelle.get(r.belegnr) : null;
+      r.ladestelle = teLade != null ? teLade : null;
+      r.segment = segmentOf(r.ladestelle, r.transportmittel);
+      r.isBSL = r.isBSL || r.segment === "BSL";
+      r.positionKey = r.anlieferung && r.pos ? `${r.anlieferung}\u0001${r.pos}` : null;
+      if (!r.belegnr || !r.anlieferung || !r.pos) {
+        const fehlt = [!r.belegnr && "TE", !r.anlieferung && "Anlieferung", !r.pos && "Position"].filter(Boolean).join(", ");
+        r.hasError = true;
+        hierarchyErrors.push({ ctx: "Hierarchie", key: r.positionKey || `Zeile ${r._sourceIndex + 1}`,
+          phase: `Schlüssel fehlt: ${fehlt}`, hours: null, rec: r });
+      }
+    }
+
+    /* --- Positionen über [0WM_DOCNO]+[0WM_ITEMNO] deduplizieren -------- */
+    const deliveryTes = new Map(), conflictedTes = new Set();
+    for (const r of rawPositions) if (r.anlieferung && r.belegnr) {
+      if (!deliveryTes.has(r.anlieferung)) deliveryTes.set(r.anlieferung, new Set());
+      deliveryTes.get(r.anlieferung).add(r.belegnr);
+    }
+    for (const r of rawPositions) if (deliveryTes.get(r.anlieferung)?.size > 1) {
+      r.hierarchyConflict = true; r.hasError = true;
+      conflictedTes.add(r.belegnr);
+    }
+    const positionMap = new Map();
+    const minTsFields = new Set(["ts_geplant", "ts_geplant_start", "ts_planstart_tag", "ts_ankunft", "ts_angedockt", "ts_entladen_start", "ts_we_pos", "ts_ist_start"]);
+    const maxTsFields = new Set(["ts_geplant_ende", "ts_entladen_ende", "ts_entladen_tat", "ts_entladen_ende_eff", "ts_we_buchung", "ts_einlagerung", "ts_fertigstellung", "ts_abfahrt", "ts_ist_ende"]);
+    const mergePosition = (base, next) => {
+      if (base.belegnr && next.belegnr && base.belegnr !== next.belegnr)
+        hierarchyErrors.push({ ctx: "Hierarchie", key: next.positionKey, phase: "Anlieferung mehreren TEs zugeordnet", hours: null, rec: next });
+      for (const [k, v] of Object.entries(next)) {
+        if (v == null || v === "") continue;
+        if (base[k] == null || base[k] === "") { base[k] = v; continue; }
+        if (["menge_ist", "menge_soll"].includes(k) && base[k] !== v) {
+          base.qtyConflict = true;
+          hierarchyErrors.push({ctx:"Position", key:next.positionKey, phase:`Widersprüchliche ${k}-Werte`, hours:null, rec:base});
+        }
+        if(k==='pa1' && base[k]!==v) {
+          base.pa1Conflict=true;
+          hierarchyErrors.push({ctx:'Position',key:next.positionKey,phase:'Widersprüchliche PA1-Werte',hours:null,rec:base});
+        }
+        if(k.startsWith('sh_') && base[k]!==v) {
+          base[k]='KONFLIKT';
+          hierarchyErrors.push({ctx:'Position',key:next.positionKey,phase:`Widersprüchliche Schichtangabe ${k}`,hours:null,rec:base});
+        }
+        if (k.startsWith("sap_") && base[k] !== v) {
+          base[k] = "KONFLIKT";
+          hierarchyErrors.push({ctx:"Position", key:next.positionKey, phase:`Widersprüchliche ${k}-Kennzeichen`, hours:null, rec:base});
+          continue;
+        }
+        if (v instanceof Date && base[k] instanceof Date) {
+          if (minTsFields.has(k) && v < base[k]) base[k] = v;
+          if (maxTsFields.has(k) && v > base[k]) base[k] = v;
+        } else if (typeof v === "boolean") base[k] = base[k] || v;
+      }
+      return base;
+    };
+    for (const r of rawPositions) {
+      // Unvollständige Schlüssel nicht zusammenwerfen: Sie bleiben sichtbar,
+      // werden aber als Datenfehler geführt und nicht künstlich dedupliziert.
+      const key = r.positionKey || `__ROW__${r._sourceIndex}`;
+      if (!positionMap.has(key)) positionMap.set(key, r);
+      else mergePosition(positionMap.get(key), r);
+    }
+    const positions = [...positionMap.values()];
+    for (const p of positions) {
+      p.outlier = {}; p.z = {};
+      const validQty = p.positionKey && Number.isFinite(p.menge_ist) && Number.isFinite(p.menge_soll)
+        && p.menge_ist >= 0 && p.menge_soll >= 0 && !p.qtyConflict && !p.hierarchyConflict;
+      p.qty_dev = validQty ? p.menge_ist - p.menge_soll : null;
+      if (p.qty_dev != null && Math.abs(p.qty_dev) < 1e-9) p.qty_dev = 0;
+      p.qty_dev_pct = p.qty_dev != null && p.menge_soll > 0 ? 100 * p.qty_dev / p.menge_soll : null;
+      p.qtyOk = p.qty_dev == null ? null : p.qty_dev === 0;
+      p.paletten = p.positionKey && !p.qtyConflict && !p.pa1Conflict && !p.hierarchyConflict ? palletCount(p.menge_ist,p.pa1) : null;
+      p.sh_unload_eff=p.sh_entl_tat;
+      for(const [team,sh,kw] of [['team_wait','sh_andocken','kw_andocken'],['team_reaction','sh_entl_start','kw_entl_start'],['team_unload','sh_entl_tat','kw_entl_tat'],['team_booking','sh_we','kw_we'],['team_entl','sh_entl','kw_entl']])p[team]=teamOf(p[sh],p[kw],cfg);
+      p.team_putaway=teamOf(p.sh_fertigstellung||p.sh_einl,p.kw_fertigstellung||p.kw_einl,cfg);p.team_einl=p.team_putaway;
+    }
+
+    /* --- Echte Anlieferungsebene über [0WM_DOCNO] ----------------------- */
+    const amap = new Map();
+    for (const p of positions) {
+      if (!p.anlieferung) continue;
+      if (!amap.has(p.anlieferung)) amap.set(p.anlieferung, {
+        anlieferung: p.anlieferung, belegnr: p.belegnr, segment: p.segment,
+        lieferant: p.lieferant, frachtfuehrer: p.frachtfuehrer,
+        transportmittel: p.transportmittel, nPos: 0, _positionKeys: new Set(),
+        ts_ankunft: null, ts_entladen_start: null, ts_entladen_ende_eff: null,
+        ts_we_buchung_last: null, ts_einlagerung_last: null,
+        sum_menge_ist: 0, sum_menge_soll: 0, _qtyIstN: 0, _qtySollN: 0,
+        _otifValues: new Set(), _puenktValues: new Set(), _vollValues: new Set(),
+        _positions: [],
+      });
+      const a = amap.get(p.anlieferung);
+      a._positions.push(p);
+      a.hierarchyConflict = a.hierarchyConflict || p.hierarchyConflict;
+      if (a.belegnr && p.belegnr && a.belegnr !== p.belegnr)
+        hierarchyErrors.push({ ctx: "Hierarchie", key: p.anlieferung, phase: "Anlieferung mehreren TEs zugeordnet", hours: null, rec: p });
+      if (p.positionKey) a._positionKeys.add(p.positionKey);
+      else a.nPos++;
+      if (p.ts_ankunft instanceof Date && (!a.ts_ankunft || p.ts_ankunft < a.ts_ankunft)) a.ts_ankunft = p.ts_ankunft;
+      if (p.ts_entladen_start instanceof Date && (!a.ts_entladen_start || p.ts_entladen_start < a.ts_entladen_start)) a.ts_entladen_start = p.ts_entladen_start;
+      if (p.ts_entladen_ende_eff instanceof Date && (!a.ts_entladen_ende_eff || p.ts_entladen_ende_eff > a.ts_entladen_ende_eff)) a.ts_entladen_ende_eff = p.ts_entladen_ende_eff;
+      const weGebucht = p.ts_we_buchung || p.ts_we_pos;
+      if (weGebucht instanceof Date && (!a.ts_we_buchung_last || weGebucht > a.ts_we_buchung_last)) a.ts_we_buchung_last = weGebucht;
+      const fertig = p.ts_fertigstellung || p.ts_einlagerung;
+      if (fertig instanceof Date && (!a.ts_einlagerung_last || fertig > a.ts_einlagerung_last)) a.ts_einlagerung_last = fertig;
+      if (p.menge_ist != null) { a.sum_menge_ist += p.menge_ist; a._qtyIstN++; }
+      if (p.menge_soll != null) { a.sum_menge_soll += p.menge_soll; a._qtySollN++; }
+      if (!isNull(p.sap_otif_anlieferung)) a._otifValues.add(p.sap_otif_anlieferung);
+      if (!isNull(p.sap_puenktlich)) a._puenktValues.add(p.sap_puenktlich);
+      if (!isNull(p.sap_vollstaendig)) a._vollValues.add(p.sap_vollstaendig);
+    }
+    const anlieferungen = [...amap.values()];
+    for (const a of anlieferungen) {
+      a.nPos += a._positionKeys.size;
+      a.menge_ist = a._qtyIstN ? a.sum_menge_ist : null;
+      a.menge_soll = a._qtySollN ? a.sum_menge_soll : null;
+      // Mengentreue je Anlieferung: alle Positionen müssen vollständig
+      // bewertbar und einzeln mengentreu sein. Keine Nettierung von Artikeln.
+      a.qtyN = a._positions.filter(p => p.qtyOk != null).length;
+      a.qtyDeviationPositions = a._positions.filter(p => p.qtyOk === false).length;
+      a.qtyOk = a.nPos > 0 && a.qtyN === a.nPos ? a.qtyDeviationPositions === 0 : null;
+      const oneFlag = (set, label, positive) => {
+        if (!set.size) return null;
+        if (set.size === 1 && [positive, "N"].includes([...set][0])) return [...set][0];
+        hierarchyErrors.push({ ctx: "Anlieferung", key: a.anlieferung,
+          phase: `Widersprüchliche ${label}-Kennzeichen`, hours: null, rec: a });
+        return null;
+      };
+      a.sap_otif = a.hierarchyConflict ? null : oneFlag(a._otifValues, "OTIF", "O");
+      a.sap_puenktlich = oneFlag(a._puenktValues, "Pünktlichkeit", "P");
+      a.sap_vollstaendig = a.hierarchyConflict ? null : oneFlag(a._vollValues, "Vollständigkeit", "V");
+      delete a._positionKeys;
+      delete a._qtyIstN; delete a._qtySollN;
+      delete a._otifValues; delete a._puenktValues; delete a._vollValues;
+    }
+
+    /* --- TE-Ebene über [0WM_TUNUM] deduplizieren ----------------------- */
     const dmap = new Map();
     for (const p of positions) {
-      const key = p.belegnr || "?";
+      // Positionen ohne TE bleiben in Positions-/Anlieferungsanalysen sichtbar,
+      // dürfen aber keine künstliche Sammel-TE erzeugen.
+      if (!p.belegnr) continue;
+      const key = p.belegnr;
       if (!dmap.has(key)) {
         dmap.set(key, {
           belegnr: key, segment: p.segment, lieferant: p.lieferant,
@@ -271,26 +630,49 @@
           depotspediteur: p.depotspediteur, isBSL: p.isBSL,
           ts_verschifft: p.ts_verschifft, ts_hafen: p.ts_hafen, ts_verzollung: p.ts_verzollung,
           ts_depot: p.ts_depot, ts_depot_anf: p.ts_depot_anf,
-          ts_we_pos: p.ts_we_pos, ts_einlagerung: p.ts_einlagerung,
-          sap_otif: p.sap_otif, sap_puenktlich: p.sap_puenktlich, sap_vollstaendig: p.sap_vollstaendig,
+          // Die finalen Zeitpunkte werden unten über ALLE Positionen und
+          // Anlieferungen der TE bestimmt.
+          ts_we_pos: null, ts_we_buchung: null, ts_einlagerung: null,
           knz_shuttle: p.knz_shuttle, knz_direktfahrt: p.knz_direktfahrt, knz_qualitaet: p.knz_qualitaet,
           // Summen über Positionen (unten aufaddiert)
           sum_gewicht: 0, sum_volumen: 0, sum_wert: 0, sum_kollis: 0, sum_menge: 0,
           sum_paletten: 0, nPalettenBerechenbar: 0,
-          _anlieferungIds: new Set(),
+          _anlieferungIds: new Set(), _members: [],
           // Für den rechten Rand der Prozesskette zählt die zuletzt fertig-
           // gestellte/eingelagerte Position der GESAMTEN TE (über alle
           // Anlieferungen hinweg) — nicht nur der ersten Position.
-          ts_we_pos_last: null, ts_einlagerung_last: null,
+          ts_we_pos_last: null, ts_we_buchung_last: null, ts_einlagerung_last: null,
+          sh_we: null, kw_we: null, team_booking: null,
+          sh_einl: null, kw_einl: null, team_putaway: null,
           nPos: 0,
         });
       }
       const d = dmap.get(key);
       d.nPos++;
+      d._members.push(p);
       if (p.anlieferung) d._anlieferungIds.add(String(p.anlieferung));
       if (p.paletten != null) { d.sum_paletten += p.paletten; d.nPalettenBerechenbar++; }
-      if (p.ts_we_pos instanceof Date && (!d.ts_we_pos_last || p.ts_we_pos > d.ts_we_pos_last)) d.ts_we_pos_last = p.ts_we_pos;
-      if (p.ts_einlagerung instanceof Date && (!d.ts_einlagerung_last || p.ts_einlagerung > d.ts_einlagerung_last)) d.ts_einlagerung_last = p.ts_einlagerung;
+      const weGebucht = p.ts_we_buchung || p.ts_we_pos;
+      if (weGebucht instanceof Date && (!d.ts_we_buchung_last || weGebucht > d.ts_we_buchung_last)) {
+        d.ts_we_buchung_last = weGebucht;
+        d.ts_we_pos_last = weGebucht; // Legacy-Alias für bestehende Renderer
+        d.ts_we_buchung = weGebucht;
+        d.ts_we_pos = weGebucht;
+        d.sh_we = p.sh_we; d.kw_we = p.kw_we; d.team_booking = p.team_booking;
+      }
+      const fertig = p.ts_fertigstellung || p.ts_einlagerung;
+      if (fertig instanceof Date && (!d.ts_einlagerung_last || fertig > d.ts_einlagerung_last)) {
+        d.ts_einlagerung_last = fertig;
+        d.ts_einlagerung = fertig;
+        d.sh_einl = p.sh_fertigstellung || p.sh_einl;
+        d.kw_einl = p.kw_fertigstellung || p.kw_einl;
+        d.team_putaway = p.team_putaway;
+      }
+      // TE-Start = frühester relevanter Start, TE-Abschluss = spätestes Ende.
+      for (const k of ["ts_geplant", "ts_geplant_start", "ts_planstart_tag", "ts_ankunft", "ts_angedockt", "ts_entladen_start", "ts_ist_start"])
+        if (p[k] instanceof Date && (!(d[k] instanceof Date) || p[k] < d[k])) d[k] = p[k];
+      for (const k of ["ts_geplant_ende", "ts_entladen_ende_eff", "ts_abfahrt", "ts_ist_ende"])
+        if (p[k] instanceof Date && (!(d[k] instanceof Date) || p[k] > d[k])) d[k] = p[k];
       d.isDiffLieferung = d.isDiffLieferung || p.isDiffLieferung;
       d.isKritArt = d.isKritArt || p.isKritArt;
       if (p.gewicht != null) d.sum_gewicht += p.gewicht;
@@ -299,29 +681,55 @@
       if (p.anzahl_kollis != null) d.sum_kollis += p.anzahl_kollis;
       if (p.menge_ist != null) d.sum_menge += p.menge_ist;
     }
-    const deliveries = [...dmap.values()];
+    const tes = [...dmap.values()];
+    // Kompatibilitätsalias: bestehende Renderfunktionen erwarten noch den
+    // historischen Variablennamen "deliveries", der Inhalt sind jetzt
+    // nachweislich DISTINCT TEs und keine Anlieferungen.
+    const deliveries = tes;
     // Struktur-Kennzahlen je TE finalisieren. Fehlt ein eigener Anlieferungs-
     // Feed, bleibt die Anzahl bewusst null statt fälschlich mit 1 angenommen
     // zu werden (TE ≠ Anlieferung — nicht verhandelbare Regel).
     for (const d of deliveries) {
-      d.nAnlieferungen = d._anlieferungIds.size || null;
+      d.nAnlieferungen = d._anlieferungIds.size;
       d.palettenVollstaendig = d.nPos > 0 && d.nPalettenBerechenbar === d.nPos;
+      const members = d._members;
+      d.hierarchyConflict = conflictedTes.has(d.belegnr);
+      d.nFertig = members.filter(p => p.positionKey && (p.ts_fertigstellung || p.ts_einlagerung) instanceof Date).length;
+      d.fertigVollstaendig = d.nPos > 0 && d.nFertig === d.nPos;
+      d.nGebucht = members.filter(p => p.positionKey && (p.ts_we_buchung || p.ts_we_pos) instanceof Date).length;
+      d.buchungVollstaendig = d.nPos > 0 && d.nGebucht === d.nPos;
+      // Ein unvollständiger Abschluss darf nicht als fertige TE in die KPI.
+      if (!d.fertigVollstaendig) d.ts_einlagerung_last = null;
+      if (!d.buchungVollstaendig) d.ts_we_buchung_last = null;
+      d.ts_einlagerung = d.ts_einlagerung_last;
+      d.ts_we_buchung = d.ts_we_buchung_last;
+      d.ts_we_pos = d.ts_we_pos_last = d.ts_we_buchung_last;
+      // BWP-Regel: maßgeblich ist der geplante Start [0WM_SPFRG].
+      // Ein vorhandener allgemeiner Plantermin bleibt nur Legacy-Fallback.
+      d.ts_geplant = d.ts_geplant_start || d.ts_geplant;
+      const pn = new Set(members.map(p => p.sap_puenktlich).filter(v => !isNull(v)));
+      d.sap_puenktlich = pn.size === 1 && ["P", "N"].includes([...pn][0]) ? [...pn][0] : null;
+      if (pn.size && !d.sap_puenktlich) hierarchyErrors.push({ctx:"TE", key:d.belegnr, phase:"Widersprüchliche Pünktlichkeits-Kennzeichen", hours:null, rec:d});
+      d._dimValues = {};
+      for (const field of ["lieferant", "hwg", "land", "lagernummer"])
+        d._dimValues[field] = [...new Set(members.map(p => p[field]).filter(v => !isNullDim(v)))];
       delete d._anlieferungIds;
     }
 
     /* --- Phasen berechnen + Datenfehler trennen ------------------------- */
-    const dataErrors = [];
+    const dataErrors = hierarchyErrors.slice();
     function computePhases(rec, keys, ctx) {
       rec.phases = {};
       for (const k of keys) {
         const ph = PHASES[k];
         const h = hoursBetween(rec, ph.from, ph.to);
-        if (h == null) { rec.phases[k] = null; continue; }
+        if (rec.hierarchyConflict || h == null || !Number.isFinite(h)) {
+          rec.phases[k] = null;
+          rec.hasError = true;
+          if (ctx === "TE") dataErrors.push({ctx, key:rec.belegnr, phase:ph.label + ": Zeitstempel fehlt oder Abschluss unvollständig", hours:null, rec});
+          continue;
+        }
         if (k !== "delay" && h < 0) {
-          // BSL-Prozess: negativer Buchungsverzug UND negative Einlagerung sind
-          // erlaubt - Buchung/Einlagerung dürfen vor dem jeweiligen Vorgänger
-          // liegen (legitime Prozessabwandlung). Als 0 werten statt Datenfehler.
-          if ((k === "booking" || k === "putaway") && rec.isBSL) { rec.phases[k] = 0; continue; }
           dataErrors.push({ ctx, key: rec.belegnr + (rec.pos ? "/" + rec.pos : ""), phase: ph.label, hours: h, rec });
           rec.phases[k] = null;                    // aus Statistik ausschließen
           rec.hasError = true;
@@ -331,16 +739,34 @@
       }
     }
     for (const d of deliveries) {
-      computePhases(d, ["wait_gate", "reaction", "unload", "dwell", "delay"], "Anlieferung");
-      // Zeitfenster-Logik (Tracker-Konvention geplant_start/ende):
-      // innerhalb des Fensters = pünktlich (0), sonst Abstand zur Fenstergrenze
-      if (d.ts_ankunft && d.ts_geplant_start && d.ts_geplant_ende) {
-        const a = d.ts_ankunft;
-        d.phases.delay = a < d.ts_geplant_start ? (a - d.ts_geplant_start) / H
-          : a > d.ts_geplant_ende ? (a - d.ts_geplant_ende) / H : 0;
+      computePhases(d, ["wait_gate", "reaction", "unload", "booking", "putaway", "operative", "dwell", "delay"], "TE");
+      // BWP-Regel: Ankunft <= geplanter Start [0WM_SPFRG] + Toleranz.
+      // Negative Werte sind hier ausdrücklich gültig und bedeuten "früher";
+      // sie sind weder Datenfehler noch eine eigene Unpünktlichkeitsklasse.
+      if (!d.hierarchyConflict && d.ts_ankunft && d.ts_geplant_start)
+        d.phases.delay = (d.ts_ankunft - d.ts_geplant_start) / H;
+    }
+    // Positionszeiten bleiben als Diagnose im Drill-down verfügbar. Für die
+    // KPI-Aggregation werden sie ausdrücklich NICHT verwendet.
+    for (const p of positions) {
+      p.ts_we_buchung_last = p.ts_we_pos;
+      p.ts_einlagerung_last = p.ts_fertigstellung || p.ts_einlagerung;
+      computePhases(p, ["booking", "putaway"], "Position (Diagnose)");
+    }
+    // MAX über Positionen darf eine rückwärts laufende Einzelposition nicht verdecken.
+    for (const d of tes) {
+      const inverted = d._members.some(p => {
+        const booked = p.ts_we_buchung || p.ts_we_pos, finish = p.ts_fertigstellung || p.ts_einlagerung;
+        return booked instanceof Date && finish instanceof Date && finish < booked;
+      });
+      if (inverted) {
+        d.hasError = true;
+        for (const key of ["putaway", "operative"]) {
+          d.phases[key] = null;
+          dataErrors.push({ctx:"TE", key:d.belegnr, phase:PHASES[key].label + ": Fertigstellung einer Position vor WE-Buchung", hours:null, rec:d});
+        }
       }
     }
-    for (const p of positions)  computePhases(p, ["booking", "putaway"], "Position");
 
     /* --- Baselines je (Metrik, Segment) + Ausreißer ---------------------
      * Dauer-Metriken sind stark rechtsschief -> Baseline im log-Raum
@@ -348,19 +774,20 @@
      * 'delay' kann negativ sein -> bleibt linear, zweiseitig.            */
     const LOG_EPS = 0.05; // 3 min, macht log() bei 0h stabil
     const metricDefs = {
-      dwell:   { level: "delivery", twoSided: false, log: true },
-      unload:  { level: "delivery", twoSided: false, log: true },
-      wait_gate:{ level: "delivery", twoSided: false, log: true },
-      putaway: { level: "position", twoSided: false, log: true },
-      booking: { level: "position", twoSided: false, log: true },
-      delay:   { level: "delivery", twoSided: true,  log: false },
+      dwell:   { level: "te", twoSided: false, log: true },
+      unload:  { level: "te", twoSided: false, log: true },
+      wait_gate:{ level: "te", twoSided: false, log: true },
+      putaway: { level: "te", twoSided: false, log: true },
+      booking: { level: "te", twoSided: false, log: true },
+      operative:{ level: "te", twoSided: false, log: true },
+      delay:   { level: "te", twoSided: true,  log: false },
     };
     const baselines = {};
     const segKey = (seg) => (cfg.baselineMode === "global" ? "ALLE" : seg);
     const toDom = (v, log) => (log ? Math.log(v + LOG_EPS) : v);
 
     for (const [mk, def] of Object.entries(metricDefs)) {
-      const recs = def.level === "delivery" ? deliveries : positions;
+      const recs = def.level === "te" ? deliveries : positions;
       const groups = {};
       for (const r of recs) {
         const v = r.phases && r.phases[mk];
@@ -392,16 +819,24 @@
       }
     }
 
-    /* --- Mengenabweichung ------------------------------------------------ */
+    /* --- Mengenabweichung: getrennt Position und Anlieferung ------------ */
     let qtyTotal = 0, qtyOk = 0;
     for (const p of positions) {
       if (p.qty_dev == null) continue;
       qtyTotal++;
       if (p.qty_dev === 0) qtyOk++;
+      p.outlier ||= {};
       p.outlier.qty = p.qty_dev !== 0;
     }
+    let qtyAnlTotal = 0, qtyAnlOk = 0;
+    for (const a of anlieferungen) {
+      if (a.qtyOk == null) continue;
+      qtyAnlTotal++;
+      if (a.qtyOk) qtyAnlOk++;
+      a.outlier = { qty: !a.qtyOk };
+    }
 
-    /* --- Heatmap Wochentag x Stunde (Ankünfte, Anlieferungsebene) ------- */
+    /* --- Heatmap Wochentag x Stunde (Ankünfte, TE-Ebene) ---------------- */
     const heat = Array.from({ length: 7 }, () => new Array(24).fill(0));
     for (const d of deliveries)
       if (d.ts_ankunft) heat[(d.ts_ankunft.getDay() + 6) % 7][d.ts_ankunft.getHours()]++;
@@ -430,10 +865,10 @@
       wait_gate: teamStats(deliveries, "wait_gate", "team_wait", "sh_andocken"),
       reaction:  teamStats(deliveries, "reaction", "team_reaction", "sh_entl_start"),
       unload:    teamStats(deliveries, "unload", "team_unload", "sh_unload_eff"),
-      booking:   teamStats(positions, "booking", "team_booking", "sh_we"),
-      putaway:   teamStats(positions, "putaway", "team_putaway", "sh_einl"),
+      booking:   teamStats(deliveries, "booking", "team_booking", "sh_we"),
+      putaway:   teamStats(deliveries, "putaway", "team_putaway", "sh_einl"),
     };
-    // Anlieferungs-Volumen je Schicht (nutzt sh_ankunft, das sonst ungenutzt bliebe)
+    // TE-Volumen je Schicht (nutzt sh_ankunft, das sonst ungenutzt bliebe)
     const arrivalsByShift = { Früh: 0, Spät: 0 };
     for (const d of deliveries) if (d.sh_ankunft === "F") arrivalsByShift["Früh"]++;
       else if (d.sh_ankunft === "S") arrivalsByShift["Spät"]++;
@@ -441,7 +876,7 @@
     /* --- Phasen-Mediane je Segment (Vergleichsbasis für Detailansicht) -- */
     const phaseMed = {};
     for (const [k, ph] of Object.entries(PHASES)) {
-      const recs = ph.level === "delivery" ? deliveries : positions;
+      const recs = ph.level === "te" ? deliveries : positions;
       const bySeg = {};
       for (const r of recs) {
         const v = r.phases && r.phases[k];
@@ -459,12 +894,14 @@
       const groups = new Map();
       for (const r of recs) {
         if (r.phases[metricKey] == null) continue;
-        const val = r[dimField];
-        if (val == null || val === "") continue;
-        const g = groups.get(val) || { val, n: 0, outN: 0 };
-        g.n++;
-        if (r.outlier[metricKey]) g.outN++;
-        groups.set(val, g);
+        const values = r._dimValues?.[dimField] || [r[dimField]];
+        for (const val of new Set(values)) {
+          if (val == null || val === "") continue;
+          const g = groups.get(val) || { val, n: 0, outN: 0 };
+          g.n++;
+          if (r.outlier[metricKey]) g.outN++;
+          groups.set(val, g);
+        }
       }
       return [...groups.values()]
         .filter((g) => g.n >= 3)
@@ -476,7 +913,7 @@
     const drivers = {};
     for (const [metricKey, def] of Object.entries(metricDefs)) {
       if (metricKey === "delay") continue; // zweiseitig, hier weniger aussagekräftig
-      const recs = def.level === "delivery" ? deliveries : positions;
+      const recs = def.level === "te" ? deliveries : positions;
       drivers[metricKey] = {};
       for (const [outKey, field] of Object.entries(driverDims))
         drivers[metricKey][outKey] = driverRanking(recs, metricKey, field);
@@ -484,48 +921,84 @@
 
     /* --- KPIs ------------------------------------------------------------ */
     const val = (recs, k) => recs.map((r) => r.phases && r.phases[k]).filter((v) => v != null);
+    const phaseStats = {};
+    for (const key of Object.keys(PHASES)) {
+      const values = val(tes, key);
+      phaseStats[key] = {n:values.length, total:tes.length, avg:mean(values), med:values.length ? median(values) : null,
+        min:values.length ? Math.min(...values) : null, max:values.length ? Math.max(...values) : null};
+    }
+    const flagStats = (records, field, yes, level) => {
+      const relevant = records.filter(r => level !== "Position" || r.positionKey);
+      const ok = relevant.filter(r => !r.hierarchyConflict && r[field] === yes).length;
+      const no = relevant.filter(r => !r.hierarchyConflict && r[field] === "N").length;
+      return {level, ok, no, n:ok + no, total:relevant.length, rate:ok + no ? ok / (ok + no) : null};
+    };
+    const tolH = (cfg.toleranzMin ?? 30) / 60;
+    const punctualRecords = tes.filter(r => !r.hierarchyConflict && r.phases && r.phases.delay != null);
+    const punctualOk = punctualRecords.filter(r => r.phases.delay <= tolH).length;
+    const quality = {
+      otifPosition:flagStats(positions, "sap_otif_position", "O", "Position"),
+      otifDelivery:flagStats(anlieferungen, "sap_otif", "O", "Anlieferung"),
+      fullDelivery:flagStats(anlieferungen, "sap_vollstaendig", "V", "Anlieferung"),
+      punctualTe:flagStats(tes,"sap_puenktlich","P","TE"),
+      qtyPosition:{level:"Position", ok:qtyOk, n:qtyTotal, total:positions.filter(p => p.positionKey).length, rate:qtyTotal ? qtyOk / qtyTotal : null},
+      qtyDelivery:{level:"Anlieferung", ok:qtyAnlOk, n:qtyAnlTotal, total:anlieferungen.length, rate:qtyAnlTotal ? qtyAnlOk / qtyAnlTotal : null},
+    };
     const outRate = (recs, k) => {
       const rel = recs.filter((r) => r.phases && r.phases[k] != null);
       return rel.length ? recs.filter((r) => r.outlier && r.outlier[k]).length / rel.length : 0;
     };
     const delays = val(deliveries, "delay");
-    const tolH = (cfg.toleranzMin ?? 30) / 60;
     const kpis = {
+      phaseStats, quality,
       medDwell: median(val(deliveries, "dwell")),
       medUnload: median(val(deliveries, "unload")),
-      medPutaway: median(val(positions, "putaway")),
+      medPutaway: median(val(deliveries, "putaway")),
+      medBooking: median(val(deliveries, "booking")),
+      medOperative: median(val(deliveries, "operative")),
       outDwell: outRate(deliveries, "dwell"),
-      outPutaway: outRate(positions, "putaway"),
+      outPutaway: outRate(deliveries, "putaway"),
       onTime: delays.length ? delays.filter((d) => d <= tolH).length / delays.length : NaN,
       tolMin: cfg.toleranzMin ?? 30,
-      qtyOkRate: qtyTotal ? qtyOk / qtyTotal : NaN,
-      nDeliveries: deliveries.length,
-      nPositions: positions.length,
+      qtyOkRate: qtyTotal ? qtyOk / qtyTotal : NaN, // Legacy-Alias = Position
+      qtyOkRatePosition: qtyTotal ? qtyOk / qtyTotal : NaN,
+      qtyOkRateDelivery: qtyAnlTotal ? qtyAnlOk / qtyAnlTotal : NaN,
+      qtyPositionN: qtyTotal,
+      qtyDeliveryN: qtyAnlTotal,
+      nTes: deliveries.length,
+      nDeliveries: anlieferungen.length,
+      nAnlieferungen: anlieferungen.length,
+      nPositions: positions.filter(p => p.positionKey).length,
       nErrors: dataErrors.length,
+      nErrorTes: new Set(dataErrors.map(e => e.rec && e.rec.belegnr).filter(Boolean)).size,
       nDiffLieferung: deliveries.filter((d) => d.isDiffLieferung).length,
-      nKritArt: positions.filter((p) => p.isKritArt).length,
+      nKritArt: positions.filter((p) => p.positionKey && p.isKritArt).length,
+      nKritTes: new Set(positions.filter(p => p.isKritArt && p.belegnr).map(p => p.belegnr)).size,
+      nKritLieferanten: new Set(positions.filter(p => p.isKritArt && p.lieferant).map(p => p.lieferant)).size,
+      kritRate: positions.filter(p => p.positionKey).length
+        ? positions.filter(p => p.positionKey && p.isKritArt).length / positions.filter(p => p.positionKey).length : null,
     };
 
     /* --- Perioden-Aggregation für Trends (Sparklines, Δ ggü. Vorperiode) -
      * Granularität automatisch: Spanne ≤ 21 Tage -> Tag, sonst KW.        */
-    const ankTimes = deliveries.map((d) => d.ts_ankunft).filter(Boolean).map(Number);
+    const ankTimes = deliveries.map((d) => d.ts_planstart_tag || d.ts_geplant_start).filter(Boolean).map(Number);
     const spanDays = ankTimes.length ? (Math.max(...ankTimes) - Math.min(...ankTimes)) / 864e5 : 0;
     const gran = spanDays <= 21 ? "day" : "week";
     const periodKey = (dt) => {
       if (!dt) return null;
-      if (gran === "day") return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+      if (gran === "day") return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, "0")}-${String(dt.getUTCDate()).padStart(2, "0")}`;
       // ISO-Woche
-      const t = new Date(Date.UTC(dt.getFullYear(), dt.getMonth(), dt.getDate()));
+      const t = new Date(Date.UTC(dt.getUTCFullYear(), dt.getUTCMonth(), dt.getUTCDate()));
       const day = t.getUTCDay() || 7; t.setUTCDate(t.getUTCDate() + 4 - day);
       const ys = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
       const wk = Math.ceil(((t - ys) / 864e5 + 1) / 7);
       return `${t.getUTCFullYear()}-W${String(wk).padStart(2, "0")}`;
     };
-    const collect = (recs, phaseKey, tsField) => {
+    const collect = (recs, phaseKey) => {
       const buckets = new Map();
       for (const r of recs) {
         const v = r.phases && r.phases[phaseKey];
-        const dt = r[tsField];
+        const dt = r.ts_planstart_tag || r.ts_geplant_start;
         if (v == null || !dt) continue;
         const k = periodKey(dt);
         (buckets.get(k) || buckets.set(k, []).get(k)).push(v);
@@ -533,47 +1006,61 @@
       // Perioden mit zu wenigen Belegen sind statistisch instabil -> raus.
       const minN = gran === "day" ? 5 : 15;
       return [...buckets.entries()].sort((a, b) => a[0] < b[0] ? -1 : 1)
-        .map(([k, vals]) => ({ period: k, med: median(vals), n: vals.length }))
+        .map(([k, vals]) => ({ period: k, med: median(vals), avg:mean(vals), n: vals.length }))
         .filter((p) => p.n >= minN);
     };
     const trends = {
       dwell:   collect(deliveries, "dwell", "ts_ankunft"),
-      putaway: collect(positions, "putaway", "ts_we_pos"),
+      putaway: collect(deliveries, "putaway", "ts_einlagerung_last"),
+      booking: collect(deliveries, "booking", "ts_we_buchung_last"),
+      operative: collect(deliveries, "operative", "ts_einlagerung_last"),
       unload:  collect(deliveries, "unload", "ts_ankunft"),
     };
     // Termintreue-Quote je Periode
     const otBuckets = new Map();
     for (const d of deliveries) {
-      const v = d.phases && d.phases.delay, dt = d.ts_ankunft;
+      const v = d.phases && d.phases.delay, dt = d.ts_planstart_tag || d.ts_geplant_start;
       if (v == null || !dt) continue;
       const k = periodKey(dt);
       const b = otBuckets.get(k) || otBuckets.set(k, { ok: 0, n: 0 }).get(k);
       b.n++; if (v <= (cfg.toleranzMin ?? 30) / 60) b.ok++;
     }
     trends.onTime = [...otBuckets.entries()].sort((a, b) => a[0] < b[0] ? -1 : 1)
-      .map(([k, b]) => ({ period: k, med: b.n ? b.ok / b.n : 0, n: b.n }))
+      .map(([k, b]) => ({ period: k, med:b.ok / b.n, avg:b.ok / b.n, n: b.n }))
       .filter((p) => p.n >= (gran === "day" ? 5 : 15));
+    const kritBuckets = new Map();
+    for (const p of positions.filter(p => p.positionKey)) {
+      const dt = p.ts_planstart_tag || p.ts_geplant_start;
+      if (!(dt instanceof Date)) continue;
+      const k = periodKey(dt), b = kritBuckets.get(k) || { krit:0, n:0 };
+      b.n++; if (p.isKritArt) b.krit++;
+      kritBuckets.set(k, b);
+    }
+    trends.critical = [...kritBuckets.entries()].sort((a,b) => a[0].localeCompare(b[0]))
+      .map(([period,b]) => ({period, avg:b.krit, med:b.n ? b.krit / b.n : null, n:b.n, krit:b.krit}));
 
     /* --- Δ letzte vollständige Periode vs. Median der vorherigen -------- */
     const deltaOf = (series, lowerIsBetter = true) => {
       if (!series || series.length < 2) return null;
       const last = series[series.length - 1];
       const prev = series.slice(0, -1);
-      const base = median(prev.map((p) => p.med));
+      const n = prev.reduce((sum,p) => sum + p.n, 0);
+      const base = n ? prev.reduce((sum,p) => sum + p.avg * p.n, 0) / n : null;
       if (base == null || !isFinite(base) || base === 0) return null;
-      const rel = (last.med - base) / Math.abs(base);
-      return { last: last.med, base, rel, better: lowerIsBetter ? rel < 0 : rel > 0 };
+      const rel = (last.avg - base) / Math.abs(base);
+      return { last:last.avg, base, rel, better: lowerIsBetter ? rel < 0 : rel > 0 };
     };
     const deltas = {
       dwell: deltaOf(trends.dwell, true),
       putaway: deltaOf(trends.putaway, true),
+      operative: deltaOf(trends.operative, true),
       onTime: deltaOf(trends.onTime, false),
     };
 
     /* --- Engpass-Erkennung: Phase mit größtem Beitrag × Streuung -------- */
     const flowPhases = ["wait_gate", "reaction", "unload", "booking", "putaway"];
     const bottleneck = flowPhases.map((k) => {
-      const recs = PHASES[k].level === "delivery" ? deliveries : positions;
+      const recs = PHASES[k].level === "te" ? deliveries : positions;
       const vals = recs.map((r) => r.phases && r.phases[k]).filter((v) => v != null);
       if (vals.length < 8) return null;
       const med = median(vals), p75 = quantile(vals, 0.75), p25 = quantile(vals, 0.25);
@@ -586,7 +1073,7 @@
     let bottleneckSeg = null;
     if (bottleneck.length) {
       const top = bottleneck[0];
-      const recs = PHASES[top.key].level === "delivery" ? deliveries : positions;
+      const recs = PHASES[top.key].level === "te" ? deliveries : positions;
       const bySeg = {};
       for (const r of recs) {
         const v = r.phases && r.phases[top.key];
@@ -604,24 +1091,24 @@
     const fmtHrs = (h) => h >= 48 ? (h / 24).toFixed(1) + " Tagen" : h >= 1 ? h.toFixed(1) + " h" : Math.round(h * 60) + " min";
     if (bottleneck.length) {
       const t = bottleneck[0];
-      let s = `Größter Engpass ist ${t.label} (Median ${fmtHrs(t.med)}`;
+      let s = `Statistisch auffälligste Prozessphase: ${t.label} (Median ${fmtHrs(t.med)}`;
       if (t.spread > 0.8) s += `, stark schwankend bis ${fmtHrs(t.p75)} im oberen Viertel`;
       s += ")";
-      if (bottleneckSeg) s += ` — vor allem ${bottleneckSeg}-Anlieferungen`;
+      if (bottleneckSeg) s += ` — vor allem bei TEs der Ladestelle ${bottleneckSeg}`;
       findings.push({ text: s + ".", tone: "warn" });
     }
     const dwD = deltas.dwell;
     if (dwD) findings.push({
-      text: `Standzeit ${dwD.better ? "verbessert" : "verschlechtert"} um ${Math.abs(dwD.rel * 100).toFixed(0)} % ggü. Vorperiode.`,
+      text: `Standzeit im letzten Trendabschnitt ${dwD.better ? "verbessert" : "verschlechtert"} um ${Math.abs(dwD.rel * 100).toFixed(0)} % gegenüber dem gewichteten Mittel der vorherigen Trendabschnitte.`,
       tone: dwD.better ? "ok" : "warn",
     });
     const otD = deltas.onTime;
     if (otD) findings.push({
-      text: `Termintreue bei ${(otD.last * 100).toFixed(0)} % (${otD.better ? "+" : ""}${(otD.rel * 100).toFixed(0)} % ggü. Vorperiode).`,
+      text: `Berechnete Termintreue im letzten Trendabschnitt: ${(otD.last * 100).toFixed(0)} % (${otD.better ? "+" : ""}${(otD.rel * 100).toFixed(0)} % relativ zum gewichteten Mittel der vorherigen Trendabschnitte).`,
       tone: otD.better ? "ok" : "warn",
     });
     if (kpis.nErrors > 0) findings.push({
-      text: `${kpis.nErrors} Datensätze mit unplausibler Zeitstempel-Reihenfolge — als Datenfehler ausgeschlossen.`,
+      text: `${kpis.nErrors} Datenfehler in Schlüsseln, Kennzeichen oder Zeitspannen. Betroffene Werte sind aus der jeweiligen Kennzahl ausgeschlossen.`,
       tone: "err",
     });
 
@@ -633,20 +1120,25 @@
       kritArt: kritAll.slice(0, 20), nKrit: kritAll.length,
     };
 
-    return { positions, deliveries, baselines, phaseMed, dataErrors, heat, teams, arrivalsByShift,
+    return { positions, anlieferungen, tes, deliveries, baselines, phaseMed, dataErrors, heat, teams, arrivalsByShift,
              drivers, sonderfaelle, kpis, cfg,
              trends, deltas, gran, bottleneck, bottleneckSeg, findings };
   }
 
   function num(v) {
     if (isNull(v)) return null;
-    if (typeof v === "number") return v;
-    if (typeof v === "object" && "raw" in v) return Number(v.raw); // SAC-Measure
-    const m = String(v).replace(",", ".").match(/-?\d+(\.\d+)?/);
-    return m ? parseFloat(m[0]) : null;
+    if (typeof v === "number") return Number.isFinite(v) ? v : null;
+    if (typeof v === "object" && "raw" in v) return num(v.raw);
+    let s=String(v).trim().replace(/[\s\u00a0\u202f]/g,'');
+    if(s.includes(',')) {
+      if(!/^[+-]?(?:\d+|\d{1,3}(?:\.\d{3})+),\d+(?:[eE][+-]?\d+)?$/.test(s))return null;
+      s=s.replace(/\./g,'').replace(',','.');
+    }
+    if(!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(s))return null;
+    const n=Number(s);return Number.isFinite(n)?n:null;
   }
 
-  const WEEngine = { parseTs, parseKw, baseline, buildModel, segmentOf, teamOf, PHASES, median };
+  const WEEngine = { parseTs, parseKw, parsePlanDay, palletCount, baseline, buildModel, segmentOf, teamOf, PHASES, median, mean };
   if (typeof globalThis !== "undefined") globalThis.WEEngine = WEEngine;
 
   /* ======================= 2. WEB COMPONENT =========================== */
@@ -659,7 +1151,7 @@
     grid: "var(--grid)",
     // Semantische Farben (theme-abhängig) — Markenrot des WE-Trackers als Akzent
     accent: "var(--accent)", good: "var(--good)", bad: "var(--bad)",
-    outlier: "var(--accent)", error: "var(--warn)", ok: "var(--good)",
+    outlier: "var(--warn)", error: "var(--bad)", ok: "var(--good)",
     // Neutrale Diagrammfarben (Heatmap, Team-Balken, Zeitstrahl) - KEINE Segmentbedeutung
     lkw: "#2980b9", container: "#27ae60", sonst: "#5d6d7e",
   };
@@ -713,11 +1205,13 @@
     }`;
 
   const MODES = [
-    { id: "puls",         label: "Puls",         desc: "Zustand der Periode auf einen Blick" },
+    { id: "puls",         label: "Periodenüberblick", desc: "Zustand der Periode auf einen Blick" },
     { id: "prozesskette", label: "Prozesskette", desc: "Zeitstrahl je TE inkl. Seetransport" },
     { id: "ausreisser",   label: "Auffälligkeiten", desc: "Auffällige TEs mit Detail-Drill" },
     { id: "spediteur",    label: "Spediteuranalyse",    desc: "Pünktlichkeit der Spediteure (BW P/N) und TE-bezogene Verspätungsanalyse" },
     { id: "lieferanten",  label: "Lieferantenanalyse",  desc: "Mengentreue und Mengenabweichungen der Lieferanten auf Positionsebene" },
+    { id: "artikelabweichungen", label: "Artikelabweichungen", desc: "Anlieferpositionen mit den größten absoluten Mengenabweichungen" },
+    { id: "kritisch",     label: "Kritische Positionen", desc: "Kritische Positionen nach Zeit, Kategorie und Lieferant" },
     { id: "warengruppen", label: "Warengruppenanalyse", desc: "WE-Durchlaufzeit je Warengruppe auf Basis von TE und Positionen" },
     { id: "schicht",      label: "Schicht",      desc: "Früh- vs. Spätschicht im Vergleich" },
   ];
@@ -785,6 +1279,13 @@
     .kpi .sub{ font-size:10px; color:${C.muted}; display:block;}
     .kpi svg.spark{ display:block; width:100%; height:26px;}
     .kpi.err .val b{ color:${C.error};}
+    .roadmap-grid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(185px,1fr)); gap:9px;}
+    .roadmap-tile{ min-height:88px; padding:10px 12px; border:1px dashed ${C.border}; border-radius:var(--r-md);
+      background:${C.panel}; opacity:.78;}
+    .roadmap-tile b{ display:block; font-size:11px; color:${C.ink}; margin-bottom:5px;}
+    .roadmap-tile span{ display:block; font-size:10px; line-height:1.4; color:${C.muted};}
+    .roadmap-state{ display:inline-block!important; width:max-content; margin-bottom:6px; padding:2px 7px;
+      border-radius:12px; background:${C.band}; color:${C.ink2}!important; font-family:var(--font-mono); font-size:8.5px!important; text-transform:uppercase;}
     /* Tabs */
     /* Kontext-Banner (Kopplung aus dem Strategie-Widget) */
     .ctxbar{ display:flex; align-items:center; gap:10px; padding:7px 16px;
@@ -1073,6 +1574,29 @@
     .tag{ display:inline-block; padding:1px 6px; border-radius:3px; font-size:10px; color:#fff;}
     .empty{ color:${C.muted}; font-size:12px; padding:24px; text-align:center;}
     .hidden{ display:none !important; }
+    nav[hidden],.kpis[hidden]{ display:none !important; }
+    .rel-quick{ display:flex; align-items:center; gap:3px; margin-left:auto; padding:2px;
+      border:1px solid ${C.border}; border-radius:7px; background:${C.card2}; }
+    .rel-quick button{ min-width:29px; padding:5px 7px; border:0; border-radius:5px;
+      background:transparent; color:${C.muted}; font:600 10px/1 var(--font); cursor:pointer; }
+    .rel-quick button.on{ background:${C.accent}; color:#fff; }
+    .alert-only{ display:block; padding:2px 0 12px; }
+    .alert-banner{ display:flex; align-items:flex-start; justify-content:space-between; gap:12px;
+      padding:12px 14px; margin-bottom:10px; border:1px solid ${C.border}; border-left:4px solid var(--warn);
+      border-radius:var(--r-md); background:${C.card}; }
+    .alert-banner.n{ border-left-color:var(--blue); }
+    .alert-banner b{ display:block; font-size:14px; color:${C.ink}; }
+    .alert-banner span{ display:block; margin-top:4px; font-size:11px; color:${C.muted}; }
+    .alert-total{ font-family:var(--font-mono); font-size:22px; font-weight:700; color:var(--warn); }
+    .alert-banner.n .alert-total{ color:var(--blue); }
+    .alert-scroll{ overflow:auto; max-height:620px; border:1px solid ${C.border}; border-radius:var(--r-md); }
+    .alert-scroll table{ margin-top:0; background:${C.card}; }
+    .alert-scroll th{ position:sticky; top:0; z-index:1; padding:8px; background:${C.card2}; }
+    .alert-scroll td{ padding:8px; }
+    .alert-badge{ display:inline-block; min-width:24px; padding:2px 6px; border-radius:10px;
+      text-align:center; font-weight:700; color:#111; background:var(--warn); }
+    .alert-badge.n{ color:#fff; background:var(--blue); }
+    .alert-mono{ font-family:var(--font-mono); }
     /* Einklappbare Sekundärbereiche (Auffällige TEs, Vorjahresvergleich) */
     .collapse-toggle{ display:flex; align-items:center; gap:6px; width:100%; text-align:left;
       font:inherit; font-size:12px; font-weight:600; color:${C.ink2}; background:transparent;
@@ -1173,23 +1697,23 @@
     <header>
       <div class="titlebar">
         <span class="brand-dot"></span>
-        <div class="title">WE Prozess-Cockpit <small id="sub"></small></div>
+        <div class="title">WE · Detailanalyse <small id="sub"></small></div>
         <div class="ctrl">
-          <button id="btnFilter" title="Zeitraum &amp; Ladestelle manuell filtern">⏱</button>
+          <button id="btnFilter" title="Zeitraum und Ladestelle für die Detailanalyse ändern">⏱ Filter</button>
           <button id="btnTheme" title="Dark-/Light-Mode umschalten">◐</button>
-          <button id="btnCfg" title="Kalibrierung">⚙</button>
+          <button id="btnCfg" title="Experteneinstellungen für Statistik und Termintreue">⚙ Experten</button>
         </div>
       </div>
       <div class="cfg filterpanel" id="filterpanel" hidden>
-        <h4>Zeitraum &amp; Segment</h4>
-        <div class="hint">Überschreibt die Auswahl aus dem Strategie-Widget mit einem eigenen Filter auf die Ankunftszeit.</div>
+        <h4>Zeitraum &amp; Ladestelle</h4>
+        <div class="hint">Überschreibt die Auswahl aus dem Strategie-Widget mit einem eigenen Filter auf „Geplanter Start ab“.</div>
         <label>Von</label>
         <input type="date" id="fltVon">
         <label>Bis</label>
         <input type="date" id="fltBis">
         <label>Ladestelle</label>
         <select id="fltSeg">
-          <option value="">Alle Segmente</option>
+          <option value="">Alle Ladestellen</option>
           <option value="Container">Container</option>
           <option value="Landverkehr">Landverkehr</option>
           <option value="Nicht zugeordnet">Nicht zugeordnet</option>
@@ -1198,30 +1722,31 @@
         </select>
         <div class="filterpanel-actions">
           <button id="fltApply" class="filterpanel-apply">Anwenden</button>
-          <button id="fltReset">Zurücksetzen</button>
+          <button id="fltReset">Strategieauswahl wiederherstellen</button>
         </div>
       </div>
       <div class="cfg" id="cfg" hidden>
-        <h4>Kalibrierung</h4>
+        <h4>Experteneinstellungen</h4>
         <label>Ausreißer-Schwelle |z| <output id="outMad">3,5</output></label>
         <input type="range" id="cfgMad" min="2" max="6" step="0.1">
         <div class="hint">kleiner = empfindlicher · wirkt sofort auf alle Ansichten</div>
-        <label>Termintreue-Toleranz (Minuten)</label>
+        <label>BWP-Toleranz nach Planstart (Minuten)</label>
         <input type="number" id="cfgTol" min="0" max="240" step="5">
-        <label>Baseline-Segmentierung</label>
+        <label>Ausreißer-Vergleichsgruppe</label>
         <select id="cfgBase">
           <option value="segment">Je Ladestelle (LKW / Container / BSL)</option>
-          <option value="global">Global (eine Grenze für alle)</option>
+          <option value="global">Alle Ladestellen</option>
         </select>
-        <label>Team Frühschicht in geraden KW</label>
+        <div class="hint">Nur für Median/MAD-Ausreißer. Die fachliche 14-Monats-Baseline für Zielwerte benötigt einen separaten historischen BW-Datenbestand.</div>
+        <label>Mannschaft Frühschicht in geraden KW</label>
         <input type="text" id="cfgTeamE">
-        <label>Team Frühschicht in ungeraden KW</label>
+        <label>Mannschaft Frühschicht in ungeraden KW</label>
         <input type="text" id="cfgTeamO">
       </div>
-      <div class="kpis" id="kpis"></div>
     </header>
     <nav id="tabs"></nav>
     <main id="main">
+      <div class="kpis" id="kpis"></div>
       <div class="state-overlay" id="state-loading">
         <div class="we-loader">
           <div class="we-loader-scene">
@@ -1259,7 +1784,7 @@
   </div>`;
 
   const fmtH = (h) => (h == null || isNaN(h)) ? "–" :
-    Math.abs(h) >= 48 ? (h / 24).toFixed(1) + " d" : h.toFixed(1) + " h";
+    (Math.abs(h)>=48?h/24:h).toLocaleString('de-DE',{minimumFractionDigits:1,maximumFractionDigits:1}) + (Math.abs(h)>=48?' Tage':' h');
   // Menschenlesbare Dauer für Hover-Tooltips, z.B. "1 Std 24 Min"
   const fmtHumanDauer = (hDec) => {
     if (hDec == null || isNaN(hDec)) return "–";
@@ -1271,7 +1796,7 @@
     return `${sign}${std} Std ${min} Min`;
   };
   const fmtDT = (d) => d instanceof Date && !isNaN(d) ? d.toLocaleString("de-DE", { dateStyle: "short", timeStyle: "short" }) : "–";
-  const fmtP = (p) => isNaN(p) ? "–" : (100 * p).toFixed(1) + " %";
+  const fmtP = (p) => p == null || !Number.isFinite(p) ? "Nicht bewertbar" : (100 * p).toLocaleString('de-DE',{minimumFractionDigits:1,maximumFractionDigits:1}) + " %";
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
   /* ---- BW-Row-Zugriff ---------------------------------------------------
@@ -1339,8 +1864,10 @@
    *  weil readDim() das Label automatisch aus der Dimension zieht.       */
   function ingestRows(rows) {
     return rows.map((row) => ({
-      // Schlüssel (immer Code, keine Label-Bevorzugung)
-      belegnr:            readCode(row, "dimension_te"),
+      // Schlüssel (immer Code, keine Label-Bevorzugung). Der interne Name
+      // "belegnr" bleibt aus Kompatibilitätsgründen erhalten, enthält aber
+      // ausschließlich die TE [0WM_TUNUM], niemals die Anlieferung.
+      belegnr:            readCode(row, "dimension_te", "dimension_te_intern"),
       // Anlieferung innerhalb der TE. Eine TE kann mehrere Anlieferungen
       // enthalten (SAP-EWM-Hierarchie TE -> Anlieferung -> Position).
       // Mehrere Feed-Namen toleriert, je nach BW-Modellbezeichnung.
@@ -1350,10 +1877,12 @@
                                    "dimension_lieferbeleg", "dimension_inbound_delivery"),
       te_intern:          readCode(row, "dimension_te_intern"),
       te_extern:          readCode(row, "dimension_te_extern"),
-      pos:                readCode(row, "dimension_pos", "dimension_produkt_nr"),
+      // Erst zusammen mit anlieferung ist die Position global eindeutig.
+      pos:                readCode(row, "dimension_pos"),
       bestellung:         readCode(row, "dimension_bestellung"),
       bestellposition:    readCode(row, "dimension_bestellposition"),
       // Stammdaten (Klartext bevorzugt); alte Feed-IDs als Fallback für bestehende Bindings
+      produkt:            readCode(row, "dimension_produkt"),
       produkt_name:       readDim(row, "dimension_produkt", "dimension_produkt_name"),
       hwg:                readDim(row, "dimension_hwg"),
       ksp:                readDim(row, "dimension_ksp"),
@@ -1364,6 +1893,7 @@
       frachtfuehrer:      readDim(row, "dimension_frachtfuehrer"),
       transportmittel:    readDim(row, "dimension_transportmittel"),
       ladestelle:         readDim(row, "dimension_ladestelle"),
+      ts_planstart_tag:    readCode(row, "dimension_planstart_tag"),
       belegart:           readCode(row, "dimension_belegart"),
       lagertor:           readDim(row, "dimension_lagertor"),
       abw_mengeneinheit:  readDim(row, "dimension_abw_mengeneinheit"),
@@ -1427,8 +1957,9 @@
       ts_verzollung:      readCode(row, "dimension_ts_verzollung"),
       ts_depot:           readCode(row, "dimension_ts_depot"),
       ts_depot_anf:       readCode(row, "dimension_ts_depot_anf"),
-      // Fertige SAP-Bewertungen (Gegenprobe, nicht Rechenbasis)
-      sap_otif:           readCode(row, "dimension_sap_otif"),
+      // BW-Bewertungen explizit auf ihrer fachlichen Ebene.
+      sap_otif_position:  readCode(row, "dimension_sap_otif_position"),
+      sap_otif_anlieferung:readCode(row, "dimension_sap_otif"),
       sap_puenktlich:     readCode(row, "dimension_sap_puenktlich"),
       sap_vollstaendig:   readCode(row, "dimension_sap_vollstaendig"),
       // Business-Kennzeichen
@@ -1468,12 +1999,12 @@
       this._startLoaderSteps(); // Ladeanimation läuft ab dem ersten Moment
       this._shadow.getElementById("tabs").addEventListener("click", (e) => {
         const b = e.target.closest("button"); if (!b) return;
-        this._mode = b.dataset.id; this._detail = null; this._render();
+        this.setView(b.dataset.id);
       });
       // KPI-Kacheln führen zur passenden Ansicht
       this._shadow.getElementById("kpis").addEventListener("click", (e) => {
         const t = e.target.closest(".kpi[data-goto]"); if (!t) return;
-        this._mode = t.dataset.goto; this._detail = null; this._render();
+        this.setView(t.dataset.goto);
       });
       // Drill-down: Klick auf Scatter-Punkte / Zeilen mit data-drill
       this._shadow.getElementById("main").addEventListener("click", (e) => {
@@ -1484,6 +2015,7 @@
       const $ = (id) => this._shadow.getElementById(id);
       $("btnTheme").addEventListener("click", () =>
         this.setTheme(this._props.theme === "dark" ? "light" : "dark"));
+
       // Nur eines der beiden Panels (Kalibrierung / Filter) gleichzeitig offen
       const closePanels = () => {
         $("cfg").hidden = true; $("btnCfg").classList.remove("on");
@@ -1501,13 +2033,10 @@
       });
       $("fltApply").addEventListener("click", () => {
         const von = $("fltVon").value, bis = $("fltBis").value, seg = $("fltSeg").value;
-        if (!von && !bis && !seg) return;
         this.setManualFilter(von, bis, seg);
       });
       $("fltReset").addEventListener("click", () => {
-        $("fltVon").value = ""; $("fltBis").value = ""; $("fltSeg").value = "";
-        this.clearPeriodFilter();
-        try { this.dispatchEvent(new CustomEvent("onContextClear", { detail: {} })); } catch (e) {}
+        this.restoreStrategySelection();
       });
       // Live-Kalibrierung: Änderungen wirken sofort auf das Modell
       $("cfgMad").addEventListener("input", () => {
@@ -1613,13 +2142,14 @@
       if (theme === "dark" || theme === "light") { this._props.theme = theme; this._applyTheme(); }
     }
     setView(view) {
-      if (MODES.some((m) => m.id === view)) { this._mode = view; this._detail = null; this._render(); }
+      if (MODES.some((m) => m.id === view)) { this._mode = view; this._detail = null; this._render(); this._shadow.getElementById('main').scrollTop=0; }
     }
     /** Drill-down in eine Transporteinheit (auch via SAC-Script aufrufbar). */
     openDetail(te) {
       if (!this._model) return;
       const d = this._model.deliveries.find((x) => x.belegnr === String(te));
       if (!d) return;
+      if(!this._detail)this._returnScroll=this._shadow.getElementById('main')?.scrollTop||0;
       this._detail = String(te);
       this._render();
       this.dispatchEvent(new CustomEvent("onOutlierSelect", { detail: { belegnr: this._detail } }));
@@ -1637,9 +2167,17 @@
        (schnelles Nachladen nur dieser Periode) passiert in SAC an der
        Datenquelle — nicht hier im Widget. */
     setPeriodContext(periode, segment, vorjahr) {
+      if(this._periodContext?.periode!==periode || this._periodContext?.segment!==segment || this._periodContext?.manual) {
+        this._detail=null;this._supplierDetail=null;this._tableViews={};this._yoy=null;
+      }
       this._periodContext = { periode: periode || "", segment: segment || "", vorjahr: vorjahr || "" };
+      this._strategyContext = {...this._periodContext};
       this._renderContextBanner();
-      if (this._model && this._mode === "puls") this._render();
+      this._render();
+    }
+
+    _filterFailed(message) {
+      this._filterError=message;this._rows=[];this._model=null;this._detail=null;this._render();return false;
     }
 
     /* Wird vom Story-Skript mit den Rohwerten aus dem Strategie-Widget
@@ -1650,9 +2188,8 @@
        und stößt so eine neue BW-Abfrage nur für diesen Zeitraum an.
        Sobald die Daten zurückkommen, feuert SAC erneut `set myDataSource`. */
     setPeriodFilter(periode, segment, vonISO, bisISO, vorjahr) {
-      const KW_DIM = "dimension_kw_ankunft";   // technischen Namen ggf. anpassen
       const LADE_DIM = "dimension_ladestelle"; // technischen Namen ggf. anpassen
-      const TS_DIM = "dimension_ts_ankunft";   // technischen Namen ggf. anpassen
+      const TS_DIM = "dimension_planstart_tag";   // technischen Namen ggf. anpassen
       const ds = this._getDataSource();
       if (!ds) {
         console.warn("[WE-Cockpit] setPeriodFilter: keine DataSource — nur Kontext gesetzt, kein Requery.");
@@ -1663,24 +2200,19 @@
       // Einen evtl. aktiven manuellen Datumsbereich-Filter entfernen — die
       // Strategie-Auswahl hat wieder Vorrang, bis der Nutzer erneut manuell
       // filtert.
+      const from=this._isoToBW(vonISO), to=this._isoToBW(bisISO);
+      if (!from || !to || from > to) return false;
+      this._filterError=null;this._rows=null;this._model=null;this._detail=null;
       try { ds.removeDimensionFilter(TS_DIM); } catch (e) {}
-
-      // Alten Filter auf der Kalenderwochen-Dimension entfernen (egal ob
-      // vorher ein Default-Zeitraum oder eine andere Periode aktiv war).
-      try { ds.removeDimensionFilter(KW_DIM); } catch (e) { /* war ggf. nicht gesetzt */ }
-
-      const kwCandidates = this._periodeToKWCandidates(periode);
-      if (kwCandidates.length) {
-        try { ds.setDimensionFilter(KW_DIM, kwCandidates); }
-        catch (e) { console.warn("[WE-Cockpit] KW-Filter fehlgeschlagen:", e && e.message); }
-      }
+      try { ds.setDimensionFilterRange(TS_DIM, from, to); }
+      catch(e) { console.warn("[WE-Cockpit] Planstart-Filter fehlgeschlagen:",e); return this._filterFailed('Zeitraum konnte nicht angewendet werden. Auswahl bitte erneut übernehmen.'); }
 
       // Segment-Filter: nur setzen wenn nicht "Gesamt"/leer; sonst entfernen.
       try { ds.removeDimensionFilter(LADE_DIM); } catch (e) {}
       if (segment && segment !== "Gesamt") {
         const werte = SEGMENT_TO_LADESTELLE[segment] || [segment];
         try { ds.setDimensionFilter(LADE_DIM, werte); }
-        catch (e) { console.warn("[WE-Cockpit] Segment-Filter fehlgeschlagen:", e && e.message); }
+        catch (e) { console.warn("[WE-Cockpit] Segment-Filter fehlgeschlagen:", e && e.message); return this._filterFailed('Ladestelle konnte nicht angewendet werden. Auswahl bitte erneut übernehmen.'); }
       }
 
       // Kontext-Banner sofort zeigen; die eigentlichen Zeilen (myDataSource)
@@ -1691,8 +2223,8 @@
 
     /* "2026-01-13" -> "20260113" (BW-Datumsformat, ohne Trennzeichen) */
     _isoToBW(iso) {
-      if (!iso || iso.length < 10) return null;
-      return iso.substring(0, 4) + iso.substring(5, 7) + iso.substring(8, 10);
+      if(typeof iso!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(iso)||!WEEngine.parsePlanDay(iso))return null;
+      return iso.replace(/-/g,'');
     }
 
     /* Manueller Filter direkt im Cockpit: überschreibt die aus dem
@@ -1702,27 +2234,38 @@
        leer erlaubt (dann bleibt der Zeitfilter unverändert). segment ist
        "" (alle) oder einer von Container/Landverkehr/BSL/Sonstige. */
     setManualFilter(vonISO, bisISO, segment) {
-      const KW_DIM = "dimension_kw_ankunft";
+      // Empty date inputs keep the previous effective date window.
+      if(!vonISO&&!bisISO){const old=this._periodContext;const r=old?.manual?{from:old.von,to:old.bis}:WEUX.range(old?.periode);vonISO=r.from||'';bisISO=r.to||'';}
+      else {vonISO=vonISO||bisISO;bisISO=bisISO||vonISO;}
+      if((vonISO&&!this._isoToBW(vonISO))||(bisISO&&!this._isoToBW(bisISO)))return this._filterFailed('Ungültiges Datum. Bitte ein vollständiges Kalenderdatum auswählen.');
+      if (vonISO && bisISO && vonISO > bisISO) {
+        const input=this._shadow.getElementById('fltBis');
+        input.setCustomValidity('Das Enddatum muss am oder nach dem Startdatum liegen.');input.reportValidity();return false;
+      }
+      this._shadow.getElementById('fltBis')?.setCustomValidity('');
+      if (this._periodContext && !this._periodContext.manual) {
+        this._strategyContext={...this._periodContext};this._strategyYoY=this._yoy;
+      }
       const LADE_DIM = "dimension_ladestelle";
-      const TS_DIM = "dimension_ts_ankunft";
+      const TS_DIM = "dimension_planstart_tag";
       const ds = this._getDataSource();
       if (!ds) {
         console.warn("[WE-Cockpit] setManualFilter: keine DataSource — nur Kontext gesetzt, kein Requery.");
       } else {
+        this._filterError=null;this._rows=null;this._model=null;this._detail=null;
         // Ein Datumsbereich ersetzt die Kalenderwochen-Filterung der
         // Strategie-Kopplung vollständig (präziser, tagesgenau statt KW).
-        try { ds.removeDimensionFilter(KW_DIM); } catch (e) {}
         const vonBW = this._isoToBW(vonISO), bisBW = this._isoToBW(bisISO);
         if (vonBW || bisBW) {
           try { ds.removeDimensionFilter(TS_DIM); } catch (e) {}
           try { ds.setDimensionFilterRange(TS_DIM, vonBW || bisBW, bisBW || vonBW); }
-          catch (e) { console.warn("[WE-Cockpit] Datumsfilter fehlgeschlagen:", e && e.message); }
+          catch (e) { console.warn("[WE-Cockpit] Datumsfilter fehlgeschlagen:", e && e.message);return this._filterFailed('Zeitraum konnte nicht angewendet werden. Bitte erneut versuchen.'); }
         }
         try { ds.removeDimensionFilter(LADE_DIM); } catch (e) {}
         if (segment) {
           const werte = SEGMENT_TO_LADESTELLE[segment] || [segment];
           try { ds.setDimensionFilter(LADE_DIM, werte); }
-          catch (e) { console.warn("[WE-Cockpit] Segment-Filter fehlgeschlagen:", e && e.message); }
+          catch (e) { console.warn("[WE-Cockpit] Segment-Filter fehlgeschlagen:", e && e.message);return this._filterFailed('Ladestelle konnte nicht angewendet werden. Bitte erneut versuchen.'); }
         }
       }
       // Banner als "manueller Filter" kennzeichnen (eigene Optik, kein
@@ -1734,12 +2277,28 @@
         manual: true, von: vonISO || "", bis: bisISO || "",
         label: [vonISO || bisISO ? `${fmtD(vonISO) || "…"} – ${fmtD(bisISO) || "…"}` : "", segment].filter(Boolean).join(" · "),
       };
+      this._yoy=null;
+      this._detail=null;
+      this._supplierDetail=null;this._tableViews={};
       this._renderContextBanner();
-      if (this._model && this._mode === "puls") this._render();
+      this._render();
       // Filter-Panel wieder einklappen, sobald angewendet.
+      this.dispatchEvent(new CustomEvent('onManualSelection',{detail:{von:vonISO,bis:bisISO,segment}}));
       const p = this._shadow.getElementById("filterpanel");
       if (p) { p.hidden = true; this._shadow.getElementById("btnFilter").classList.remove("on"); }
       return !!ds;
+    }
+
+    restoreStrategySelection() {
+      const c=this._strategyContext;
+      if(!c){this.clearPeriodFilter();this.dispatchEvent(new CustomEvent('onContextClear'));return;}
+      const r=WEUX.range(c.periode);
+      const applied=this.setPeriodFilter(c.periode,c.segment,r.from,r.to,c.vorjahr);
+      if(!applied&&this._getDataSource())return false;
+      this._yoy=this._strategyYoY||null;
+      const panel=this._shadow.getElementById('filterpanel');if(panel)panel.hidden=true;
+      this.dispatchEvent(new CustomEvent('onRestoreSelection',{detail:{...c}}));
+      this._render();
     }
 
     /* Gegenstück beim Schließen der Detailansicht: Periode/Segment-Filter
@@ -1747,16 +2306,13 @@
        (nutzt die bestehende clearPeriodContext() für den UI-Teil). Optional
        könnt ihr hier einen festen Default-Zeitraum erneut setzen. */
     clearPeriodFilter() {
-      const KW_DIM = "dimension_kw_ankunft";
       const LADE_DIM = "dimension_ladestelle";
-      const TS_DIM = "dimension_ts_ankunft";
+      const TS_DIM = "dimension_planstart_tag";
       const ds = this._getDataSource();
       if (ds) {
-        try { ds.removeDimensionFilter(KW_DIM); } catch (e) {}
         try { ds.removeDimensionFilter(LADE_DIM); } catch (e) {}
         try { ds.removeDimensionFilter(TS_DIM); } catch (e) {}
         // Beispiel Default-Zeitraum (an euer Modell anpassen):
-        // try { ds.setDimensionFilter(KW_DIM, ["05.2026"]); } catch (e) {}
       }
       this.clearPeriodContext();
     }
@@ -1770,7 +2326,9 @@
     clearPeriodContext() {
       this._periodContext = null;
       this._yoy = null;
+      this._strategyContext=null;this._strategyYoY=null;this._detail=null;this._supplierDetail=null;this._tableViews={};this._filterError=null;
       this._renderContextBanner();
+      this._render();
     }
     /** Für SAC-Scripting lesbar. */
     getPeriodContext() {
@@ -1814,15 +2372,16 @@
         const label = ctx.label || "Eigener Filter";
         bar.innerHTML = `<span class="ctx-dot ctx-dot-manual"></span>
           <span>Manueller Filter: <b>${esc(label)}</b></span>
-          <button id="ctxclear" title="Filter zurücksetzen">Zurücksetzen ✕</button>`;
+          <button id="ctxclear" title="Den Zeitraum der Strategieübersicht wieder übernehmen">Strategieauswahl wiederherstellen</button>`;
       } else {
         const seg = ctx.segment && ctx.segment !== "Gesamt" ? ` · ${esc(ctx.segment)}` : "";
         bar.innerHTML = `<span class="ctx-dot"></span>
-          <span>Zeitraum aus Strategie: <b>${esc(ctx.periode)}</b>${seg}</span>
-          <button id="ctxclear" title="Filter zurücksetzen">Zurücksetzen ✕</button>`;
+          <span>Strategieübersicht → <b>${esc(ctx.periode)}</b>${seg} → Detailanalyse</span>
+          <button id="ctxclear" title="Detailanalyse verlassen">← Zurück zur Strategieübersicht</button>`;
       }
       const btn = this._shadow.getElementById("ctxclear");
       if (btn) btn.onclick = () => {
+        if(ctx.manual){this.restoreStrategySelection();return;}
         this.clearPeriodFilter();
         // Story-Skript kann zusätzlich den Datenquellen-Filter zurücksetzen;
         // dafür feuern wir ein Event, auf das die Story hören kann.
@@ -1866,18 +2425,16 @@
     }
 
     _rebuild() {
-      this._model = this._rows && this._rows.length ? WEEngine.buildModel(this._rows, this._props) : null;
+      this._model = Array.isArray(this._rows) && this._rows.length ? WEEngine.buildModel(this._rows, this._props) : null;
+      if(this._detail&&!this._model?.tes.some(t=>t.belegnr===this._detail))this._detail=null;
       this._render();
     }
 
     /* =========================== RENDERING =========================== */
     _render() {
       const M = this._model, S = this._shadow;
-      S.getElementById("sub").textContent = M
-        ? `${M.kpis.nDeliveries} TE · ${M.kpis.nPositions} Positionen · Schwelle |z| > ${M.cfg.madThreshold}`
-        : "";
-      S.getElementById("tabs").innerHTML = MODES.map((m) =>
-        `<button data-id="${m.id}" class="${m.id === this._mode ? "on" : ""}">${m.label}</button>`).join("");
+      S.getElementById("sub").textContent = M ? `${M.kpis.nTes} TE · ${M.kpis.nAnlieferungen} Anlieferungen · ${M.kpis.nPositions} Positionen · Geplanter Start ab` : "";
+      S.getElementById("tabs").innerHTML = MODES.map(m => `<button data-id="${m.id}" class="${m.id===this._mode?'on':''}">${m.label}</button>`).join("");
       this._renderKpis();
       // Zustands-Overlays (Tracker-Konvention): laden -> leer -> Inhalt
       const loading = S.getElementById("state-loading");
@@ -1898,6 +2455,8 @@
       if (mode.id === "ausreisser")   { this._viewAusreisser(main); return; }
       if (mode.id === "spediteur")     { this._viewSpediteur(main); return; }
       if (mode.id === "lieferanten")   { this._viewLieferanten(main); return; }
+      if (mode.id === "artikelabweichungen") { this._viewArtikelabweichungen(main); return; }
+      if (mode.id === "kritisch")      { this._viewKritisch(main); return; }
       if (mode.id === "warengruppen")  { this._viewWarengruppen(main); return; }
       if (mode.id === "schicht")      { this._viewSchicht(main); return; }
       this._viewPuls(main);
@@ -1907,60 +2466,66 @@
       const el = this._shadow.getElementById("kpis"), M = this._model;
       if (!M) { el.innerHTML = ""; return; }
       const k = M.kpis, t = M.trends, d = M.deltas;
-      const tile = (goto, title, value, series, delta, lowerBetter, invPct) => {
+      const tile = (goto, title, value, series, delta, lowerBetter, invPct, basis, key) => {
         let badge = "";
         if (delta) {
-          const cls = delta.better ? "up" : "down";
-          const arrow = (delta.rel < 0) ? "▼" : "▲";
-          badge = `<em class="d ${cls}">${arrow} ${Math.abs(delta.rel * 100).toFixed(0)}%</em>`;
+          const cls = Math.round(Math.abs(delta.rel * 100)) === 0 ? "neutral" : delta.better ? "up" : "down";
+          const arrow = cls === "neutral" ? "=" : (delta.rel < 0) ? "▼" : "▲";
+          badge = `<em class="d ${cls}" title="Letzter Trendabschnitt gegenüber dem nach Fallzahl gewichteten Mittel der vorherigen Trendabschnitte">${arrow} ${Math.abs(delta.rel * 100).toFixed(0)}% · Verlauf</em>`;
         }
         return `<div class="kpi" data-goto="${goto}" title="${title}">
-          <span class="lbl">${title}</span>
+          <span class="lbl">${title}${WEUX.info(key,title+' erklären')}</span>
           <div class="val"><b>${value}</b>${badge}</div>
+          <span class="ux-badge">${key==='critical'?'Position':'TE'}</span><span class="sub">${basis || ""}</span>
           ${this._sparkline(series, invPct)}
+          <span class="ux-detail-hint">Analyse öffnen ›</span>
         </div>`;
       };
       el.innerHTML =
-        tile("hof", "Ø Standzeit", fmtH(k.medDwell), t.dwell, d.dwell, true, false) +
-        tile("lager", "Ø Einlagerung", fmtH(k.medPutaway), t.putaway, d.putaway, true, false) +
-        tile("termin", "Termintreue", fmtP(k.onTime), t.onTime, d.onTime, false, true) +
-        `<div class="kpi ${k.nErrors ? "err" : ""}" data-goto="muster" title="Datenfehler ansehen">
-          <span class="lbl">Datenfehler</span>
+        tile("prozesskette", "Ø Standzeit", fmtH(k.phaseStats.dwell.avg), t.dwell, d.dwell, true, false, `Basis: ${k.phaseStats.dwell.n} TE`,'dwell_avg') +
+        tile("prozesskette", "Ø Vereinnahmung", fmtH(k.phaseStats.booking.avg), t.booking, null, true, false, `Basis: ${k.phaseStats.booking.n} TE`,'booking_avg') +
+        tile("prozesskette", "Ø Einlagerung · Näherung", fmtH(k.phaseStats.putaway.avg), t.putaway, d.putaway, true, false, `Basis: ${k.phaseStats.putaway.n} TE`,'putaway_avg') +
+        tile("prozesskette", "Ø Operativer WE · Näherung", fmtH(k.phaseStats.operative.avg), t.operative, d.operative, true, false, `Basis: ${k.phaseStats.operative.n} TE`,'operative_avg') +
+        tile("spediteur", "Berechnete Termintreue", fmtP(k.onTime), t.onTime, d.onTime, false, true, `Basis: ${k.phaseStats.delay.n} TE · Toleranz ${k.tolMin} min${k.tolMin!==30?' · abweichende Einstellung':''}`,'calc_punctual') +
+        tile("kritisch", "Kritische Positionen", String(k.nKritArt), t.critical, null, true, false, `Basis: ${k.nPositions} Pos. · ${k.nKritTes} TE betroffen`,'critical') +
+        `<div class="kpi ${k.nErrors ? "err" : ""}" data-goto="puls" title="Datenfehler und Abdeckung ansehen">
+          <span class="lbl">Datenfehler${WEUX.info('errors')}</span>
           <div class="val"><b>${k.nErrors}</b></div>
-          <span class="sub">unplausible Zeitstempel</span>
+          <span class="sub">Fehlerfälle in ${k.nErrorTes} TE</span><span class="ux-detail-hint">Prüfdetails öffnen ›</span>
         </div>`;
     }
 
     /** Mini-Trendkurve als SVG; invPct skaliert 0–1 Quoten. */
     _sparkline(series, isPct) {
-      if (!series || series.length < 2) return `<span class="sub">kein Trend (Zeitraum zu kurz)</span>`;
-      const vals = series.map((p) => p.med);
+      if (!series || series.length < 2) return `<span class="sub">Trend: zu wenige bewertbare Zeitabschnitte</span>`;
+      const vals = series.map((p) => p.avg);
       const lo = Math.min(...vals), hi = Math.max(...vals), rng = hi - lo || 1;
       const W = 108, Hh = 26;
       const X = (i) => (i / (series.length - 1)) * (W - 2) + 1;
       const Y = (v) => Hh - 3 - ((v - lo) / rng) * (Hh - 6);
-      const pts = series.map((p, i) => `${X(i).toFixed(1)},${Y(p.med).toFixed(1)}`).join(" ");
+      const pts = series.map((p, i) => `${X(i).toFixed(1)},${Y(p.avg).toFixed(1)}`).join(" ");
       const last = series[series.length - 1];
       return `<svg class="spark" viewBox="0 0 ${W} ${Hh}" width="${W}" height="${Hh}" preserveAspectRatio="none">
         <polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="1.5" stroke-linejoin="round"/>
-        <circle cx="${X(series.length - 1).toFixed(1)}" cy="${Y(last.med).toFixed(1)}" r="2.2" fill="var(--accent)"/>
+        <circle cx="${X(series.length - 1).toFixed(1)}" cy="${Y(last.avg).toFixed(1)}" r="2.2" fill="var(--accent)"/>
       </svg>`;
     }
 
-    /* ---- Überblick: Engpass-Wasserfall + Befunde + Einstieg ---- */
+    /* ---- Überblick: Engpass · Phasenmediane + Befunde + Einstieg ---- */
     /* ═══ 1) PULS — Zustand der Periode auf einen Blick ═══ */
     _viewPuls(main) {
       const M = this._model;
       const hasYoY = this._yoy && this._yoy.length;
       const wrap = document.createElement("div");
       wrap.innerHTML = `
+        <div class="card"><h3>Qualität der ausgewählten Periode</h3><div id="gauges"></div></div>
         <div class="findings" id="findings"></div>
-        <div class="card"><h3>Datenqualität &amp; Abdeckung <span class="data-level">TE + Position</span></h3><div id="dq"></div></div>
-        <div class="card grow" style="margin-top:3mm"><h3>Durchsatz dieser Periode</h3><div id="throughput"></div></div>
         <div class="row" style="margin-top:3mm">
-          <div class="card grow"><h3>Engpass-Analyse · Median-Zeit je Prozessphase</h3><div id="waterfall"></div></div>
-          <div class="card"><h3>Bewertung · eigene Rechnung vs. SAP</h3><div id="gauges"></div></div>
+          <div class="card grow"><h3>Auffällige Prozessphasen · typische Dauer</h3><div id="waterfall"></div></div>
+          <div class="card grow"><h3>Mengen &amp; Verteilung der TEs</h3><div id="throughput"></div></div>
         </div>
+        <details class="ux-expand" data-ux-panel="quality"><summary>Datenqualität: ${M.kpis.nErrors} Fehlerfälle in ${M.kpis.nErrorTes} TE · Prüfdetails anzeigen</summary><div class="card"><h3>Datenqualität &amp; Abdeckung <span class="data-level">TE + Position</span></h3><div id="dq"></div></div></details>
+        <details class="ux-expand" data-ux-panel="roadmap"><summary>Geplante Erweiterungen · noch nicht berechenbar</summary><div class="card"><h3>Zielbild</h3><div id="roadmap"></div></div></details>
         <div class="collapsible-section" style="margin-top:3mm">
           <button class="collapse-toggle" id="toggleOutliers" type="button" aria-expanded="${this._showTopOutliers}">
             <span class="collapse-arrow">${this._showTopOutliers ? "▾" : "▸"}</span>
@@ -1983,6 +2548,7 @@
       this._pulsThroughput(wrap.querySelector("#throughput"));
       this._svgWaterfall(wrap.querySelector("#waterfall"));
       this._pulsGauges(wrap.querySelector("#gauges"));
+      this._renderRoadmap(wrap.querySelector("#roadmap"));
       this._topOutliers(wrap.querySelector("#topout"));
       if (hasYoY) this._renderYoY(wrap.querySelector("#yoy"));
 
@@ -2000,6 +2566,20 @@
       bindToggle("toggleYoY", "yoyCard", "_showYoY", "Vorjahresvergleich");
     }
 
+    _renderRoadmap(el) {
+      const items = [
+        ["Datenanbindung", "14-Monats-Zielbaseline", "Je Standort 14 vollständige historische Monate; die letzten 6 Wochen vor dem Vergleichszeitraum ausschließen. Separater BW-Baselinebestand fehlt."],
+        ["Geplant", "Entladungsrate", "Entladene DISTINCT TEs / alle geplanten DISTINCT TEs einschließlich No-Shows. Vollständiger Planbestand fehlt."],
+        ["Geplant", "Produktivität Entladung", "Paletten oder Kollis / Mitarbeiterstunden. Belastbare Paletten- und Mitarbeiterzuordnung fehlt."],
+        ["Geplant", "Produktivität Vereinnahmung", "Vereinnahmte HUs / Mitarbeiterstunden. HU-, Start- und Mitarbeiterdaten fehlen."],
+        ["Geplant", "Produktivität Einlagerung", "Eingelagerte HUs / Mitarbeiterstunden. HU- und Lageraufgabendaten fehlen."],
+        ["Geplant", "Gesamtproduktivität WE", "Bearbeitete TEs / gesamte Mitarbeiterstunden. REFA-Definition und vollständige Mitarbeiterzeiten fehlen."],
+        ["Phase 2", "Fehlerquote Vereinnahmung", "QM-Fehlerdaten, geprüfte HUs, Fehlerart und KR-User fehlen."],
+        ["Phase 2", "Torleichen / Einlagerungsfehler", "HU-ID, HU-Standort, Lagerbereich und belastbares Einlagerungsende fehlen."],
+      ];
+      el.innerHTML = `<div class="roadmap-grid">${items.map(([state,title,note]) => `<div class="roadmap-tile" aria-disabled="true"><span class="roadmap-state">${state} · deaktiviert</span><b>${title}</b><span>${note}</span></div>`).join("")}</div>`;
+    }
+
     /* Datenqualität & Abdeckung: welcher Anteil der für eine Analyse
        benötigten Felder ist im aktiven Filter technisch auswertbar?
        TE-Felder werden gegen die TE-Anzahl geprüft, Positionsfelder gegen
@@ -2008,7 +2588,7 @@
     _renderDatenqualitaet(el) {
       const M = this._model;
       const D = M.deliveries, P = M.positions;
-      const nD = D.length || 1, nP = P.length || 1;
+      const nD = D.length, nP = P.length;
       const teCore = D.filter(d => d.ts_ankunft instanceof Date && d.ts_angedockt instanceof Date
         && d.ts_entladen_start instanceof Date && d.ts_entladen_ende_eff instanceof Date && d.ts_abfahrt instanceof Date).length;
       const teFertig = D.filter(d => d.ts_einlagerung_last instanceof Date).length;
@@ -2018,18 +2598,28 @@
       const pPack = P.filter(p => p.standard_packmittel).length;
       const pIstSoll = P.filter(p => p.menge_ist != null && p.menge_soll != null).length;
       const pLief = P.filter(p => p.lieferant).length;
+      const pHierarchy = P.filter(p => p.belegnr && p.anlieferung && p.pos && p.positionKey).length;
+      const err = M.dataErrors || [];
+      const errMissing = err.filter(e => /fehlt|unvollständig|leer/i.test(e.phase || "")).length;
+      const errNegative = err.filter(e => (Number.isFinite(e.hours) && e.hours < 0) || /vor WE-Buchung/i.test(e.phase || "")).length;
+      const errConflict = err.filter(e => /widersprüch|mehreren TEs|ungültig/i.test(e.phase || "")).length;
       const rows = [
+        ["Hierarchie vollständig", pHierarchy, nP, "TE [0WM_TUNUM], Anlieferung [0WM_DOCNO] und Position [0WM_ITEMNO]"],
         ["TE-Kernzeitstempel", teCore, nD, "Ankunft, Andocken, Entladen Start/Ende, Abfahrt"],
-        ["Fertigstellung vorhanden", teFertig, nD, "Letzte Einlagerung/Fertigstellung je TE"],
+        ["Fertigstellung vollständig", teFertig, nD, "Alle geladenen Positionen abgeschlossen; letzte Fertigstellung je TE"],
         ["P/N vorhanden", tePn, nD, "BW-Pünktlichkeitskennzeichen je TE"],
         ["Spediteur gepflegt", teSped, nD, "Frachtführer je TE"],
         ["PA1 gepflegt", pPa1, nP, "Rechenbasis für Paletten"],
         ["Packmittel gepflegt", pPack, nP, "Standard-Packmittel am Produkt"],
-        ["IST/SOLL vorhanden", pIstSoll, nP, "Mengentreue-Berechnung"],
+        ["IST/SOLL vorhanden", pIstSoll, nP, "Mengentreue-Berechnung je Position"],
+        ["OTIF Position bewertbar", M.kpis.quality.otifPosition.n, M.kpis.quality.otifPosition.total, "OTIF pro Pos [BWMOTIF]"],
+        ["OTIF Anlieferung bewertbar", M.kpis.quality.otifDelivery.n, M.kpis.quality.otifDelivery.total, "OTIF je Anlieferung [BWMOTIFA]"],
         ["Lieferant gepflegt", pLief, nP, "Lieferantenanalyse"],
       ];
       el.innerHTML = `<div class="dq-grid">
-        <div class="dq-summary"><b>${D.length}</b> TE im Filter · <b>${P.length}</b> Positionen im Filter · <b>${M.dataErrors ? M.dataErrors.length : 0}</b> Datenfehler</div>
+        <div class="dq-summary"><b>${D.length}</b> TE · <b>${M.anlieferungen.length}</b> Anlieferungen · <b>${P.length}</b> Positionen<br>
+          Datenfehler: <b>${err.length}</b> Fälle in <b>${M.kpis.nErrorTes}</b> TE · fehlend/unvollständig ${errMissing} · negative Zeitkette ${errNegative} · Konflikt/ungültig ${errConflict}<br>
+          </div>
         ${rows.map(([label, ok, total, hint]) => {
           const pct = total ? (ok / total * 100) : 0;
           const col = pct >= 90 ? C.good : pct >= 60 ? C.warn : C.bad;
@@ -2063,26 +2653,19 @@
 
     /* Bewertungs-Kacheln: eigene Termintreue/Quote + SAP-Gegenprobe */
     _pulsGauges(el) {
-      const M = this._model, D = M.deliveries;
-      // eigene Termintreue (aus KPIs)
-      const ownOnTime = M.kpis.onTime != null ? M.kpis.onTime * 100 : null;
-      // SAP-Kennzeichen zählen
-      const cnt = (f, ok) => D.filter((d) => d[f] === ok).length;
-      const sapBase = (f, a, b) => { const n = cnt(f, a) + cnt(f, b); return n ? cnt(f, a) / n * 100 : null; };
-      const otif = sapBase("sap_otif", "O", "N");
-      const pkt = sapBase("sap_puenktlich", "P", "N");
-      const vol = sapBase("sap_vollstaendig", "V", "N");
-      const gauge = (label, val, sub) => {
-        if (val == null) return `<div class="gauge"><div class="gv">–</div><div class="gl">${label}</div><div class="gs">${sub}</div></div>`;
-        const col = val >= 90 ? C.good : val >= 75 ? C.warn : C.bad;
-        return `<div class="gauge"><div class="gv" style="color:${col}">${val.toFixed(1)}<span>%</span></div>
-          <div class="gl">${label}</div><div class="gs">${sub}</div></div>`;
-      };
+      const q = this._model.kpis.quality;
+      const gauge = (label, stat, source, key) => `<div class="gauge">
+        <div class="gv">${stat.rate == null ? "Nicht bewertbar" : (stat.rate * 100).toLocaleString('de-DE',{minimumFractionDigits:1,maximumFractionDigits:1}) + "<span>%</span>"}</div>
+        <div class="gl">${label}${WEUX.info(key,label+' erklären')}</div>
+        <div class="gs">${source} · ${stat.level}<br>${stat.ok} erfüllt / ${stat.n} bewertet · ${stat.total - stat.n} ohne Bewertung</div>
+      </div>`;
       el.innerHTML = `<div class="gauges">
-        ${gauge("Termintreue", ownOnTime, "eigene Rechnung")}
-        ${gauge("OTIF", otif, "SAP-Kennzeichen")}
-        ${gauge("Pünktlichkeit", pkt, "SAP-Kennzeichen")}
-        ${gauge("Vollständigkeit", vol, "SAP-Kennzeichen")}
+        ${gauge("OTIF · Position", q.otifPosition, "BW O/N",'otif_pos_quote')}
+        ${gauge("OTIF · Anlieferung", q.otifDelivery, "BW O/N",'otif_quote')}
+        ${gauge("Liefervollständigkeit", q.fullDelivery, "BW V/N",'voll_quote')}
+        ${gauge("BW-Pünktlichkeit", q.punctualTe, "BW P/N",'puenkt_quote')}
+        ${gauge("Mengentreue · Position", q.qtyPosition, "IST = SOLL",'qty_pos_quote')}
+        ${gauge("Mengentreue · Anlieferung", q.qtyDelivery, "Alle Positionen mengentreu",'qty_anl_quote')}
       </div>`;
     }
 
@@ -2091,7 +2674,7 @@
       const M = this._model, D = M.deliveries;
       const sum = (f) => { let s = 0, any = false; for (const d of D) { const v = d[f]; if (typeof v === "number" && !isNaN(v)) { s += v; any = true; } } return any ? s : null; };
       const menge = sum("sum_menge"), vol = sum("sum_volumen"), koll = sum("sum_kollis");
-      const fmt = (v) => (v == null || !v) ? "–" : (v >= 1000 ? (v/1000).toFixed(1)+"k" : Math.round(v).toString());
+      const fmt = (v) => v == null ? 'Nicht verfügbar' : v.toLocaleString('de-DE',{maximumFractionDigits:1});
       // Segmentverteilung (Anteil Anlieferungen)
       const bySeg = {};
       for (const d of D) bySeg[d.segment] = (bySeg[d.segment] || 0) + 1;
@@ -2102,10 +2685,8 @@
           <span class="tp-n">${n}</span></div>`).join("");
       el.innerHTML = `
         <div class="tp-kpis">
-          <div class="tp-k"><b>${D.length}</b><small>TE</small></div>
-          <div class="tp-k"><b>${M.kpis.nPositions}</b><small>Positionen</small></div>
-          <div class="tp-k"><b>${fmt(menge)}</b><small>Menge (Stück)</small></div>
-          <div class="tp-k"><b>${fmt(vol)}</b><small>Volumen</small></div>
+          <div class="tp-k"><b>${fmt(menge)}</b><small>Menge · ${esc(this._props.quantityUnit||'Rohsumme; Einheit unbestätigt')}</small></div>
+          <div class="tp-k"><b>${fmt(vol)}</b><small>Volumen · ${esc(this._props.volumeUnit||'Einheit unbestätigt')}</small></div>
           <div class="tp-k"><b>${fmt(koll)}</b><small>Kollis</small></div>
         </div>
         <div class="tp-segs">${bars}</div>`;
@@ -2125,7 +2706,7 @@
           <div class="card pk-legend-full" id="pkLegendFull" ${this._showPkLegend ? "" : "hidden"}></div>
         </div>
         <div class="card" style="margin-top:3mm; position:relative"><h3>Prozesskette je TE · von Ankunft bis letzter Einlagerung <span class="data-level">TE + Position</span></h3>
-          <div class="pk-hint-row">Transporteinheit + Transportmittel links · Hover über TE-Bezeichnung zeigt Anlieferungen/Positionen/Paletten · Hover über Balkenabschnitt zeigt Zeiten</div>
+          <div class="pk-hint-row">Balkenabschnitt anklicken oder berühren: Zeiten erklären · TE-Zeile anklicken: Anlieferungen und Positionen öffnen. Die Farben unterscheiden Prozessphasen, keine Qualitätsbewertung.</div>
           <div id="gantt"></div>
           <div class="pk-tooltip" id="pkTip" hidden></div>
         </div>`;
@@ -2159,13 +2740,13 @@
         ["#5d6d7e", "Wartezeit bis Andocken", "Ankunft am Kontrollpunkt bis Andocken der TE am Tor. TE-Ebene."],
         ["#2980b9", "Reaktionszeit", "Andocken bis tatsächlicher Start der Entladung. TE-Ebene."],
         ["#27ae60", "Entladen", "Start bis Ende der Entladung. TE-Ebene."],
-        ["#f39c12", "WE-Buchung", "Ende der TE-Entladung bis zur WE-Buchung der jeweiligen Position. Übergang von TE- zu Positionsebene."],
-        [C.accent, "Einlagern / Fertigstellung", "Letzte WE-Buchung bis zur zuletzt eingelagerten/fertiggestellten Position der gesamten TE. Positionsebene, TE-weit verdichtet."],
+        ["#f39c12", "Vereinnahmung", "Tatsächliches Ende Entladen bis zur letzten WE-Buchung der TE. Jede TE zählt einmal."],
+        [C.accent, "Einlagerung · Näherung", "Letzte WE-Buchung bis zur letzten Fertigstellung aller geladenen Positionen der TE. Jede TE zählt einmal."],
         [C.sonst, "Seetransport-Vorkette", "Nur bei Containern: Verschifft → Hafen → Verzollung → Depot → Ankunft Kontrollpunkt."],
       ];
       el.innerHTML = `
         <div class="pk-legend-title"><b>So liest du die Farben der Prozesskette</b>
-          <span>Buchung und Einlagerung sind positionsbezogene Vorgänge. Die Prozesskette verdichtet sie für die TE-Übersicht auf den jeweils letzten relevanten Zeitstempel — das ist eine verständliche TE-Gesamtsicht, keine Aussage, dass jede Position exakt gleichzeitig bearbeitet wurde.</span>
+          <span>Für Vereinnahmung, Einlagerung und operativen Wareneingang wird zuerst der Abschluss der gesamten TE gebildet. Fehlt der Abschluss einer geladenen Position, bleibt die betroffene TE-Kennzahl unbewertet. Fertigstellung dient bis zur HU-Anbindung als Näherung für die Einlagerung.</span>
         </div>
         ${rows.map(([c, t, d]) => `<div class="pk-legend-row"><i style="background:${c}"></i><div><b>${esc(t)}</b><span>${esc(d)}</span></div></div>`).join("")}
         <div class="pk-legend-note"><b>Wichtig:</b> Fehlt PA1 bei mindestens einer Position, ist die Palettenzahl der TE nicht vollständig berechenbar.</div>`;
@@ -2182,10 +2763,10 @@
           <span><i style="background:${C.outlier}"></i>Ausreißer</span>
           <span style="margin-left:auto">→ Zeile anklicken für vollständige TE-Details</span>
         </div>
-        <div class="card" style="flex:1 1 100%; width:100%"><h3>Standzeit über Zeit · MAD-Grenze je Segment</h3><div id="scatter"></div></div>
-        <div class="card" style="flex:1 1 100%; width:100%"><h3>Auffällige TEs (Top nach z-Score)</h3><div id="tbl"></div></div>`;
+        <div class="card" style="flex:1 1 100%; width:100%"><h3>Standzeit nach Planstart · statistische Vergleichsgrenze</h3><div id="scatter"></div></div>
+        <div class="card" style="flex:1 1 100%; width:100%"><h3>Statistisch auffällige TEs · nach Stärke der Abweichung</h3><div id="tbl"></div></div>`;
       main.appendChild(wrap);
-      const mode = { metric: "dwell", level: "delivery", label: "Standzeit", unit: "h", phases: ["wait_gate","reaction","unload"] };
+      const mode = { metric: "dwell", level: "te", label: "Standzeit", unit: "h", phases: ["wait_gate","reaction","unload"] };
       this._svgScatter(wrap.querySelector("#scatter"), M.deliveries, "dwell", mode);
       this._tblOutliers(wrap.querySelector("#tbl"), M.deliveries, "dwell", mode);
     }
@@ -2217,9 +2798,11 @@
       const M = this._model;
       const groups = {};
       for (const d of M.deliveries) {
-        const key = d[dim];
-        if (isNull(key)) continue;
-        (groups[key] ||= []).push(d);
+        if (d.phases?.dwell == null) continue;
+        for (const key of new Set(d._dimValues?.[dim] || [d[dim]])) {
+          if (isNull(key)) continue;
+          (groups[key] ||= []).push(d);
+        }
       }
       const rows = Object.entries(groups).map(([k, ds]) => {
         const dwells = ds.map((d) => d.phases && d.phases.dwell).filter((v) => v != null);
@@ -2328,10 +2911,10 @@
       const r = this._spediteurPuenktlichkeitRanking();
       const wrap = document.createElement("div");
       wrap.innerHTML = `
-        <div class="finding${r.excluded.length ? "" : " hidden"}">Mindestbasis ${this._props.minCarrierTe} bewertete TEs · ${r.excluded.length} Spediteur(e) wegen zu kleiner Datenbasis nicht gerankt.</div>
+        <div class="finding">Mindestbasis ${this._props.minCarrierTe} bewertete TEs · ${r.excluded.length} Spediteur(e) wegen zu kleiner Datenbasis nicht gerankt. Ein Ranking zeigt höchstens 10 Spediteure.</div>
         <div class="row">
           <div class="card"><h3>Top 10 · pünktlichste Spediteure <span class="data-level">TE</span></h3><div id="sp-top"></div></div>
-          <div class="card"><h3>Flop 10 · unpünktlichste Spediteure <span class="data-level">TE</span></h3><div id="sp-flop"></div></div>
+          <div class="card"><h3>10 Spediteure mit niedrigster BW-Pünktlichkeit <span class="data-level">TE</span></h3><div id="sp-flop"></div></div>
         </div>
         <div class="card drill-card" id="sp-drill" hidden></div>`;
       main.appendChild(wrap);
@@ -2357,12 +2940,11 @@
         const supplier = p.lieferant, dev = Number(p.qty_dev);
         if (!supplier || p.qty_dev == null || !Number.isFinite(dev)) continue;
         const key = String(supplier).trim();
-        const g = groups.get(key) || { name: key, okPos: 0, devPos: 0, totalPos: 0, underPos: 0, overPos: 0, sumAbsDev: 0, sumAbsPct: 0, relCount: 0, tes: new Set(), devTes: new Set() };
+        const g = groups.get(key) || { name: key, okPos: 0, devPos: 0, totalPos: 0, underPos: 0, overPos: 0, sumAbsDev: 0, sumAbsPct: 0, relCount: 0, tes: new Set() };
         if (dev === 0) g.okPos++; else {
           g.devPos++; g.sumAbsDev += Math.abs(dev);
           if (dev < 0) g.underPos++; else g.overPos++;
-          if (Number.isFinite(Number(p.qty_dev_pct))) { g.sumAbsPct += Math.abs(Number(p.qty_dev_pct)); g.relCount++; }
-          if (p.belegnr) g.devTes.add(String(p.belegnr));
+          if (p.qty_dev_pct != null && Number.isFinite(p.qty_dev_pct)) { g.sumAbsPct += Math.abs(p.qty_dev_pct); g.relCount++; }
         }
         g.totalPos++; if (p.belegnr) g.tes.add(String(p.belegnr)); groups.set(key, g);
       }
@@ -2370,7 +2952,6 @@
         name: g.name, okPos: g.okPos, devPos: g.devPos, totalPos: g.totalPos, underPos: g.underPos, overPos: g.overPos,
         nTe: g.tes.size, okRate: g.totalPos ? g.okPos / g.totalPos : NaN, devRate: g.totalPos ? g.devPos / g.totalPos : NaN,
         avgAbsDev: g.devPos ? g.sumAbsDev / g.devPos : 0, avgAbsPct: g.relCount ? g.sumAbsPct / g.relCount : 0,
-        affectedTeRate: g.tes.size ? g.devTes.size / g.tes.size : 0,
       }));
       const minBase = Math.max(1, Number(this._props.minSupplierPos) || 20);
       const eligible = all.filter(x => x.totalPos >= minBase), excluded = all.filter(x => x.totalPos < minBase);
@@ -2388,29 +2969,155 @@
       el.innerHTML = `<div class="rank-list">` + rows.map((r, i) => {
         const rate = isTop ? r.okRate : r.devRate;
         const pct = Math.max(0, Math.min(100, rate * 100));
-        return `<div class="rank-row" title="${esc(r.name)} · Ø|Δ| ${r.avgAbsDev.toFixed(1)} · Ø|Δ%| ${r.avgAbsPct.toFixed(1)}% · TE betroffen ${(r.affectedTeRate * 100).toFixed(1)}%">
+        return `<div class="rank-row rank-drillable" data-supplier="${esc(r.name)}" role="button" tabindex="0" aria-label="Positionen von ${esc(r.name)} analysieren" title="${esc(r.name)} · Positionen analysieren · Ø|Δ| ${r.avgAbsDev.toFixed(1)} · Ø|Δ%| ${r.avgAbsPct.toFixed(1)}% · Basis ${r.totalPos} Positionen">
           <span class="rank-no">${i + 1}</span>
           <span class="rank-name">${esc(r.name)}</span>
           <div class="rank-track"><i style="width:${pct.toFixed(1)}%;background:${col}"></i></div>
           <span class="rank-pct" style="color:${col}">${pct.toFixed(1)}%</span>
           <span class="rank-n"><b>✓ ${r.okPos}</b> · Δ ${r.devPos}<br>n=${r.totalPos} Pos · ${r.nTe} TE</span>
-          <span class="rank-severity">Unter <b>${r.underPos}</b> · Über <b>${r.overPos}</b> · Ø|Δ| <b>${r.avgAbsDev.toFixed(1)}</b> · Ø|Δ%| <b>${r.avgAbsPct.toFixed(1)}%</b> · TE betroffen <b>${(r.affectedTeRate * 100).toFixed(1)}%</b></span>
+          <span class="rank-severity">Unter <b>${r.underPos}</b> · Über <b>${r.overPos}</b> · Ø|Δ| <b>${r.avgAbsDev.toFixed(1)}</b> · Ø|Δ%| <b>${r.avgAbsPct.toFixed(1)}%</b></span>
         </div>`;
       }).join("") + `</div>`;
+    }
+
+    _viewKritisch(main) {
+      const M = this._model;
+      const all = M.positions.filter(p => p.positionKey);
+      const krit = all.filter(p => p.isKritArt);
+      const supplierMap = new Map(), categoryMap = new Map();
+      for (const p of all) {
+        const name = String(p.lieferant || "Nicht zugeordnet").trim();
+        const g = supplierMap.get(name) || {name, total:0, krit:0, tes:new Set()};
+        g.total++;
+        if (p.isKritArt) { g.krit++; if (p.belegnr) g.tes.add(p.belegnr); }
+        supplierMap.set(name, g);
+      }
+      for (const p of krit) {
+        const cat = String(p.kategorie_krit_art || "Nur Freitext").trim();
+        categoryMap.set(cat, (categoryMap.get(cat) || 0) + 1);
+      }
+      const suppliers = [...supplierMap.values()].filter(g => g.krit)
+        .map(g => ({...g, rate:g.total ? g.krit / g.total : null, nTes:g.tes.size}))
+        .sort((a,b) => b.krit-a.krit || b.rate-a.rate || a.name.localeCompare(b.name,"de"));
+      const maxSupplier = Math.max(1, ...suppliers.map(g => g.krit));
+      const cats = [...categoryMap.entries()].sort((a,b) => b[1]-a[1]);
+      const maxCat = Math.max(1, ...cats.map(([,n]) => n));
+      const fmtTs = t => t instanceof Date ? t.toLocaleDateString("de-DE") : "–";
+      const trend = M.trends.critical || [];
+      const maxTrend = Math.max(1, ...trend.map(x => x.krit));
+      const wrap = document.createElement("div");
+      wrap.innerHTML = `
+        <div class="finding">Kritisch bedeutet: Kategorie oder Freitext ist gesetzt. Produktbeschreibung und systemischer Mehraufwand sind noch nicht Teil der Datenbasis.</div>
+        <div class="row">
+          <div class="card"><h3>Kritische Positionen im Zeitverlauf <span class="data-level">Position</span></h3><div id="krit-trend"></div></div>
+          <div class="card"><h3>Kategorien <span class="data-level">Position</span></h3><div id="krit-cat"></div></div>
+        </div>
+        <div class="card"><h3>Lieferantenranking · kritische Positionen <span class="data-level">Position</span></h3><div id="krit-supplier"></div></div>
+        <div class="card"><h3>Details <span class="data-level">Position</span></h3><div id="krit-table"></div></div>`;
+      main.appendChild(wrap);
+      wrap.querySelector("#krit-trend").innerHTML = trend.length ? `<div class="rank-list">${trend.map(x => `<div class="rank-row"><span class="rank-name">${esc(x.period)}</span><div class="rank-track"><i style="width:${(100*x.krit/maxTrend).toFixed(1)}%;background:${C.accent}"></i></div><span class="rank-pct">${x.krit}</span><span class="rank-n">${x.n} Positionen gesamt · ${(100*x.krit/x.n).toFixed(1)} % kritisch</span></div>`).join("")}</div>` : `<div class="empty">Keine datierten kritischen Positionen.</div>`;
+      wrap.querySelector("#krit-cat").innerHTML = cats.length ? `<div class="rank-list">${cats.map(([name,n]) => `<div class="rank-row"><span class="rank-name">${esc(name)}</span><div class="rank-track"><i style="width:${(100*n/maxCat).toFixed(1)}%;background:${C.accent}"></i></div><span class="rank-pct">${n}</span></div>`).join("")}</div>` : `<div class="empty">Keine kritischen Kategorien im Filter.</div>`;
+      wrap.querySelector("#krit-supplier").innerHTML = suppliers.length ? `<div class="rank-list">${suppliers.map((g,i) => `<div class="rank-row"><span class="rank-no">${i+1}</span><span class="rank-name">${esc(g.name)}</span><div class="rank-track"><i style="width:${(100*g.krit/maxSupplier).toFixed(1)}%;background:${C.accent}"></i></div><span class="rank-pct">${g.krit}</span><span class="rank-n">${g.nTes} TE · ${g.total} Positionen gesamt · ${(100*g.rate).toFixed(1)} % kritisch</span></div>`).join("")}</div>` : `<div class="empty">Keine kritischen Lieferanten im Filter.</div>`;
+      this._renderPositionTable(wrap.querySelector('#krit-table'),{id:'critical-positions-table',key:'critical',rows:krit,columns:[...this._positionQuantityColumns().slice(0,6),{label:'Kategorie',html:p=>esc(p.kategorie_krit_art||'–')},{label:'Freitext',html:p=>esc(p.freitext_krit_art||'–')},{label:'Ereignisdatum',html:p=>p.ts_fertigstellung?'Fertigstellung: '+fmtTs(p.ts_fertigstellung):p.ts_we_pos?'WE-Buchung: '+fmtTs(p.ts_we_pos):p.ts_ankunft?'Ankunft: '+fmtTs(p.ts_ankunft):'Nicht übermittelt'}]});
+    }
+
+    _renderPositionTable(host, {id, key, rows, columns, deviations=false}) {
+      this._tableViews ||= {};
+      const state=this._tableViews[key] ||= {query:'',kind:'all',page:0};
+      const indexed=rows.map((p,i)=>({p,i,text:[p.belegnr,p.anlieferung,p.pos,p.lieferant,p.produkt,p.produkt_name,p.kategorie_krit_art,p.freitext_krit_art].filter(Boolean).join(' ').toLocaleLowerCase('de-DE')}));
+      host.innerHTML=`<div class="ux-table-controls"><input type="search" aria-label="TE, Lieferant oder Artikel suchen" placeholder="TE, Anlieferung, Lieferant oder Artikel suchen …" value="${esc(state.query)}">${deviations?'<select aria-label="Mengenabweichung filtern"><option value="all">Alle Abweichungen</option><option value="under">Unterlieferungen</option><option value="over">Überlieferungen</option></select>':''}<button type="button" data-page="prev">← Vorherige</button><span class="ux-meta" role="status" aria-live="polite"></span><button type="button" data-page="next">Nächste →</button></div><div class="ux-table-wrap"><table id="${id}"><thead><tr>${columns.map(c=>`<th scope="col"${c.numeric?' class="ux-number"':''}>${esc(c.label)}</th>`).join('')}</tr></thead><tbody></tbody></table></div>`;
+      const search=host.querySelector('input'),kind=host.querySelector('select'),tbody=host.querySelector('tbody'),status=host.querySelector('[role=status]'),prev=host.querySelector('[data-page=prev]'),next=host.querySelector('[data-page=next]');
+      if(kind)kind.value=state.kind;
+      const draw=()=>{
+        const q=state.query.trim().toLocaleLowerCase('de-DE');
+        const filtered=indexed.filter(({p,text})=>(!q||text.includes(q))&&(!deviations||state.kind==='all'||(state.kind==='under'?p.qty_dev<0:p.qty_dev>0)));
+        const size=50,pages=Math.max(1,Math.ceil(filtered.length/size));state.page=Math.max(0,Math.min(state.page,pages-1));
+        const start=state.page*size,part=filtered.slice(start,start+size);
+        tbody.innerHTML=part.map(({p,i})=>`<tr>${columns.map(c=>`<td${c.numeric?' class="ux-number"':''}>${c.html(p,i)}</td>`).join('')}</tr>`).join('')||`<tr><td colspan="${columns.length}">Keine passenden Positionen in der aktuellen Auswahl.</td></tr>`;
+        status.textContent=`${filtered.length?start+1:0}–${start+part.length} von ${filtered.length.toLocaleString('de-DE')} · Seite ${state.page+1}/${pages}`;
+        prev.disabled=state.page===0;next.disabled=state.page>=pages-1;
+      };
+      search.addEventListener('input',()=>{state.query=search.value;state.page=0;draw();});
+      kind?.addEventListener('change',()=>{state.kind=kind.value;state.page=0;draw();});
+      for(const [button,delta] of [[prev,-1],[next,1]])button.onclick=()=>{state.page+=delta;draw();host.querySelector('.ux-table-wrap').scrollTop=0;};
+      draw();
+    }
+
+    _positionQuantityColumns() {
+      const fmt=v=>v==null||!Number.isFinite(v)?'–':v.toLocaleString('de-DE',{maximumFractionDigits:9});
+      return [
+        {label:'TE',html:p=>p.belegnr?`<button type="button" class="back" data-drill="${esc(p.belegnr)}" aria-label="TE ${esc(p.belegnr)} öffnen">${esc(p.belegnr)}</button>`:'–'},
+        {label:'Anlieferung',html:p=>esc(p.anlieferung||'–')},{label:'Position',html:p=>esc(p.pos||'–')},
+        {label:'Lieferant',html:p=>esc(p.lieferant||'Nicht zugeordnet')},{label:'Artikel',html:p=>esc(p.produkt||'–')},
+        {label:'Artikelbezeichnung',html:p=>esc(p.produkt_name||'Nicht übermittelt')},
+        {label:'Sollmenge',numeric:true,html:p=>fmt(p.menge_soll)},{label:'Istmenge',numeric:true,html:p=>fmt(p.menge_ist)},
+        {label:'Differenzmenge (Ist − Soll)',numeric:true,html:p=>p.qty_dev==null?'Nicht bewertbar':`<span class="${p.qty_dev<0?'ux-deviation-negative':p.qty_dev>0?'ux-deviation-positive':''}">${p.qty_dev>0?'+':''}${fmt(p.qty_dev)}</span>`}
+      ];
+    }
+
+    _viewArtikelabweichungen(main) {
+      const all = this._model.positions;
+      const valid = p => p.qty_dev != null && Number.isFinite(p.qty_dev);
+      const rows = all.filter(p=>valid(p) && p.qty_dev!==0).sort((a,b)=>Math.abs(b.qty_dev)-Math.abs(a.qty_dev) || String(a.positionKey).localeCompare(String(b.positionKey),'de'));
+      const fmt = v => v == null || !Number.isFinite(Number(v)) ? '–' : Number(v).toLocaleString('de-DE',{maximumFractionDigits:3});
+      const stamp = v => v instanceof Date && Number.isFinite(v.getTime()) ? v.toLocaleString('de-DE',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'}) : 'Nicht übermittelt';
+      const card = document.createElement('div'); card.className='card';
+      card.innerHTML=`<h3>Größte Mengenabweichungen · Artikelpositionen <span class="data-level">Position</span></h3>
+        <p class="ux-meta">${rows.length} abweichende Positionen · ${all.filter(p=>!valid(p)).length} nicht bewertbar. Sortierung: größte absolute Differenz zuerst. Differenzmenge = Ist − Soll; Minus: Unterlieferung, Plus: Überlieferung.</p>
+        <p class="ux-meta">Jede Zeile ist eine Anlieferposition; derselbe Artikel kann mehrfach erscheinen. Zeitraum nach „Geplanter Start ab“. WE-Buchung zeigt den Buchungszeitpunkt der Position.</p>
+        <p class="ux-meta">Mengeneinheit: ${esc(this._props.quantityUnit||'nicht übermittelt; Vergleich der Rohmengen nur bei gleicher Einheit aussagekräftig')}.</p>
+        <div id="article-positions"></div>`;
+      main.appendChild(card);
+      this._renderPositionTable(card.querySelector('#article-positions'),{id:'artikelabweichungen-table',key:'articles',rows,deviations:true,columns:[{label:'Rang',html:(_,i)=>i+1},...this._positionQuantityColumns(),{label:'WE gebucht am',html:p=>stamp(p.ts_we_pos)}]});
     }
 
     _viewLieferanten(main) {
       const r = this._lieferantMengenRanking();
       const wrap = document.createElement("div");
       wrap.innerHTML = `
-        <div class="finding${r.excluded.length ? "" : " hidden"}">Mindestbasis ${this._props.minSupplierPos} bewertbare Positionen · ${r.excluded.length} Lieferant(en) wegen zu kleiner Datenbasis nicht gerankt.</div>
+        <div class="finding">Mindestbasis ${this._props.minSupplierPos} bewertbare Positionen · ${r.excluded.length} Lieferant(en) wegen zu kleiner Datenbasis nicht gerankt. Lieferanten anklicken, um ihre Positionen zu analysieren.</div>
         <div class="row">
           <div class="card"><h3>Top 10 · höchste Mengentreue <span class="data-level">Position</span></h3><div id="lf-top"></div></div>
-          <div class="card"><h3>Flop 10 · höchste Abweichungsquote <span class="data-level">Position</span></h3><div id="lf-flop"></div></div>
-        </div>`;
+          <div class="card"><h3>10 Lieferanten mit höchster Abweichungsquote <span class="data-level">Position</span></h3><div id="lf-flop"></div></div>
+        </div>
+        <div class="card" id="lf-drill" hidden></div>`;
       main.appendChild(wrap);
       this._renderLieferantRanking(wrap.querySelector("#lf-top"), r.top, "top");
       this._renderLieferantRanking(wrap.querySelector("#lf-flop"), r.flop, "flop");
+      const drill = wrap.querySelector('#lf-drill');
+      const showSupplier = (name, scroll = true) => {
+        this._supplierDetail = name;
+        this._renderLieferantDetails(drill, name);
+        if (scroll) { drill.scrollIntoView?.({block:'start',behavior:'smooth'}); drill.querySelector('h3')?.focus({preventScroll:true}); }
+      };
+      wrap.addEventListener('click', e => { const row=e.target.closest('[data-supplier]'); if(row) showSupplier(row.dataset.supplier); });
+      wrap.addEventListener('keydown', e => { const row=e.target.closest('[data-supplier]'); if(row && (e.key==='Enter'||e.key===' ')){e.preventDefault();showSupplier(row.dataset.supplier);} });
+      if(this._supplierDetail) showSupplier(this._supplierDetail, false);
+      const card = document.createElement("div"); card.className = "card";
+      card.innerHTML = `<h3>Mengentreue und Qualität · Anlieferung</h3><div id="lf-anl"></div>`;
+      const panel = document.createElement('details');
+      panel.className = 'ux-expand'; panel.dataset.uxPanel = 'lieferanten-anlieferungen';
+      panel.innerHTML = '<summary>Mengentreue und Qualität · Anlieferung</summary>';
+      panel.appendChild(card); wrap.appendChild(panel);
+      const deliveries=this._model.anlieferungen;let drawn=false;
+      const draw=()=>{if(panel.open&&!drawn){this._tblAnlieferungen(card.querySelector('#lf-anl'),deliveries);drawn=true;}};
+      panel.addEventListener('toggle',draw);
+      if(this._uxPanels?.['lieferanten-anlieferungen']) {panel.open=true;draw();}
+    }
+
+    _renderLieferantDetails(el, name) {
+      const positions = this._model.positions.filter(p => String(p.lieferant||'').trim() === name);
+      const fmt = value => value == null || !Number.isFinite(Number(value)) ? '–' : Number(value).toLocaleString('de-DE',{maximumFractionDigits:3});
+      const signed = value => value == null || !Number.isFinite(Number(value)) ? 'Nicht bewertbar' : (value>0?'+':'')+fmt(value);
+      const evaluated = positions.filter(p=>p.qty_dev!=null && Number.isFinite(p.qty_dev));
+      el.hidden=false;
+      el.innerHTML=`<button type="button" class="back" id="lf-close">← Zurück zum Lieferantenranking</button>
+        <h3 tabindex="-1">Positionsanalyse · ${esc(name)}</h3>
+        <p class="ux-meta">${positions.length} Positionen · ${evaluated.length} bewertbar · ${evaluated.filter(p=>p.qty_dev!==0).length} mit Mengenabweichung. Abweichung = Ist − Soll; negativ: Unterlieferung, positiv: Überlieferung.</p>
+        <p class="ux-meta">Mengeneinheit: ${esc(this._props.quantityUnit || 'nicht übermittelt; Werte in der jeweiligen Quelleneinheit')}. Keine Summierung über unterschiedliche Einheiten.</p>
+        <div id="supplier-positions"></div>`;
+      this._renderPositionTable(el.querySelector('#supplier-positions'),{id:'supplier-positions-table',key:'supplier:'+name,rows:positions,columns:this._positionQuantityColumns().filter(c=>c.label!=='Lieferant')});
+      el.querySelector('#lf-close').onclick=()=>{this._supplierDetail=null;el.hidden=true;const row=[...this._shadow.querySelectorAll('[data-supplier]')].find(r=>r.dataset.supplier===name);row?.scrollIntoView?.({block:'center'});row?.focus({preventScroll:true});};
     }
 
     /* ═══ 4c) WARENGRUPPENANALYSE — WE-Durchlaufzeit je Warengruppe ═══
@@ -2423,11 +3130,12 @@
       const teHwg = new Map();
       for (const p of P) {
         const fertig = p.ts_fertigstellung || p.ts_einlagerung;
-        if (!p.hwg || !(p.ts_ankunft instanceof Date) || !(fertig instanceof Date)) continue;
-        const te = String(p.belegnr || "?").trim();
+        if (!p.hwg || !p.belegnr || !p.positionKey || p.hierarchyConflict) continue;
+        const te = String(p.belegnr).trim();
         const hwg = String(p.hwg).trim();
         const key = te + "\u0001" + hwg;
-        const g = teHwg.get(key) || { te, hwg, ankunft: null, ende: null, nPos: 0 };
+        const g = teHwg.get(key) || { te, hwg, ankunft: null, ende: null, nPos: 0, invalid:false };
+        if(!(p.ts_ankunft instanceof Date)||!(fertig instanceof Date)||fertig<p.ts_ankunft)g.invalid=true;
         if (!g.ankunft || p.ts_ankunft < g.ankunft) g.ankunft = p.ts_ankunft;
         if (!g.ende || fertig > g.ende) g.ende = fertig;
         g.nPos++;
@@ -2435,6 +3143,7 @@
       }
       const byHwg = new Map();
       for (const g of teHwg.values()) {
+        if(g.invalid)continue;
         const h = (g.ende - g.ankunft) / H;
         if (!Number.isFinite(h) || h < 0) continue;
         const r = byHwg.get(g.hwg) || { name: g.hwg, sumH: 0, nTe: 0, nPos: 0, minH: Infinity, maxH: -Infinity, values: [] };
@@ -2480,7 +3189,7 @@
         <div class="legend">
           <span><i style="background:${SH_COLORS["F"]}"></i>Frühschicht (F)</span>
           <span><i style="background:${SH_COLORS["S"]}"></i>Spätschicht (S)</span>
-          <span style="margin-left:auto">Zuordnung: Phase → Schicht, in der die Phase endet</span>
+          <span style="margin-left:auto">Schichtlage aus BW · Mannschaften wechseln wöchentlich</span>
         </div>
         <div class="row">
           <div class="card"><h3>Durchsatz je Schicht</h3><div id="sch-tp"></div></div>
@@ -2500,16 +3209,37 @@
     // Schichtlage einer Anlieferung/Position für eine Phase: F/S -> Früh/Spät
     _lageOf(rec, shField) { const s = rec[shField]; return s === "F" ? "F" : s === "S" ? "S" : null; }
 
-    // Durchsatz je Schicht (Ankunfts-Schicht als Grundlage)
+    _palettenJeEinlagerungsschicht() {
+      return this._palettenJeSchicht('sh_einl');
+    }
+
+    _palettenJeSchicht(schichtfeld) {
+      const result = {F:{paletten:0,positionen:0},S:{paletten:0,positionen:0},ungueltig:0,ohneSchicht:0};
+      for(const p of this._model.positions) {
+        const paletten = p.paletten;
+        if(paletten==null || !Number.isFinite(paletten)) { result.ungueltig++; continue; }
+        const schicht = String(p[schichtfeld]||'').trim().toUpperCase();
+        if(schicht!=='F' && schicht!=='S') { result.ohneSchicht++; continue; }
+        result[schicht].paletten += paletten; result[schicht].positionen++;
+      }
+      return result;
+    }
+
+    // TE/Mengen nach Ankunft; Paletten nach der BW-Schicht des jeweiligen Prozessschritts.
     _schThroughput(el) {
       const M = this._model;
+      const stages = [
+        {key:'unload',label:'Entladene Paletten',field:'sh_entl_tat',source:'Z.Sh. Tats. Ende Ent'},
+        {key:'booking',label:'WE-gebuchte Paletten',field:'sh_we',source:'Z.Sh. WE gebucht'},
+        {key:'putaway',label:'Eingelagerte Paletten',field:'sh_einl',source:'Z.Sh. Einl. Ende'}
+      ].map(stage=>({...stage,stats:this._palettenJeSchicht(stage.field)}));
       const agg = { F: { anl: 0, pos: 0, menge: 0, vol: 0 }, S: { anl: 0, pos: 0, menge: 0, vol: 0 } };
       for (const d of M.deliveries) {
         const l = this._lageOf(d, "sh_ankunft"); if (!l) continue;
         agg[l].anl++; agg[l].pos += d.nPos || 0;
         agg[l].menge += d.sum_menge || 0; agg[l].vol += d.sum_volumen || 0;
       }
-      const fmt = (v) => !v ? "–" : v >= 1e6 ? (v/1e6).toFixed(1)+"M" : v >= 1000 ? (v/1000).toFixed(1)+"k" : Math.round(v).toString();
+      const fmt = (v) => v==null || !Number.isFinite(v) ? "–" : v.toLocaleString('de-DE',{maximumFractionDigits:1});
       const col = (l) => SH_COLORS[l];
       const block = (l, name) => `
         <div class="sch-col" style="border-top:3px solid ${col(l)}">
@@ -2519,9 +3249,15 @@
             <div><b>${agg[l].pos}</b><small>Positionen</small></div>
             <div><b>${fmt(agg[l].menge)}</b><small>Menge</small></div>
             <div><b>${fmt(agg[l].vol)}</b><small>Volumen</small></div>
+            ${stages.map(stage=>`<div style="grid-column:1/-1"><b data-pallet-stage="${stage.key}" data-shift="${l}" ${stage.key==='putaway'?`data-putaway-pallets="${l}"`:''} style="font-size:22px">${stage.stats[l].positionen ? stage.stats[l].paletten.toLocaleString('de-DE') : 'Nicht bewertbar'}</b><small>${stage.label} · ${stage.stats[l].positionen} Positionen</small></div>`).join('')}
           </div>
         </div>`;
-      el.innerHTML = `<div class="sch-cols">${block("F", "Frühschicht")}${block("S", "Spätschicht")}</div>`;
+      el.innerHTML = `<p class="ux-meta">TE und Mengen nach Ankunftsschicht; Paletten nach der Schicht des jeweiligen Prozessschritts.</p><div class="sch-cols">${block("F", "Frühschicht")}${block("S", "Spätschicht")}</div>
+        <details class="ux-expand" data-ux-panel="schicht-paletten"><summary>Berechnung und Schichtzuordnung</summary>
+        <p class="ux-meta">Paletten = Summe der je Anlieferposition aufgerundeten Werte (Menge Anlieferung IST ÷ PA1). Jede eindeutige Position zählt je Prozessschritt einmal. F = Frühschicht, S = Spätschicht. Die drei Prozesssummen dürfen nicht zu einer Gesamtpalettenzahl addiert werden.</p>
+        ${stages.map(stage=>`<p class="ux-meta"><strong>${stage.label}</strong>: Zuordnung nach „${stage.source}“. Ausgeschlossen: ${stage.stats.ungueltig} Positionen wegen fehlender/ungültiger Istmenge, PA1 oder widersprüchlicher Daten; ${stage.stats.ohneSchicht} weitere Positionen ohne gültige Schicht F/S für diesen Schritt.</p>`).join('')}
+        <p class="ux-meta">Entladen verwendet das vereinbarte tatsächliche Entladeende. PA1 muss größer als null sein. Es wird jeweils dieselbe Istmenge in Paletten umgerechnet; tatsächliche HU-Zählungen liegen hier nicht zugrunde.</p>
+        <p class="ux-meta">TE, Positionen, Menge und Volumen oben beziehen sich auf die Ankunftsschicht. Die Paletten beziehen sich auf die Schicht des jeweiligen Prozessschritts. Der Zeitraum bleibt nach „Geplanter Start ab“ gefiltert; keine Auswahl nach Buchungs- oder Einlagerungsdatum.</p></details>`;
     }
 
     // Median-Zeit je Phase, gruppierte Balken Früh vs. Spät
@@ -2531,8 +3267,9 @@
         ["wait_gate", "Wartezeit Tor", "sh_andocken", "delivery"],
         ["reaction", "Reaktion", "sh_entl_start", "delivery"],
         ["unload", "Entladen", "sh_unload_eff", "delivery"],
-        ["booking", "Buchung", "sh_we", "position"],
-        ["putaway", "Einlagerung", "sh_einl", "position"],
+        ["booking", "Vereinnahmung", "sh_we", "te"],
+        ["putaway", "Einlagerung · Näherung", "sh_einl", "te"],
+        ["operative", "Operativer WE · Näherung", "sh_einl", "te"],
         ["dwell", "Standzeit", "sh_entl", "delivery"],
       ];
       const rows = phaseDefs.map(([key, label, shField, level]) => {
@@ -2560,21 +3297,27 @@
     // Termintreue + Ausreißer-Anteil je Schicht
     _schQuality(el) {
       const M = this._model;
-      const agg = { F: { n: 0, onTime: 0, out: 0 }, S: { n: 0, onTime: 0, out: 0 } };
+      const agg = { F: { n: 0, timeN: 0, outN: 0, onTime: 0, out: 0 }, S: { n: 0, timeN: 0, outN: 0, onTime: 0, out: 0 } };
       for (const d of M.deliveries) {
         const l = this._lageOf(d, "sh_entl"); if (!l) continue;
         agg[l].n++;
-        if (d.phases && d.phases.delay != null && d.phases.delay <= (M.cfg.toleranzMin || 0) / 60) agg[l].onTime++;
-        if (d.outlier && (d.outlier.dwell || d.outlier.unload || d.outlier.wait_gate)) agg[l].out++;
+        if (d.phases?.delay != null) {
+          agg[l].timeN++;
+          if (d.phases.delay <= (M.cfg.toleranzMin ?? 30) / 60) agg[l].onTime++;
+        }
+        if (["dwell", "unload", "wait_gate"].some(k => d.phases?.[k] != null)) {
+          agg[l].outN++;
+          if (d.outlier && (d.outlier.dwell || d.outlier.unload || d.outlier.wait_gate)) agg[l].out++;
+        }
       }
       const pct = (a, b) => b ? (a / b * 100) : null;
       const rowFor = (l, name) => {
-        const ot = pct(agg[l].onTime, agg[l].n), or = pct(agg[l].out, agg[l].n);
-        const otCol = ot == null ? C.muted : ot >= 90 ? C.good : ot >= 75 ? C.warn : C.bad;
+        const ot = pct(agg[l].onTime, agg[l].timeN), or = pct(agg[l].out, agg[l].outN);
+        const otCol = C.ink;
         return `<div class="sch-q-row">
           <span class="sch-q-name"><i style="background:${SH_COLORS[l]}"></i>${name}</span>
-          <div class="sch-q-metric"><span class="sch-q-v" style="color:${otCol}">${ot==null?"–":ot.toFixed(0)+"%"}</span><small>termintreu</small></div>
-          <div class="sch-q-metric"><span class="sch-q-v" style="color:${or>0?C.outlier:C.ink}">${or==null?"–":or.toFixed(0)+"%"}</span><small>Ausreißer</small></div>
+          <div class="sch-q-metric"><span class="sch-q-v" style="color:${otCol}">${ot==null?"–":ot.toFixed(0)+"%"}</span><small>termintreu · Basis ${agg[l].timeN} TE</small></div>
+          <div class="sch-q-metric"><span class="sch-q-v" style="color:${or>0?C.outlier:C.ink}">${or==null?"–":or.toFixed(0)+"%"}</span><small>Ausreißer · Basis ${agg[l].outN} TE</small></div>
           <div class="sch-q-metric"><span class="sch-q-v">${agg[l].n}</span><small>TE</small></div>
         </div>`;
       };
@@ -2616,44 +3359,23 @@
         `<div class="finding ${x.tone}"><i></i><span>${esc(x.text)}</span></div>`).join("");
     }
 
-    /* Engpass-Wasserfall: Phasen als aufeinander aufbauende Balken, Top-Engpass betont. */
+    /* Unabhängige Phasenmediane sind nicht zu einer Gesamtdauer addierbar. */
     _svgWaterfall(el) {
-      const M = this._model, bn = M.bottleneck;
-      if (!bn || !bn.length) { el.innerHTML = `<div class="empty">Zu wenige Daten für die Engpass-Analyse.</div>`; return; }
-      const order = ["wait_gate", "reaction", "unload", "booking", "putaway"];
-      const steps = order.map((k) => bn.find((b) => b.key === k)).filter(Boolean);
-      const topKey = bn[0].key;
-      const total = steps.reduce((a, s) => a + s.med, 0) || 1;
-      // Skala: die Streuung (P75) kann die Median-Summe deutlich überragen —
-      // deshalb an der tatsächlichen visuellen Ausdehnung ausrichten, nicht nur an der Summe.
-      let cumScan = 0, maxExtent = total;
-      for (const s of steps) { maxExtent = Math.max(maxExtent, cumScan + s.p75); cumScan += s.med; }
-      const W = 380, rowH = 40, padL = 96, padR = 34, H0 = steps.length * rowH + 30;
-      const barW = W - padL - padR;
-      const X = (v) => (v / maxExtent) * barW;
-      let cum = 0;
-      let svg = `<svg viewBox="0 0 ${W} ${H0}" width="100%" role="img" aria-label="Engpass-Wasserfall">`;
+      const bn = this._model.bottleneck;
+      if (!bn?.length) { el.innerHTML = `<div class="empty">Zu wenige Daten für die Engpass-Analyse.</div>`; return; }
+      const steps = ["wait_gate", "reaction", "unload", "booking", "putaway"].map(k => bn.find(b => b.key === k)).filter(Boolean);
+      const W = 460, rowH = 46, padL = 160, barW = 230;
+      const maxV = Math.max(0.1, ...steps.map(s => s.p75));
+      let svg = `<svg viewBox="0 0 ${W} ${steps.length * rowH + 30}" width="100%" role="img" aria-label="Phasenmediane je TE">`;
       steps.forEach((s, i) => {
-        const y = i * rowH + 6;
-        const isTop = s.key === topKey;
-        const x = padL + X(cum), w = Math.max(2, X(s.med));
-        // Verbindungslinie zum nächsten Balken (Wasserfall-Treppe)
-        if (i > 0) svg += `<line x1="${padL + X(cum)}" x2="${padL + X(cum)}" y1="${y - 6}" y2="${y}" stroke="${C.border}" stroke-dasharray="2 2"/>`;
-        svg += `<text x="0" y="${y + 17}" font-size="11.5" fill="${isTop ? C.accent : C.ink}" font-weight="${isTop ? 700 : 500}">${s.label}</text>`;
-        // Streuungsmarke (P75) zuerst zeichnen, damit das Label darüber lesbar bleibt
-        const wSpread = Math.max(0, X(s.p75) - X(s.med));
-        if (wSpread > 1) svg += `<rect x="${x + w}" y="${y + 10}" width="${wSpread}" height="8" rx="2" fill="${isTop ? C.accent : C.ink2}" opacity="0.18"><title>Streuung bis P75: ${fmtH(s.p75)}</title></rect>`;
-        svg += `<rect x="${x}" y="${y + 4}" width="${w}" height="20" rx="3"
-                  fill="${isTop ? C.accent : C.ink2}" opacity="${isTop ? 1 : 0.32}">
-                  <title>${s.label}: Median ${fmtH(s.med)}, P75 ${fmtH(s.p75)}</title></rect>`;
-        // Label direkt hinter dem Median-Balken (stabil, unabhängig von der Streuungslänge)
-        svg += `<text x="${x + w + 5}" y="${y + 18}" font-size="10.5" fill="${C.muted}">${fmtH(s.med)}</text>`;
-        cum += s.med;
+        const y = i * rowH + 6, col = s.key === bn[0].key ? C.accent : C.ink2;
+        const w = s.med / maxV * barW, spread = s.p75 / maxV * barW;
+        svg += `<text x="0" y="${y + 17}" font-size="11" fill="${C.ink}">${esc(s.label)}</text>
+          <rect x="${padL}" y="${y + 10}" width="${spread}" height="8" rx="2" fill="${col}" opacity=".2"><title>P75 ${fmtH(s.p75)}</title></rect>
+          <rect x="${padL}" y="${y + 4}" width="${Math.max(1, w)}" height="20" rx="3" fill="${col}"><title>Median ${fmtH(s.med)} · n=${this._model.kpis.phaseStats[s.key].n} TE</title></rect>
+          <text x="${padL + w + 4}" y="${y + 18}" font-size="10" fill="${C.muted}">${fmtH(s.med)}</text>`;
       });
-      svg += `<line x1="${padL}" x2="${padL}" y1="4" y2="${H0 - 18}" stroke="${C.border}"/>`;
-      svg += `<text x="${padL}" y="${H0 - 4}" font-size="10" fill="${C.muted}">Summe Median-Durchlaufzeit: ${fmtH(total)}</text>`;
-      svg += `<text x="${W - padR + 4}" y="${H0 - 4}" font-size="9" fill="${C.muted}" text-anchor="end">▏ heller Balken = Streuung bis P75</text>`;
-      el.innerHTML = svg + "</svg>";
+      el.innerHTML = svg + `<text x="0" y="${steps.length * rowH + 22}" font-size="10" fill="${C.muted}">Median je Phase · jede TE einmal · heller Balken bis P75</text></svg>`;
     }
 
     /* Kompakte Einstiegs-Liste: die auffälligsten Anlieferungen, klickbar. */
@@ -2676,7 +3398,7 @@
     /* ---- gemeinsame Metrik-Ansicht (Hof / Lager / Termin) ---- */
     _viewMetric(main, mode) {
       const M = this._model;
-      const recs = mode.level === "delivery" ? M.deliveries : M.positions;
+      const recs = mode.level === "te" ? M.deliveries : M.positions;
       const metric = mode.metric;
       const hasDrivers = M.drivers && M.drivers[metric];
       const wrap = document.createElement("div");
@@ -2693,7 +3415,7 @@
           <div class="card" style="flex:2 1 460px"><h3>${esc(PHASES[metric] ? PHASES[metric].label : mode.label)} über Zeit · MAD-Grenze je Segment</h3><div id="scatter"></div></div>
         </div>
         ${hasDrivers ? `<div class="card"><h3>Treiber nach Stammdaten-Dimension (Ausreißer-Anteil)</h3><div id="drv"></div></div>` : ""}
-        <div class="card"><h3>Auffällige ${mode.level === "delivery" ? "TEs" : "Positionen"} (Top nach z-Score)</h3><div id="tbl"></div></div>`;
+        <div class="card"><h3>Auffällige ${mode.level === "te" ? "TEs" : "Positionen"} (Top nach z-Score)</h3><div id="tbl"></div></div>`;
       main.appendChild(wrap);
       if (mode.phases.length) this._svgRibbon(wrap.querySelector("#ribbon"), recs, mode.phases);
       this._svgScatter(wrap.querySelector("#scatter"), recs, metric, mode);
@@ -2900,8 +3622,8 @@
 
     /* ---- Scatter mit MAD-Grenzband ---- */
     _svgScatter(el, recs, metric, mode) {
-      const pts = recs.filter((r) => r.phases[metric] != null && r["ts_" + (metric === "delay" ? "ankunft" : metric === "putaway" || metric === "booking" ? "we_pos" : "ankunft")]);
-      const tsField = metric === "putaway" || metric === "booking" ? "ts_we_pos" : "ts_ankunft";
+      const pts = recs.filter((r) => r.phases[metric] != null && r.ts_geplant_start);
+      const tsField = "ts_geplant_start";
       if (!pts.length) { el.innerHTML = `<div class="empty">Keine Werte für diese Metrik.</div>`; return; }
       const xs = pts.map((p) => +p[tsField]);
       const x0 = Math.min(...xs);
@@ -2973,22 +3695,21 @@
           ${phasesCells}</tr>`;
       }).join("");
       el.innerHTML = `<table><thead><tr>
-        <th>Beleg/Pos</th><th>Datum</th><th>Lieferant</th><th>Ladestelle</th>
+        <th>Beleg/Pos</th><th>Ereignisdatum · siehe Angabe</th><th>Lieferant</th><th>Ladestelle</th>
         <th>${esc(PHASES[metric].label)}</th><th>z</th>
         ${mode.phases.map((k) => `<th>${PHASES[k].label}</th>`).join("")}
       </tr></thead><tbody>${rows}</tbody></table>`;
     }
 
     /* ---- TE-Detailansicht (Drill-down) ---- */
-    // Prozess-Status einer TE aus dem weitesten erreichten Zeitstempel ableiten
+      // Dokumentierten Bearbeitungsstand aus dem historischen Datenauszug ableiten.
     _teStatus(d, pos) {
       const has = (t) => t instanceof Date;
-      const einl = pos.some((p) => has(p.ts_einlagerung));
-      const web = pos.some((p) => has(p.ts_we_pos)) || has(d.ts_we_pos);
-      if (einl) return { key: "eingelagert", label: "Eingelagert", step: 5, col: C.container || "#27ae60" };
-      if (web) return { key: "gebucht", label: "WE gebucht", step: 4, col: "#16a085" };
-      if (has(d.ts_entladen_ende_eff)) return { key: "entladen_fertig", label: "Entladen", step: 3, col: "#3d9ad6" };
-      if (has(d.ts_entladen_start)) return { key: "entladen", label: "Wird entladen", step: 2, col: "#3d9ad6" };
+      if (d.fertigVollstaendig && d.phases.operative != null) return { key: "eingelagert", label: "Fertiggestellt · Näherung", step: 4, col: C.container || "#27ae60" };
+      if (d.nFertig) return { key: "teilfertig", label: `Fertigstellung ${d.nFertig}/${d.nPos} Pos.`, step: d.buchungVollstaendig ? 3 : 2, col: "#f5b041" };
+      if (d.buchungVollstaendig) return { key: "gebucht", label: "WE gebucht", step: 3, col: "#16a085" };
+      if (has(d.ts_entladen_ende_eff)) return { key: "entladen_fertig", label: "Entladen", step: 2, col: "#3d9ad6" };
+      if (has(d.ts_entladen_start)) return { key: "entladen", label: "Entladung gestartet · letzter Datenstand", step: 2, col: "#3d9ad6" };
       if (has(d.ts_angedockt)) return { key: "angedockt", label: "Angedockt", step: 1, col: "#f5b041" };
       if (has(d.ts_ankunft)) return { key: "ankunft", label: "Angekommen", step: 0, col: "#f5b041" };
       return { key: "erwartet", label: "Erwartet", step: -1, col: C.muted };
@@ -3018,7 +3739,7 @@
       const warns = [];
       for (const k of ["dwell", "wait_gate", "unload", "delay"])
         if (d.outlier && d.outlier[k]) warns.push(`<span class="dwarn w-warn">⚠ Ausreißer ${PHASES[k].label}</span>`);
-      if (pos.some((p) => p.outlier && p.outlier.putaway)) warns.push(`<span class="dwarn w-warn">⚠ Ausreißer Einlagerung</span>`);
+      if (d.outlier?.putaway) warns.push(`<span class="dwarn w-warn">⚠ Ausreißer Einlagerung</span>`);
       if (pos.some((p) => p.outlier && p.outlier.qty)) warns.push(`<span class="dwarn w-warn">⚠ Mengenabweichung</span>`);
       if (d.isDiffLieferung) warns.push(`<span class="dwarn w-krit">Differenzlieferung</span>`);
       if (pos.some((p) => p.isKritArt)) warns.push(`<span class="dwarn w-krit">Kritischer Artikel</span>`);
@@ -3035,13 +3756,14 @@
       const wrap = document.createElement("div");
       wrap.innerHTML = `
         <div class="crumbs">
-          <button class="back" id="back">← Zurück zur Übersicht</button>
+          <button class="back" id="back">← Zurück: ${esc(MODES.find(m=>m.id===this._mode)?.label||'Periodenüberblick')}</button>
+          <span class="ux-meta">Detailanalyse → ${esc(MODES.find(m=>m.id===this._mode)?.label||'')} → TE ${esc(d.belegnr)}</span>
         </div>
         <div class="detail-head s-${status.key}">
           <div class="dh-top">
             <div>
               <div class="dh-te">TE ${esc(d.belegnr)}</div>
-              <div class="dh-sub">${esc(d.lieferant || "–")}${d.te_extern ? " · " + esc(d.te_extern) : ""}</div>
+              <div class="dh-sub">${esc(d._dimValues.lieferant.join(", ") || "–")}${d.te_extern ? " · " + esc(d.te_extern) : ""}</div>
             </div>
             <span class="dh-status" style="background:${status.col}22;color:${status.col};border-color:${status.col}66">${status.label}</span>
           </div>
@@ -3051,8 +3773,10 @@
             ${fact("Ladestelle", `<span class="tag" style="background:${SEGC[d.segment]||C.sonst}">${esc(d.segment)}</span>`)}
             ${fact("Ankunft", fmtTs(d.ts_ankunft))}
             ${fact("Standzeit", d.phases.dwell != null ? fmtH(d.phases.dwell) : "–")}
-            ${fact("Termintreue", d.phases.delay == null ? "–" : d.phases.delay <= 0 ? "pünktlich" : "+" + fmtH(d.phases.delay))}
+            ${fact("Ankunft gegenüber Planstart", d.phases.delay == null ? "Nicht bewertbar" : (d.phases.delay<=0?'Früher / zum Planstart: ':'Später als Planstart: +') + fmtH(Math.abs(d.phases.delay)))}
+            ${fact("Anlieferungen", d.nAnlieferungen)}
             ${fact("Positionen", d.nPos)}
+            ${fact("Fertigstellung", `${d.nFertig}/${d.nPos} geladene Pos.`)}
             ${fact("Paletten", totalPaletten > 0 ? totalPaletten.toFixed(1) : "–")}
             ${fact("Lagertor", d.lagertor ? esc(d.lagertor) : "–")}
             ${fact("Ursprungsland", d.land ? esc(d.land) : "–")}
@@ -3065,14 +3789,16 @@
         <div class="card"><h3>Prozess-Zeitstrahl${d.ts_verschifft ? " · inkl. Seetransport" : ""}</h3><div id="tl"></div></div>
         <div class="row">
           <div class="card"><h3>Phasen vs. Median ${esc(d.segment)}</h3><div id="cmp"></div></div>
-          <div class="card" style="flex:2 1 420px"><h3>Produkte dieser TE</h3><div id="ptbl"></div></div>
+          <div class="card" style="flex:2 1 420px"><h3>Anlieferungen dieser TE</h3><div id="atbl"></div></div>
         </div>
+        <div class="card"><h3>Positionen dieser TE · Zeiten zur Diagnose</h3><div id="ptbl"></div></div>
         <div class="card"><h3>Weitere Belegdaten</h3><div id="bdat"></div></div>`;
       main.appendChild(wrap);
-      wrap.querySelector("#back").addEventListener("click", () => { this._detail = null; this._render(); });
+      wrap.querySelector("#back").addEventListener("click", () => { this._detail = null; this._render(); const main=this._shadow.getElementById('main');if(main)main.scrollTop=this._returnScroll||0; });
       this._belegdaten(wrap.querySelector("#bdat"), d, pos);
       this._svgTimeline(wrap.querySelector("#tl"), d, pos);
       this._svgPhaseCompare(wrap.querySelector("#cmp"), d, M.phaseMed);
+      this._tblAnlieferungen(wrap.querySelector("#atbl"), M.anlieferungen.filter(a => a.belegnr === d.belegnr));
       this._tblProducts(wrap.querySelector("#ptbl"), pos, M.phaseMed);
     }
 
@@ -3088,14 +3814,10 @@
         ["ts_ankunft", "ts_angedockt", "Wartezeit Tor", "#5d6d7e"],
         ["ts_angedockt", "ts_entladen_start", "Reaktion", "#2980b9"],
         ["ts_entladen_start", "ts_entladen_ende_eff", "Entladen", "#27ae60"],
-        ["ts_entladen_ende_eff", "ts_we_pos", "Buchung", "#f39c12"],
-        ["ts_we_pos", "ts_einlagerung", "Einlagerung", C.accent],
+        ["ts_entladen_ende_eff", "ts_we_buchung_last", "Vereinnahmung", "#f39c12"],
+        ["ts_we_buchung_last", "ts_einlagerung_last", "Einlagerung · Näherung", C.accent],
       ];
-      // WE-Buchung/Einlagerung ggf. aus Positionen (Median-Zeitpunkt)
-      const firstTs = (arr) => { const v = arr.filter(Boolean).map(Number); return v.length ? new Date(Math.min(...v)) : null; };
-      const dd = Object.assign({}, d);
-      if (!dd.ts_we_pos) dd.ts_we_pos = firstTs(pos.map((p) => p.ts_we_pos));
-      if (!dd.ts_einlagerung) dd.ts_einlagerung = firstTs(pos.map((p) => p.ts_einlagerung));
+      const dd = d;
 
       const hasSea = dd.ts_verschifft instanceof Date;
       const phases = (hasSea ? seaPhases : []).concat(landPhases)
@@ -3138,7 +3860,7 @@
     }
 
     _svgPhaseCompare(el, d, phaseMed) {
-      const keys = ["wait_gate", "reaction", "unload", "dwell"];
+      const keys = ["wait_gate", "reaction", "unload", "booking", "putaway", "operative", "dwell"];
       const rows = keys.map((k) => ({
         k, label: PHASES[k].label,
         val: d.phases[k], med: (phaseMed[k] || {})[d.segment],
@@ -3146,43 +3868,43 @@
       })).filter((r) => r.val != null || r.med != null);
       if (!rows.length) { el.innerHTML = `<div class="empty">Keine Phasendaten.</div>`; return; }
       const maxV = Math.max(...rows.flatMap((r) => [r.val || 0, r.med || 0]), 0.1);
-      const W = 280, rh = 34;
+      const W = 400, rh = 48;
       let svg = `<svg viewBox="0 0 ${W} ${rows.length * rh + 4}" width="100%">`;
       rows.forEach((r, i) => {
         const y = i * rh;
-        const bw = (v) => Math.max(2, (v / maxV) * (W - 128));
+        const bw = (v) => Math.max(2, (v / maxV) * (W - 228));
         svg += `<text x="0" y="${y + 12}" font-size="10" fill="${C.ink}">${r.label}</text>`;
         if (r.val != null)
-          svg += `<rect x="78" y="${y + 3}" width="${bw(r.val)}" height="9" rx="2" fill="${r.out ? C.outlier : (SEGC[d.segment] || C.sonst)}"><title>Diese TE: ${fmtH(r.val)}</title></rect>
-                  <text x="${82 + bw(r.val)}" y="${y + 11}" font-size="9" fill="${r.out ? C.outlier : C.ink}">${fmtH(r.val)}${r.out ? " ⚠" : ""}</text>`;
-        else svg += `<text x="78" y="${y + 11}" font-size="9" fill="${C.muted}">–</text>`;
+          svg += `<rect x="170" y="${y + 3}" width="${bw(r.val)}" height="9" rx="2" fill="${r.out ? C.outlier : (SEGC[d.segment] || C.sonst)}"><title>Diese TE: ${fmtH(r.val)}</title></rect>
+                  <text x="${174 + bw(r.val)}" y="${y + 11}" font-size="9" fill="${r.out ? C.outlier : C.ink}">${fmtH(r.val)}${r.out ? " ⚠" : ""}</text>`;
+        else svg += `<text x="170" y="${y + 11}" font-size="9" fill="${C.muted}">–</text>`;
         if (r.med != null)
-          svg += `<rect x="78" y="${y + 15}" width="${bw(r.med)}" height="5" rx="2" fill="${C.muted}" opacity=".55"><title>Median ${d.segment}: ${fmtH(r.med)}</title></rect>
-                  <text x="${82 + bw(r.med)}" y="${y + 21}" font-size="8.5" fill="${C.muted}">Median ${fmtH(r.med)}</text>`;
+          svg += `<rect x="170" y="${y + 15}" width="${bw(r.med)}" height="5" rx="2" fill="${C.muted}" opacity=".55"><title>Median ${d.segment}: ${fmtH(r.med)}</title></rect>
+                  <text x="${174 + bw(r.med)}" y="${y + 21}" font-size="8.5" fill="${C.muted}">Median ${fmtH(r.med)}</text>`;
       });
       el.innerHTML = svg + "</svg>";
     }
 
+    _tblAnlieferungen(el, deliveries) {
+      const flag = (value, yes) => value === yes ? "Erfüllt" : value === "N" ? "Nicht erfüllt" : "Unbewertet";
+      el.innerHTML = `<div style="overflow:auto"><table><thead><tr><th>Anlieferung</th><th>Positionen</th><th>OTIF</th><th>Vollständigkeit</th><th>Mengentreue</th></tr></thead><tbody>${deliveries.map(a => `<tr>
+        <td>${esc(a.anlieferung)}</td><td>${a.nPos}</td><td>${flag(a.sap_otif, "O")}</td>
+        <td>${flag(a.sap_vollstaendig, "V")}</td><td>${a.qtyOk == null ? "Unbewertet" : a.qtyOk ? "Erfüllt" : "Abweichung"}<br><small>${a.qtyN}/${a.nPos} Pos. bewertbar</small></td></tr>`).join("")}</tbody></table></div>
+        <div class="drill-note">Eine Anlieferung ist mengentreu, wenn alle geladenen Positionen einzeln IST = SOLL erfüllen. Über- und Unterlieferungen werden nicht verrechnet.</div>`;
+    }
+
     _tblProducts(el, pos, phaseMed) {
       if (!pos.length) { el.innerHTML = `<div class="empty">Keine Positionen.</div>`; return; }
-      const rows = pos.map((p) => {
-        const put = p.phases && p.phases.putaway;
-        const out = p.outlier && p.outlier.putaway;
-        const qty = p.outlier && p.outlier.qty;
-        return `<tr>
-          <td>${esc(p.pos || "–")}</td>
-          <td>${esc((p.produkt_name || p.hwg || "–")).slice(0, 28)}</td>
-          <td>${p.menge_soll ?? "–"}</td>
-          <td style="${qty ? "color:" + C.outlier : ""}">${p.menge_ist ?? "–"}${qty ? " ⚠" : ""}</td>
-          <td>${p.paletten != null ? p.paletten.toFixed(1) : "–"}</td>
-          <td>${p.ts_einlagerung ? p.ts_einlagerung.toLocaleString("de-DE", { dateStyle: "short", timeStyle: "short" }) : "–"}</td>
-          <td style="${out ? "color:" + C.outlier + ";font-weight:600" : ""}">${put != null ? fmtH(put) : "–"}${out ? " ⚠" : ""}</td>
-          <td>${p.z && p.z.putaway != null ? p.z.putaway.toFixed(1) : "–"}</td></tr>`;
+      const rows = pos.map(p => {
+        const finish = p.ts_fertigstellung || p.ts_einlagerung;
+        const flag = p.sap_otif_position === "O" ? "Erfüllt" : p.sap_otif_position === "N" ? "Nicht erfüllt" : "Unbewertet";
+        return `<tr><td>${esc(p.anlieferung || "–")}</td><td>${esc(p.pos || "–")}</td>
+          <td>${esc(p.produkt || p.produkt_name || "–")}</td><td>${p.menge_soll ?? "–"}</td><td>${p.menge_ist ?? "–"}</td>
+          <td>${p.qtyOk == null ? "Unbewertet" : p.qtyOk ? "Erfüllt" : "Abweichung"}</td><td>${flag}</td>
+          <td>${finish ? finish.toLocaleString("de-DE", {dateStyle:"short",timeStyle:"short"}) : "–"}</td>
+          <td>${fmtH(p.phases?.putaway)}</td></tr>`;
       }).join("");
-      el.innerHTML = `<table><thead><tr>
-        <th>Produkt</th><th>Bezeichnung</th><th>SOLL</th><th>IST</th><th>Paletten</th>
-        <th>Einlagerung</th><th>WE→Einlag.</th><th>z</th>
-        </tr></thead><tbody>${rows}</tbody></table>`;
+      el.innerHTML = `<div style="overflow:auto"><table><thead><tr><th>Anlieferung</th><th>Position</th><th>Produkt</th><th>SOLL</th><th>IST</th><th>Mengentreue</th><th>OTIF Position</th><th>Fertigstellung</th><th>WE → Fertigstellung · Diagnose</th></tr></thead><tbody>${rows}</tbody></table></div>`;
     }
 
     /* ---- Mengen-Ansicht ---- */
@@ -3200,9 +3922,9 @@
       main.appendChild(wrap);
       // Scatter: Abweichung% über Zeit
       const el = wrap.querySelector("#qsc");
-      const tp = pts.filter((p) => p.ts_we_pos);
+      const tp = pts.filter((p) => p.ts_geplant_start);
       if (tp.length) {
-        const xs = tp.map((p) => +p.ts_we_pos), x0 = Math.min(...xs);
+        const xs = tp.map((p) => +p.ts_geplant_start), x0 = Math.min(...xs);
         const x1raw = Math.max(...xs), x1 = x1raw > x0 ? x1raw : x0 + 3600e3;
         const lim = Math.max(10, Math.min(100, quantileArr(tp.map((p) => Math.abs(p.qty_dev_pct)), 0.98)));
         const W = 380, Hh = 180, padL = 38;
@@ -3215,7 +3937,7 @@
         });
         for (const p of tp) {
           const bad = p.qty_dev !== 0;
-          svg += `<circle data-drill="${esc(p.belegnr)}" cx="${X(+p.ts_we_pos)}" cy="${Y(p.qty_dev_pct)}" r="${bad ? 3 : 1.8}"
+          svg += `<circle data-drill="${esc(p.belegnr)}" cx="${X(+p.ts_geplant_start)}" cy="${Y(p.qty_dev_pct)}" r="${bad ? 3 : 1.8}"
             fill="${bad ? C.outlier : C.ok}" opacity="${bad ? .9 : .35}">
             <title>${esc(p.belegnr)}/${esc(p.pos)} · ${esc(p.lieferant || "")}\nSOLL ${p.menge_soll} · IST ${p.menge_ist} (${p.qty_dev_pct.toFixed(1)}%)</title></circle>`;
         }
@@ -3239,7 +3961,7 @@
           <div class="card"><h3>Team-Vergleich (rotationsbereinigt) · Median je Phase</h3><div id="teams"></div></div>
         </div>
         <div class="row">
-          <div class="card"><h3>Datenfehler (negative Phasendauern u. ä.)</h3><div id="errs"></div></div>
+          <div class="card"><h3>Datenfehler (Hierarchie, negative Phasendauern u. ä.)</h3><div id="errs"></div></div>
           <div class="card"><h3>Business-Sonderfälle (SAP-Kennzeichen, keine Statistik)</h3><div id="sonder"></div></div>
         </div>`;
       main.appendChild(wrap);
@@ -3343,5 +4065,6 @@
     return s[lo] + (s[hi] - s[lo]) * (p - lo);
   }
 
+  WEUX.install(WECockpit, 'process');
   customElements.define("we-cockpit", WECockpit);
 })();
