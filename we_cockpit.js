@@ -1,3 +1,4 @@
+/* WE Cockpit 0.28.0 – Detailanalysen; Datenvertrag widget (10).json. */
 /* BEGIN SHARED UX */
 /* Shared presentation helpers, embedded in each SAC widget at build time. */
 (function () {
@@ -18,6 +19,9 @@
     experts: ['Experteneinstellungen','Ausreißerschwelle und Vergleichsgruppe beeinflussen die statistischen Hinweise. Die Toleranz beeinflusst die berechnete Termintreue; BW-Kennzeichen werden nicht verändert.','Einstellungen wirken im Widget. Eine abweichende Toleranz wird sichtbar angezeigt. Fachliche Freigaben und Berechtigungen müssen in SAC geregelt werden.'],
     shift: ['Schichtvergleich','Die Periodenauswahl bleibt am Planstart ausgerichtet. Innerhalb dieser Auswahl werden die Schichten anhand der jeweiligen BW-Ereignismerkmale betrachtet.','Schichtzeiten und die wöchentliche Mannschaftsrotation sind von der Planstartperiode zu unterscheiden. Die verwendete Schicht steht am Diagramm, beispielsweise Ankunftsschicht.']
   };
+  topics.start=['So verwendest du die Analyse','1. In der Strategieübersicht Periode und Ladestelle wählen. Dort stehen ausschließlich aggregierte BW-Kennzahlen.','2. „Im Cockpit analysieren“ öffnet den Analysebereich. In SAC setzt die gemeinsame Zeitraumfilterung eine passende Datenbindung in beiden Widgets voraus.','3. Im Cockpit die neun Analysereiter verwenden. TE-Details zeigen Anlieferungen und Positionen; der Zurück-Button führt zur vorherigen Analyse.'];
+  topics.data[2]='Die gemeinsame Planstart-Auswahl setzt eine entsprechende Bindung beider Widgets voraus. Die gelieferte Strategie-JSON enthält zunächst eine BW-Kalenderwoche; die Cockpit-JSON enthält noch keinen Planstart-Tag. Ohne diese Bindung werden geladene Daten nicht als automatisch nach Planstart gefiltert ausgegeben. Die sichtbaren Bindungshinweise nennen fehlende Felder.';
+  topics.comparison[1]='Das Strategiewidget zeigt ausschließlich BW-Aggregate, keine Trendpfeile oder Vorjahresquoten. Detailvergleiche gehören ins Cockpit und benötigen passende Daten für die Vergleichszeiträume.';
   const metrics = {
     dwell_avg:['Ø Standzeit','TE','Aufenthaltsdauer der TE am Standort.','Abfahrt Kontrollpunkt − Ankunft Kontrollpunkt','dwell'],
     booking_avg:['Ø Vereinnahmung','TE','Kernzeit bis zur abgeschlossenen WE-Buchung der TE.','Letzte WE-Buchung der TE − tatsächliches Entladeende [BWMISTTEE]','booking'],
@@ -130,6 +134,10 @@
     const data=w._props?.dataAsOf;const source=w._uxDemo?'Beispieldaten · keine BW-Verbindung':data?`Datenstand: ${data}`:'Datenstand: nicht übermittelt';
     context.innerHTML=`<div class="ux-context-row"><strong>${type==='strategy'?'Strategieübersicht':'Detailanalyse'}${w._detail?' → TE '+esc(w._detail):''}</strong><span>${esc(st.per||'')}${st.per?' · ':''}${esc(st.range)}</span><span>${esc(st.seg)}</span></div><div class="ux-context-row"><span>Zeitbezug: <strong>Geplanter Start ab</strong></span><span>${esc(source)}</span>${info('data','Datenbasis und Zeitbezug erklären')}</div>${k?`<div class="ux-meta">${num(k.nTes)} TE · ${num(k.nAnlieferungen)} Anlieferungen · ${num(k.nPositions)} Positionen ${info('hierarchy','Berechnungsebenen erklären')}</div>`:''}`;
     if(w._filterError)context.insertAdjacentHTML('beforeend',`<div class="ux-error" role="alert">${esc(w._filterError)}</div>`);
+    if(w._bindingNotice) {
+      context.insertAdjacentHTML('beforeend',`<details class="ux-expand"><summary>Hinweise zu den gelieferten Datenbindungen</summary><p>${esc(w._bindingNotice)}</p></details>`);
+      if(!w._periodContext)context.querySelectorAll('.ux-context-row')[1].querySelector('span').innerHTML='Zeitbezug: <strong>Gesamter geladener Datenbestand · kein Widget-Zeitfilter</strong>';
+    }
     const sub=S.getElementById('sub');if(sub&&type==='process')sub.textContent='Historische Wareneingangsanalyse';
     S.querySelectorAll('[data-goto],.tile:not(.process-tile):not(.tile-nodata),[data-drill],.pk-seg').forEach(el=>{el.setAttribute('tabindex','0');el.setAttribute('role','button');});
     if(type==='process'){
@@ -162,11 +170,11 @@
 })();
 /* END SHARED UX */
 /* =========================================================================
- * WE-Prozess-Cockpit – SAC Custom Widget (v0.24.0-planstart) · Entwickler: Benne
+ * WE-Cockpit – SAC Custom Widget (v0.28.0, alle Detailanalysen) · Entwickler: Benne
  * Segment-/Schluesselabgleich mit dem Wareneingang-Tracker.
  * ========================================================================= */
 /* =========================================================================
- * WE Prozess-Cockpit  –  SAC Custom Widget (Grundgerüst v0.1)
+ * WE Prozess-Cockpit  –  SAC Custom Widget, Analysearchitektur
  * -------------------------------------------------------------------------
  * Aufbau:
  *   1. WEEngine   – reine Datenlogik (Phasen, Segmente, MAD-Ausreißer,
@@ -344,7 +352,7 @@
     putaway:   { label: "Einlagerung",    from: "ts_we_buchung_last", to: "ts_einlagerung_last", level: "te" },
     operative: { label: "Operativer WE",  from: "ts_entladen_start", to: "ts_einlagerung_last", level: "te" },
     dwell:     { label: "Standzeit",      from: "ts_ankunft",        to: "ts_abfahrt",       level: "te" },
-    delay:     { label: "Verspätung",     from: "ts_geplant",        to: "ts_ankunft",       level: "te" },
+    delay:     { label: "Verspätung",     from: "ts_geplant_start",  to: "ts_ankunft",       level: "te" },
   };
 
   function hoursBetween(row, from, to) {
@@ -1858,23 +1866,24 @@
     return null;
   };
 
-  /** Feed-IDs (Manifest v0.7) -> kanonische Zeilen für die Engine.
+  /** Feed-IDs aus widget (10).json -> kanonische Zeilen für die Engine.
    *  Alle Spalten des WE-Exports sind abgedeckt; die frueheren separaten
    *  Klartext-Spalten (z.B. "Unnamed: 20" neben WS/Lieferant) entfallen,
    *  weil readDim() das Label automatisch aus der Dimension zieht.       */
   function ingestRows(rows) {
     return rows.map((row) => ({
       // Schlüssel (immer Code, keine Label-Bevorzugung). Der interne Name
-      // "belegnr" bleibt aus Kompatibilitätsgründen erhalten, enthält aber
-      // ausschließlich die TE [0WM_TUNUM], niemals die Anlieferung.
-      belegnr:            readCode(row, "dimension_te", "dimension_te_intern"),
+      // Im gelieferten widget (10).json ist dimension_te als Belegnummer
+      // beschrieben. TE daher nur aus dimension_te_intern; kein Auffüllen
+      // fehlender TEs aus Anlieferungsnummern oder vorherigen Zeilen.
+      belegnr:            readCode(row, "dimension_te_intern"),
       // Anlieferung innerhalb der TE. Eine TE kann mehrere Anlieferungen
       // enthalten (SAP-EWM-Hierarchie TE -> Anlieferung -> Position).
       // Mehrere Feed-Namen toleriert, je nach BW-Modellbezeichnung.
       anlieferung:        readCode(row, "dimension_anlieferung", "dimension_anlieferungsnummer",
                                    "dimension_anlieferungsnr", "dimension_lieferung",
                                    "dimension_lieferungsnummer", "dimension_lieferungsnr",
-                                   "dimension_lieferbeleg", "dimension_inbound_delivery"),
+                                   "dimension_lieferbeleg", "dimension_inbound_delivery", "dimension_te"),
       te_intern:          readCode(row, "dimension_te_intern"),
       te_extern:          readCode(row, "dimension_te_extern"),
       // Erst zusammen mit anlieferung ist die Position global eindeutig.
@@ -1995,7 +2004,7 @@
       this._showTopOutliers = false;
       this._showYoY = false;
       this._showPkLegend = false; // Prozesskette: Farblegende standardmäßig eingeklappt
-      this._applyTheme();
+      queueMicrotask(()=>this._applyTheme());
       this._startLoaderSteps(); // Ladeanimation läuft ab dem ersten Moment
       this._shadow.getElementById("tabs").addEventListener("click", (e) => {
         const b = e.target.closest("button"); if (!b) return;
@@ -2070,8 +2079,10 @@
     onCustomWidgetAfterUpdate(changed) {
       Object.assign(this._props, changed || {});
       if (changed && "theme" in changed) this._applyTheme();
-      if (changed && "defaultView" in changed && MODES.some((m) => m.id === changed.defaultView))
-        this._mode = changed.defaultView;
+      if (changed && "defaultView" in changed) {
+        const mode=this._compatibleView(changed.defaultView);
+        if(MODES.some(m=>m.id===mode))this._mode=mode;
+      }
       this._syncCfg();
       const binding = changed && (changed.myDataSource
         || (changed.dataBindings && changed.dataBindings.myDataSource));
@@ -2093,6 +2104,13 @@
         this._rows = null; this._model = null; this._render(); return;
       }
       try {
+        this._boundFeeds=new Set((dataBinding.data||[]).flatMap(row=>Object.keys(row).map(k=>k.replace(/_\d+$/,''))));
+        const missing=[];
+        if(!this._boundFeeds.has('dimension_planstart_tag'))missing.push('Planstart-Tagesbindung fehlt: Die Strategieauswahl kann nicht als Planstart-Zeitraum abgefragt werden.');
+        if(!this._boundFeeds.has('dimension_geplant_start'))missing.push('Geplanter Start ab fehlt: berechnete Termintreue nicht verfügbar.');
+        if(!this._boundFeeds.has('dimension_sap_puenktlich'))missing.push('BW-Pünktlichkeit P/N fehlt: kein Spediteurranking nach BW-Pünktlichkeit.');
+        if(!this._boundFeeds.has('dimension_sap_otif')||!this._boundFeeds.has('dimension_sap_otif_position'))missing.push('BW-OTIF-Bindungen fehlen; Mengentreue aus Soll/Ist bleibt separat berechenbar.');
+        this._bindingNotice=missing.join(' ');
         this._rows = ingestRows(dataBinding.data ?? []);
       } catch (e) {
         console.warn("[WE-Cockpit] Datenaufbereitung fehlgeschlagen —", e && e.message);
@@ -2141,7 +2159,11 @@
     setTheme(theme) {
       if (theme === "dark" || theme === "light") { this._props.theme = theme; this._applyTheme(); }
     }
+    _compatibleView(view) {
+      return ({ueberblick:'puls',hof:'prozesskette',lager:'prozesskette',termin:'spediteur',mengen:'lieferanten',muster:'schicht'})[view]||view;
+    }
     setView(view) {
+      view=this._compatibleView(view);
       if (MODES.some((m) => m.id === view)) { this._mode = view; this._detail = null; this._render(); this._shadow.getElementById('main').scrollTop=0; }
     }
     /** Drill-down in eine Transporteinheit (auch via SAC-Script aufrufbar). */
@@ -2156,6 +2178,7 @@
     }
     setTestData(rows) {
       if (typeof rows === "string") { try { rows = JSON.parse(rows); } catch { rows = []; } }
+      this._bindingNotice='';this._boundFeeds=null;
       this._rows = rows || [];
       this._rebuild();
     }
@@ -2188,6 +2211,7 @@
        und stößt so eine neue BW-Abfrage nur für diesen Zeitraum an.
        Sobald die Daten zurückkommen, feuert SAC erneut `set myDataSource`. */
     setPeriodFilter(periode, segment, vonISO, bisISO, vorjahr) {
+      if(this._boundFeeds&&!this._boundFeeds.has('dimension_planstart_tag'))return this._filterFailed('Die Auswahl kann nicht übernommen werden: dimension_planstart_tag fehlt in der Datenbindung. Keine Ersatzfilterung nach Ankunft oder BW-Übertragung.');
       const LADE_DIM = "dimension_ladestelle"; // technischen Namen ggf. anpassen
       const TS_DIM = "dimension_planstart_tag";   // technischen Namen ggf. anpassen
       const ds = this._getDataSource();
@@ -2234,6 +2258,7 @@
        leer erlaubt (dann bleibt der Zeitfilter unverändert). segment ist
        "" (alle) oder einer von Container/Landverkehr/BSL/Sonstige. */
     setManualFilter(vonISO, bisISO, segment) {
+      if(this._boundFeeds&&!this._boundFeeds.has('dimension_planstart_tag'))return this._filterFailed('Manueller Planstart-Zeitraum nicht verfügbar: dimension_planstart_tag fehlt in der Datenbindung.');
       // Empty date inputs keep the previous effective date window.
       if(!vonISO&&!bisISO){const old=this._periodContext;const r=old?.manual?{from:old.von,to:old.bis}:WEUX.range(old?.periode);vonISO=r.from||'';bisISO=r.to||'';}
       else {vonISO=vonISO||bisISO;bisISO=bisISO||vonISO;}
