@@ -1,21 +1,26 @@
-/* WE Cockpit 0.28.0 – Detailanalysen; Datenvertrag widget (10).json. */
-/* Planstart-Korrektur 2026-09-15, Revision 4: SAC/BW-Filter über Planstart-Kalendertage.
- * VORAUSSETZUNG IM MODELL: dimension_planstart_tag muss an einen aus
- * [0WM_SPFRG] abgeleiteten Kalendertag mit Schlüssel JJJJMMTT gebunden sein.
- * Der 14-stellige Originalzeitstempel gehört an dimension_geplant_start.
- * Ein Feedname oder eine Anzeigeformatierung erzeugt KEIN Tagesmerkmal.
- * Für freie Planstart-Zeiträume den alten Widget-Filter
- * „KalJahr/Woche = 01.2026“ entfernen bzw. fachlich passend ersetzen.
- * Diese Datei erstellt keine BW-Merkmale und verändert keine fremden Filter.
+/* WE Cockpit 0.28.1 – Detailanalysen; Build 0.28.1-calweek-calday-r6. */
+/* Kalenderfilter-Korrektur 2026-09-15, Revision 6:
+ * Strategie-Woche: 0CALWEEK; eigene Datumsbereiche und Monate: 0CALDAY.
+ * Beide Modelldimensionen werden aus der eigenen SAC-Datenquelle ermittelt.
+ * Beim Wechsel wird der jeweils andere Kalenderfilter entfernt.
+ * Alle ausgewählten Tage sind vollständig enthalten. Planstart-Zeitstempel
+ * bleiben unverändert für die vorhandenen Analysen und Zeitdifferenzen.
+ * Die verwendeten SAC-APIs sind bei den Filtermethoden dokumentiert.
+ * Bereitstellung: als we_cockpit_0.28.1_calweek_calday.js speichern und die
+ * main-URL der vorhandenen Widget-JSON auf diese Datei umstellen. Die JSON
+ * in SAC aktualisieren und die Story vollständig neu öffnen. Bei aktiver
+ * Integritätsprüfung den Hash passend zur neu bereitgestellten JS erneuern.
+ * Erfolgreiche Registrierung meldet in der Browserkonsole:
+ * [WE-Cockpit] Aktiv: 0.28.1-calweek-calday-r6 | Filter: 0CALWEEK / 0CALDAY
  */
 /* BEGIN SHARED UX */
 /* Shared presentation helpers, embedded in each SAC widget at build time. */
 (function () {
-  if (globalThis.WEUX) return;
+  if (globalThis.WECockpitCalendarUX) return;
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const num = n => Number.isFinite(Number(n)) && n != null ? Number(n).toLocaleString('de-DE',{maximumFractionDigits:1}) : 'nicht verfügbar';
   const topics = {
-    data: ['Datenbasis & Zeitbezug','Historische Auswertung abgeschlossener Wareneingangsvorgänge. Das SAC-Modell liefert ausschließlich WE-relevante Datensätze (R). Z und N sind nicht enthalten.','Die Auswahl erfolgt nach Geplanter Start ab [0WM_SPFRG]. Planstart am 31.08., Fertigstellung am 01.09.: Zuordnung zum August. ISO-Wochen können zwei Monate berühren. Ankunft und Fertigstellung bleiben die Ereignisse für Zeitdifferenzen.','Die BW-Übertragung erfolgt üblicherweise täglich gegen 04:00 Uhr. Anlieferungen werden nach letzter Einlagerung, TEs nach Abfahrt übertragen. Später verfügbare Daten können frühere Planstartperioden ergänzen. Der angezeigte Datenstand muss aus dem tatsächlichen Ladeprozess stammen.'],
+    data: ['Datenbasis & Zeitbezug','Historische Auswertung abgeschlossener Wareneingangsvorgänge. Das SAC-Modell liefert ausschließlich WE-relevante Datensätze (R). Z und N sind nicht enthalten.','Wochen werden über Kalenderwoche, eigene Datumsbereiche und Monate über Kalendertag ausgewählt. Start- und Endtag sind vollständig enthalten. Die fachliche Datumszuordnung folgt den Kalendermerkmalen im BW-Modell. Planstart, Ankunft und Fertigstellung bleiben für die bestehenden Analysen erhalten.','Die BW-Übertragung erfolgt üblicherweise täglich gegen 04:00 Uhr. Anlieferungen werden nach letzter Einlagerung, TEs nach Abfahrt übertragen. Später verfügbare Daten können frühere Auswertungsperioden ergänzen. Der angezeigte Datenstand muss aus dem tatsächlichen Ladeprozess stammen.'],
     start: ['So verwendest du die Analyse','1. In der Strategieübersicht Ladestelle und Woche oder Monat wählen. Die Kacheln zeigen den jeweiligen letzten verfügbaren Wert; der Zeitraum steht an der Kachel.','2. Eine Kennzahl wählen, um ihren Verlauf zu untersuchen. Einen Zeitpunkt im Diagramm anklicken, um die zugehörige Detailanalyse zu öffnen.','3. Im Periodenüberblick Qualität und Zeiten prüfen. Reiter führen zu Prozesskette und Ursachenanalysen. „TE-Details“ öffnet die Transporteinheit mit ihren Anlieferungen und Positionen. Zurück führt zur vorherigen Analyse; die Filter bleiben dabei bestehen.'],
     hierarchy: ['TE → Anlieferung → Position','Eine Transporteinheit (TE) kann mehrere Anlieferungen enthalten; jede Anlieferung kann mehrere Positionen enthalten.','Zeitkennzahlen werden je TE bewertet. OTIF und Mengentreue besitzen getrennte Bewertungen je Anlieferung und Position. Werte verschiedener Ebenen sind nicht direkt addierbar.','„Basis“ zählt die für genau diese Kennzahl bewertbaren Objekte. „Im Filter“ bezeichnet den gesamten ausgewählten Datenumfang. Die Anzahl kann von Kennzahl zu Kennzahl abweichen.'],
     quality: ['Qualitätswerte richtig lesen','OTIF bedeutet „On Time In Full“: pünktlich und vollständig. Die BW-Kennzeichen werden getrennt für Positionen und Anlieferungen ausgewertet.','Die berechnete Termintreue verwendet Ankunft ≤ Planstart + die angezeigte Toleranz. Auch sehr frühe Ankünfte erfüllen diese Regel. BW-Pünktlichkeit verwendet dagegen P/N. Unterschiedliche Bewertungsbasen können zu unterschiedlichen Quoten führen.','„90 erfüllt / 100 bewertet · 5 ohne Bewertung“ bedeutet 90 %, nicht 90 von 105. Fehlende oder widersprüchliche Bewertungen sind nicht automatisch negativ.'],
@@ -26,10 +31,10 @@
     location: ['Ladestelle','Container, Landverkehr und BSL sind Ausprägungen der Ladestelle.','„Nicht zugeordnet“ enthält TEs, für die keine Ladestelle gepflegt ist. Das ist eine Datenlücke, kein zusätzlicher Prozess.'],
     ranking: ['Rankings & Mindestbasis','Spediteure werden anhand ihrer bewertbaren BW-Pünktlichkeit verglichen; Lieferanten anhand bewertbarer Positionsmengen. Kleine Fallzahlen können stark schwanken.','Die Mindestbasis steht direkt am jeweiligen Ranking. Nicht aufgeführte Lieferanten oder Spediteure können unter dieser Mindestbasis liegen. Kritische Positionen werden nach absoluter Anzahl gerankt; Anteil und Gesamtbasis helfen beim Einordnen.'],
     experts: ['Experteneinstellungen','Ausreißerschwelle und Vergleichsgruppe beeinflussen die statistischen Hinweise. Die Toleranz beeinflusst die berechnete Termintreue; BW-Kennzeichen werden nicht verändert.','Einstellungen wirken im Widget. Eine abweichende Toleranz wird sichtbar angezeigt. Fachliche Freigaben und Berechtigungen müssen in SAC geregelt werden.'],
-    shift: ['Schichtvergleich','Die Periodenauswahl bleibt am Planstart ausgerichtet. Innerhalb dieser Auswahl werden die Schichten anhand der jeweiligen BW-Ereignismerkmale betrachtet.','Schichtzeiten und die wöchentliche Mannschaftsrotation sind von der Planstartperiode zu unterscheiden. Die verwendete Schicht steht am Diagramm, beispielsweise Ankunftsschicht.']
+    shift: ['Schichtvergleich','Die Periodenauswahl folgt dem gewählten Kalenderfilter. Innerhalb dieser Auswahl werden die Schichten anhand der jeweiligen BW-Ereignismerkmale betrachtet.','Schichtzeiten und die wöchentliche Mannschaftsrotation sind von der ausgewählten Kalenderperiode zu unterscheiden. Die verwendete Schicht steht am Diagramm, beispielsweise Ankunftsschicht.']
   };
   topics.start=['So verwendest du die Analyse','1. In der Strategieübersicht Periode und Ladestelle wählen. Dort stehen ausschließlich aggregierte BW-Kennzahlen.','2. „Im Cockpit analysieren“ öffnet den Analysebereich. In SAC setzt die gemeinsame Zeitraumfilterung eine passende Datenbindung in beiden Widgets voraus.','3. Im Cockpit die neun Analysereiter verwenden. TE-Details zeigen Anlieferungen und Positionen; der Zurück-Button führt zur vorherigen Analyse.'];
-  topics.data[2]='Die Zeitraumsauswahl bezieht sich auf den Kalendertag von „Geplanter Start ab“ [0WM_SPFRG]. Start- und Endtag werden vollständig eingeschlossen. Dafür muss im Modell ein aus dem Planstart abgeleiteter Tageswert bereitstehen. Die Strategieauswahl und eigene Datumsbereiche verwenden denselben Tageswert; der vollständige Planstart bleibt für die Zeitdifferenzen erhalten.';
+  topics.data[2]='Die Strategie-Wochenauswahl verwendet Kalenderwoche (0CALWEEK). Eigene Datumsbereiche und Monatszeiträume verwenden Kalendertag (0CALDAY), einschließlich des vollständigen Start- und Endtags. Beim Wechsel ersetzt die neue Auswahl den bisherigen Wochen- oder Tagesfilter. Die Zuordnung zu einem Tag folgt dem BW-Kalendermerkmal; die Planstart-Werte für die bestehenden Berechnungen bleiben erhalten.';
   topics.comparison[1]='Das Strategiewidget zeigt ausschließlich BW-Aggregate, keine Trendpfeile oder Vorjahresquoten. Detailvergleiche gehören ins Cockpit und benötigen passende Daten für die Vergleichszeiträume.';
   const metrics = {
     dwell_avg:['Ø Standzeit','TE','Aufenthaltsdauer der TE am Standort.','Abfahrt Kontrollpunkt − Ankunft Kontrollpunkt','dwell'],
@@ -55,7 +60,7 @@
   };
   for(const [key,from,to] of [
     ['plan_start_end','Geplanter Start','Geplantes Ende'],['actual_start_end','Ist-Start','Ist-Ende'],['arrival_dock','Ankunft','Andocken'],['dock_unload_start','Andocken','Entladestart'],['unload_start_end','Entladestart','Entladeende'],['unload_end_actual_end','Entladeende','Tatsächliches Ende'],['we_booked_completion','WE gebucht','Letzte Fertigstellung'],['arrival_completion','Ankunft','Letzte Fertigstellung'],['dock_completion','Andocken','Letzte Fertigstellung']
-  ]) metrics[key+'_avg']=[from+' → '+to,'TE','Ergänzende Prozesszeit der ausgewählten Planstartperiode. Fertigstellung ist eine Näherung für das Einlagerungsende.',to+' − '+from,key,'BW-Dauer bzw. daraus gebildeter Mittelwert; Quelle und Bewertungsnenner müssen passend im Modell gebunden sein.'];
+  ]) metrics[key+'_avg']=[from+' → '+to,'TE','Ergänzende Prozesszeit der ausgewählten Periode. Fertigstellung ist eine Näherung für das Einlagerungsende.',to+' − '+from,key,'BW-Dauer bzw. daraus gebildeter Mittelwert; Quelle und Bewertungsnenner müssen passend im Modell gebunden sein.'];
   const css = `
     :host{--accent:#65b8e8;--accent-strong:#2785bb;--accent-border:rgba(101,184,232,.45);--band:rgba(101,184,232,.10);--muted:#b1b9cb;--bad:#f07870;--good:#60d79c;--warn:#edbe67;}
     :host([data-theme=light]){--accent:#14618e;--accent-strong:#15547b;--muted:#555f70;--band:rgba(20,97,142,.07);--bad:#b62f29;--good:#167343;--warn:#8c6000;}
@@ -92,6 +97,12 @@
     const from=d.toISOString().slice(0,10);d.setUTCDate(d.getUTCDate()+6);return {from,to:d.toISOString().slice(0,10)};
   }
   const date=s=>/^\d{4}-\d{2}-\d{2}$/.test(s||'')?s.slice(8,10)+'.'+s.slice(5,7)+'.'+s.slice(0,4):s||'–';
+  function calendarBasis(w){
+    const c=w._periodContext;
+    if(!c)return 'Gesamter geladener Datenbestand · kein Widget-Zeitfilter';
+    const code=c.filterCode||w._calendarTimeCode;
+    return code==='0CALWEEK'?'Kalenderwoche (0CALWEEK)':code==='0CALDAY'?'Kalendertag (0CALDAY)':'Kalenderfilter der Datenquelle';
+  }
   function state(w,type){
     const ctx=w._periodContext;
     const per=type==='strategy'?(w._rows?.length?w._perioden?.[w._scrubIdx ?? w._perioden.length-1]:null):ctx?.periode;
@@ -108,7 +119,7 @@
       title=m[0];let basis=trigger?.closest('.kpi,.tile,.gauge')?.querySelector('.sub,.te-base,.gs')?.textContent;
       if(!basis&&k){const stat=k.phaseStats[m[4]]||k.quality[m[4]];basis=stat?`${num(stat.n)} ${m[1]}`:m[4]==='critical'?`${num(k.nPositions)} Positionen · ${num(k.nKritTes)} TE betroffen`:null;}
       const source=m[5]||(w._uxType==='strategy'?'BW-Aggregate; periodisch im Widget mit passenden Bewertungsnennern zusammengefasst.':'Im Widget aus BW-Zeitstempeln oder Mengen berechnet.');
-      const fields=[['Bedeutung',m[2]],['Formel',key==='calc_punctual'?m[3]+` (aktuell ${num(k?.tolMin ?? w._props.toleranzMin ?? 30)} Minuten)`:m[3]],['Ebene',m[1]],['Zeitbezug','Geplanter Start ab; '+state(w,w._uxType).range],['Datenbasis',basis||'Der passende Bewertungsnenner steht an der Kennzahl.'],['Ausschlüsse','Fehlende, widersprüchliche oder unlogische Angaben werden für die betroffene Bewertung ausgeschlossen. Statistische Auffälligkeit allein ist kein Datenfehler.'],['Quelle',source]];
+      const fields=[['Bedeutung',m[2]],['Formel',key==='calc_punctual'?m[3]+` (aktuell ${num(k?.tolMin ?? w._props.toleranzMin ?? 30)} Minuten)`:m[3]],['Ebene',m[1]],['Zeitraumfilter',calendarBasis(w)+'; '+state(w,w._uxType).range],['Datenbasis',basis||'Der passende Bewertungsnenner steht an der Kennzahl.'],['Ausschlüsse','Fehlende, widersprüchliche oder unlogische Angaben werden für die betroffene Bewertung ausgeschlossen. Statistische Auffälligkeit allein ist kein Datenfehler.'],['Quelle',source]];
       body=`<dl>${fields.map(([a,b])=>`<dt>${esc(a)}</dt><dd>${esc(b)}</dd>`).join('')}</dl>`;
     } else if(topics[key]) {title=topics[key][0];body=topics[key].slice(1).map(t=>`<p>${esc(t)}</p>`).join('');}
     else {title='Hilfe & Begriffe';body='<p>Wähle ein Thema oder suche nach einer Kennzahl.</p><input type="search" id="ux-search" placeholder="Suchen: TE, OTIF, Median, Zeitbezug …" aria-label="Hilfethemen suchen"><div class="ux-help-index" id="ux-help-index"></div>';}
@@ -141,7 +152,7 @@
     mount(w,type);const S=w._sh||w._shadow;if(!S?.querySelector)return;const context=S.getElementById('ux-context');if(!context)return;
     const st=state(w,type),k=w._model?.kpis;
     const data=w._props?.dataAsOf;const source=w._uxDemo?'Beispieldaten · keine BW-Verbindung':data?`Datenstand: ${data}`:'Datenstand: nicht übermittelt';
-    context.innerHTML=`<div class="ux-context-row"><strong>${type==='strategy'?'Strategieübersicht':'Detailanalyse'}${w._detail?' → TE '+esc(w._detail):''}</strong><span>${esc(st.per||'')}${st.per?' · ':''}${esc(st.range)}</span><span>${esc(st.seg)}</span></div><div class="ux-context-row"><span>Zeitbezug: <strong>Geplanter Start ab</strong></span><span>${esc(source)}</span>${info('data','Datenbasis und Zeitbezug erklären')}</div>${k?`<div class="ux-meta">${num(k.nTes)} TE · ${num(k.nAnlieferungen)} Anlieferungen · ${num(k.nPositions)} Positionen ${info('hierarchy','Berechnungsebenen erklären')}</div>`:''}`;
+    context.innerHTML=`<div class="ux-context-row"><strong>${type==='strategy'?'Strategieübersicht':'Detailanalyse'}${w._detail?' → TE '+esc(w._detail):''}</strong><span>${esc(st.per||'')}${st.per?' · ':''}${esc(st.range)}</span><span>${esc(st.seg)}</span></div><div class="ux-context-row"><span>Zeitraumfilter: <strong>${esc(calendarBasis(w))}</strong></span><span>${esc(source)}</span>${info('data','Datenbasis und Zeitbezug erklären')}</div>${k?`<div class="ux-meta">${num(k.nTes)} TE · ${num(k.nAnlieferungen)} Anlieferungen · ${num(k.nPositions)} Positionen ${info('hierarchy','Berechnungsebenen erklären')}</div>`:''}`;
     if(w._filterError)context.insertAdjacentHTML('beforeend',`<div class="ux-error" role="alert">${esc(w._filterError)}</div>`);
     if(w._bindingNotice) {
       context.insertAdjacentHTML('beforeend',`<details class="ux-expand"><summary>Hinweise zu den gelieferten Datenbindungen</summary><p>${esc(w._bindingNotice)}</p></details>`);
@@ -175,11 +186,11 @@
     const binding=Object.getOwnPropertyDescriptor(K.prototype,'myDataSource');if(binding?.set)Object.defineProperty(K.prototype,'myDataSource',{...binding,set(value){this._uxDemo=false;return binding.set.call(this,value);}});
     if(type==='strategy')K.prototype._countUp=function(el,target,m){if(!el)return;el.textContent=target==null||!Number.isFinite(target)?'–':target.toLocaleString('de-DE',{minimumFractionDigits:m.unit===''?0:1,maximumFractionDigits:m.unit===''?0:1});if(m.pct&&target!=null)el.textContent=(target*100).toLocaleString('de-DE',{minimumFractionDigits:1,maximumFractionDigits:1});};
   }
-  globalThis.WEUX={esc,num,topics,metrics,info,range,date,state,open,update,install};
+  globalThis.WECockpitCalendarUX={esc,num,topics,metrics,info,range,date,state,open,update,install};
 })();
 /* END SHARED UX */
 /* =========================================================================
- * WE-Cockpit – SAC Custom Widget (v0.28.0, alle Detailanalysen) · Entwickler: Benne
+ * WE-Cockpit – SAC Custom Widget (v0.28.1, alle Detailanalysen) · Entwickler: Benne
  * Segment-/Schluesselabgleich mit dem Wareneingang-Tracker.
  * ========================================================================= */
 /* =========================================================================
@@ -194,6 +205,8 @@
  * ========================================================================= */
 (function () {
   "use strict";
+
+  const WEUX = globalThis.WECockpitCalendarUX;
 
   /* ============================ 1. ENGINE ============================== */
 
@@ -1160,6 +1173,7 @@
 
   /* ======================= 2. WEB COMPONENT =========================== */
   if (typeof customElements === "undefined") return; // Node-Testumgebung
+  const WE_COCKPIT_BUILD = "0.28.1-calweek-calday-r6";
 
   const C = {
     // Theme-abhängig (CSS-Variablen, definiert in :host / :host([data-theme=dark]))
@@ -1995,6 +2009,8 @@
   }
 
   class WECockpit extends HTMLElement {
+    static get buildVersion() { return WE_COCKPIT_BUILD; }
+
     constructor() {
       super();
       this._shadow = this.attachShadow({ mode: "open" });
@@ -2117,10 +2133,9 @@
         const missing=[];
         // Die Query-Filterung prüft DataBinding.getDimensions(), nicht die
         // Ergebnismenge. Auch nach 0 Treffern muss ein Zeitraumwechsel gehen.
-        // Der Tagesfeed braucht einen echten abgeleiteten Kalendertag. Der
-        // vollständige Zeitstempel bleibt separat für Zeitdifferenzen nötig.
+        // Kalenderfilter benötigen keinen Planstart-Tagesfeed. Der
+        // vollständige Planstart bleibt für Zeitdifferenzen nötig.
         if(this._boundFeeds.size) {
-          if(!this._boundFeeds.has('dimension_planstart_tag'))missing.push('Planstart-Tagesbindung fehlt: Für die Zeitraumsauswahl wird ein aus Geplanter Start ab abgeleiteter Kalendertag benötigt.');
           if(!this._boundFeeds.has('dimension_geplant_start'))missing.push('Geplanter Start ab fehlt: berechnete Termintreue nicht verfügbar.');
           if(!this._boundFeeds.has('dimension_sap_puenktlich'))missing.push('BW-Pünktlichkeit P/N fehlt: kein Spediteurranking nach BW-Pünktlichkeit.');
           if(!this._boundFeeds.has('dimension_sap_otif')||!this._boundFeeds.has('dimension_sap_otif_position'))missing.push('BW-OTIF-Bindungen fehlen; Mengentreue aus Soll/Ist bleibt separat berechenbar.');
@@ -2151,40 +2166,32 @@
     }
 
     /* Dokumentierte SAC-APIs (SAP API Reference, geprüft 2026-09-15):
+       https://help.sap.com/doc/958d4c11261f42e992e8d01a4c0dde25/release/en-US/index.html#DataSource_MgetDimensions
        https://help.sap.com/doc/958d4c11261f42e992e8d01a4c0dde25/release/en-US/index.html#DataBinding_MgetDimensions
-       https://help.sap.com/doc/958d4c11261f42e992e8d01a4c0dde25/release/en-US/index.html#DataSource_MsetDimensionFilter
        https://help.sap.com/doc/958d4c11261f42e992e8d01a4c0dde25/release/en-US/index.html#DataSource_MgetMembers
-       https://help.sap.com/doc/958d4c11261f42e992e8d01a4c0dde25/release/en-US/index.html#MembersOptions
-       https://help.sap.com/doc/958d4c11261f42e992e8d01a4c0dde25/release/en-US/index.html#MultipleFilterValue
-       https://help.sap.com/doc/00f68c2e08b941f081002fd3691d86a7/2023.20/en-US/c1ba2b9531d3438da16fa18f107ea164.html
+       https://help.sap.com/doc/958d4c11261f42e992e8d01a4c0dde25/release/en-US/index.html#DataSource_MsetDimensionFilter
+       https://help.sap.com/doc/958d4c11261f42e992e8d01a4c0dde25/release/en-US/index.html#DataSource_MremoveDimensionFilter
 
-       getDimensions(feed) liefert technische MODELL-IDs; Feed-IDs wie
-       dimension_geplant_start dürfen nicht an die DataSource gehen.
-       Der ursprüngliche Planstart JJJJMMTThhmmss (gemeldete Modelldimension:
-       0WM_SPFR) unterstützt den numerischen SAC-Bereichsfilter NICHT.
-       Ein getMembers()-Abruf aller Sekunden-Zeitstempel ist bei der
-       vorliegenden Datenmenge ebenfalls ungeeignet.
+       DataSource.getDimensions() liefert ALLE Modelldimensionen der eigenen
+       Bindung, also auch 0CALWEEK/0CALDAY, wenn sie nicht in einem Feed stehen.
+       Filter erhalten diese Modell-IDs, niemals Feed- oder Datenzeilen-IDs.
+       setDimensionFilter(dimension, string[]) setzt einen Member-IN-Filter.
+       Wochen: 0CALWEEK (JJJJWW); Tage: 0CALDAY (JJJJMMTT), beide als Strings.
+       Kein numerischer Bereich und keine Filterung auf 0WM_SPFR[G].
 
-       Diese Fassung setzt deshalb ein ECHTES Planstart-Tagesmerkmal voraus:
-       - Im BW-Modell aus dem Originalzeitstempel in der fachlich gewählten
-         Standortzeitzone ableiten; Schlüssel JJJJMMTT, nicht JJJJMMTThhmmss.
-       - An dimension_planstart_tag binden. Das Umbenennen eines Feeds oder
-         das Wegformatieren der Uhrzeit wandelt das BW-Merkmal nicht um.
-       - dimension_geplant_start bleibt am vollständigen Originalzeitstempel.
-       - Bisherige Wochenfilter wie „KalJahr/Woche = 01.2026“ in SAC entfernen
-         oder fachlich passend umstellen, sonst wirken sie zusätzlich.
+       Eine kleine getMembers-Probe bestimmt ausschließlich die tatsächliche
+       Schreibweise der Kalender-Member (z.B. 01.2026, 202601, !202601 oder
+       MDX-Blatt-ID). Die vollständige Auswahl wird aus den angeforderten
+       Kalenderwochen/-tagen erzeugt, NICHT aus diesem Ausschnitt. Es werden
+       weder alle Zeitstempel noch der gesamte Kalenderkatalog abgefragt.
+       GetMembers nutzt dokumentiert standardmäßig MasterData und die aktive
+       Hierarchie. Diese Hierarchie wird nicht umgestellt.
 
-       Zuerst eine kleine Member-Probe prüfen, dann nur die verfügbaren
-       TAGES-Member lesen und ihre Original-IDs mit setDimensionFilter setzen.
-       Eine Tages-ID umfasst automatisch alle Planstarts dieses Kalendertags.
-       Es gibt keine Ersatzfilterung über Ankunft, Übertragungszeit oder die
-       schon geladenen Ergebniszeilen und kein Abschneiden von Zeitstempeln
-       zu erfundenen Filter-IDs. Der Tages-Member-Filter wird bei jeder
-       Datumsauswahl neu ermittelt; neu hinzukommende BW-Tage erfordern
-       erneutes Anwenden. Eine BW-Intervallvariable ist eine alternative
-       Modelllösung, wird hier jedoch weder vorausgesetzt noch geraten.
-       SAC überschreibt den normalen Dimensionsfilter; Advanced Filters,
-       Story-/Seitenfilter und BW-Variablen bleiben zusätzlich wirksam. */
+       Beim Wechsel zunächst den neuen Kalenderfilter setzen, dann den
+       anderen entfernen; damit bleibt ein alter Filter wie 01.2026 nicht
+       zusätzlich aktiv. Unabhängige Filter werden nicht entfernt.
+       Advanced Filters, Story-/Seitenfilter und BW-Variablen bleiben gemäß
+       SAC-API zusätzlich wirksam. Alle Scripting-Bridge-Aufrufe abwarten. */
     /* SAP Custom Widget Developer Guide, Abschnitt 6.2.3 / S. 39–40:
        https://help.sap.com/doc/c813a28922b54e50bd2a307b099787dc/2023.22/en-US/CustomWidgetDevGuide_en.pdf
        metadata.feeds[feed].values enthält Spalten-Aliase (feedName_index).
@@ -2240,138 +2247,103 @@
       return ids[0] || null;
     }
 
-    async _getPlanstartDimension(binding, required = true) {
-      // Nur der explizit dafür vorgesehene Tagesfeed legt die fachliche
-      // Zuordnung fest. Keine Kalenderdimension anhand ihres Namens raten.
-      this._dimensionResolutionDiagnostics = {};
-      this._lastPlanstartResolution = null;
-      const feed = "dimension_planstart_tag";
-      const id = await this._getModelDimension(binding, feed, false);
-      if (!id) {
-        if (required) throw new Error('Am Feed „Planstart-Tag“ (dimension_planstart_tag) fehlt ein aus Geplanter Start ab abgeleitetes Tagesmerkmal mit Schlüssel JJJJMMTT. Der vollständige Zeitstempel JJJJMMTThhmmss gehört an dimension_geplant_start.');
-        return null;
+    async _getCalendarDimensions(ds, requiredCode = null) {
+      const metadata = Object.values(this._dataBinding?.metadata?.dimensions || {});
+      let model = [], apiError = '';
+      if (typeof ds.getDimensions === 'function') {
+        try {
+          model = await ds.getDimensions();
+          if (!Array.isArray(model)) throw new Error('Dimensionsliste ist kein Array');
+        } catch (error) { model = []; apiError = error?.message || String(error); }
       }
-      const timestampId = await this._getModelDimension(binding, "dimension_geplant_start", false);
-      if (id === timestampId) {
-        if (required) throw new Error(`„Planstart-Tag“ und „Geplanter Start ab“ sind beide an „${id}“ gebunden. Für die Zeitraumsauswahl wird ein eigenes, im Modell abgeleitetes Tagesmerkmal JJJJMMTT benötigt.`);
-        return null;
+      const records = (model.length ? model : metadata).map(info =>
+        typeof info === 'string' ? { id: info } : info
+      ).filter(info => typeof info?.id === 'string' && info.id.trim() &&
+        !/^dimension_/.test(info.id) && !/\.\s*&\[/.test(info.id));
+      const dimensions = {};
+      for (const code of ['0CALWEEK', '0CALDAY']) {
+        // IDs unverändert zurückgeben, auch wenn sie qualifiziert sind.
+        const pattern = new RegExp('(?:^|[\\[.:/])' + code + '(?:$|[\\].:/])', 'i');
+        const exact = [...new Set(records.filter(info => pattern.test(info.id)).map(info => info.id))];
+        if (exact.length > 1) throw new Error(`Mehrere Modelldimensionen für ${code}: ${exact.join(', ')}.`);
+        dimensions[code] = exact[0] || null;
       }
-      this._lastPlanstartResolution = { feed, id };
-      return id;
+      this._calendarResolutionDiagnostics = { dimensions, apiError };
+      if (requiredCode && !dimensions[requiredCode]) {
+        throw new Error(`Die eigene SAC-Datenquelle liefert keine Modelldimension ${requiredCode}. Das Kalendermerkmal muss in der BW-Query verfügbar sein; eine Bindung an den Planstart-Feed ist nicht erforderlich.`);
+      }
+      return dimensions;
     }
 
-    /* Nur technische Schlüssel auswerten. MemberInfo.id bleibt beim Setzen
-       unverändert, auch bei BW-Hierarchie- oder MDX-IDs. displayId ist laut
-       SAC-API ein Anzeigeschlüssel; description ist dagegen Freitext und
-       wird nicht zur Zeitraumzuordnung verwendet. */
-    _getPlanstartDayMemberKey(member) {
-      const keys = [];
-      for (const value of [member?.id, member?.displayId]) {
-        if (typeof value !== "string") continue;
-        const text = value.trim();
-        const plain = /^!?(\d{8})$/.exec(text);
-        if (plain) { keys.push(plain[1]); continue; }
-        const mdx = Array.from(text.matchAll(/\.\&\[((?:[^\]]|\]\])*)\]/g));
-        if (mdx.length === 1 && /^\d{8}$/.test(mdx[0][1])) keys.push(mdx[0][1]);
+    _getCalendarMemberPattern(id, code) {
+      if (typeof id !== 'string') return null;
+      let value = id, prefix = '', suffix = '';
+      const mdx = /^(.*\.\&\[)([^\]]+)(\])$/.exec(value);
+      if (mdx) {
+        // Standard-Kalendermerkmale sind nicht geklammert; mehrteilige
+        // Compound-Keys lassen sich nicht aus einem einzelnen Datum bilden.
+        if ((value.match(/\.\&\[/g) || []).length !== 1) return null;
+        prefix = mdx[1]; value = mdx[2]; suffix = mdx[3];
+      } else if (value.startsWith('!')) { prefix = '!'; value = value.slice(1); }
+      let key, style, render;
+      if (code === '0CALWEEK') {
+        const week = WEEngine.parseKw(value);
+        if (!week) return null;
+        key = String(week.jahr) + String(week.kw).padStart(2, '0');
+        if (/^\d{6}$/.test(value)) { style = 'YYYYWW'; render = k => k; }
+        else if (/^\d{4}-W\d{2}$/.test(value)) { style = 'YYYY-WWW'; render = k => k.slice(0, 4) + '-W' + k.slice(4); }
+        else if (/^\d{1,2}\.\d{4}$/.test(value)) {
+          const padded = value.split('.')[0].length === 2;
+          style = padded ? 'WW.YYYY' : 'W.YYYY';
+          render = k => (padded ? k.slice(4) : String(Number(k.slice(4)))) + '.' + k.slice(0, 4);
+        } else return null;
+      } else {
+        let iso;
+        if (/^\d{8}$/.test(value)) {
+          iso = value.slice(0, 4) + '-' + value.slice(4, 6) + '-' + value.slice(6);
+          style = 'YYYYMMDD'; render = k => k;
+        } else if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+          iso = value; style = 'YYYY-MM-DD'; render = k => k.slice(0, 4) + '-' + k.slice(4, 6) + '-' + k.slice(6);
+        } else if (/^\d{2}\.\d{2}\.\d{4}$/.test(value)) {
+          iso = value.slice(6) + '-' + value.slice(3, 5) + '-' + value.slice(0, 2);
+          style = 'DD.MM.YYYY'; render = k => k.slice(6) + '.' + k.slice(4, 6) + '.' + k.slice(0, 4);
+        } else return null;
+        key = this._isoToCalendarDay(iso);
+        if (!key) return null;
       }
-      const unique = [...new Set(keys)];
-      if (unique.length > 1) throw new Error("Planstart-Tagesmember enthält widersprüchliche technische Tagesschlüssel.");
-      return unique.length && WEEngine.parsePlanDay(unique[0]) ? unique[0] : null;
+      return { key, signature: JSON.stringify([prefix, style, suffix]), render: k => prefix + render(k) + suffix };
     }
 
-    _checkPlanstartDayMembers(members, dimension) {
-      if (!Array.isArray(members) || !members.length) {
-        throw new Error(`Für die Planstart-Tagesdimension „${dimension}“ wurden keine Member geliefert. Die Bindung und die aktive Hierarchie in SAC prüfen.`);
-      }
-      const checked = [];
-      for (const member of members) {
-        if (typeof member?.id !== "string" || !member.id) {
-          throw new Error(`Die Tagesmember-Abfrage für „${dimension}“ enthält Einträge ohne technische Member-ID.`);
-        }
-        // Auch dann abbrechen, wenn die Anzeige-ID auf acht Stellen gekürzt
-        // wurde: ein 14-stelliger technischer Schlüssel bleibt ein Zeitstempel.
-        const isTimestamp = [member.id, member.displayId].some(value => {
-          const text = typeof value === "string" ? value.trim() : "";
-          return /^!?\d{14}$/.test(text) || /\.\&\[\d{14}\]$/.test(text);
-        });
-        if (isTimestamp) {
-          throw new Error(`Am Feed „Planstart-Tag“ ist „${dimension}“ mit 14-stelligen Zeitstempeln gebunden. Benötigt wird ein im Modell aus Geplanter Start ab abgeleiteter Kalendertag JJJJMMTT. Das Umbenennen des Feeds oder der Anzeige reicht nicht aus.`);
-        }
-        const key = this._getPlanstartDayMemberKey(member);
-        if (!key) {
-          const id = member.id.trim();
-          if (id !== "#" && id !== "!#" && !/^!?0{8}$/.test(id) && !/\.\&\[(?:#|0{8})\]$/.test(id)) {
-            throw new Error(`Ein Member von „${dimension}“ hat keinen gültigen technischen Tagesschlüssel JJJJMMTT. Planstart-Tagesableitung und aktive Hierarchie prüfen.`);
-          }
-        }
-        checked.push({ id: member.id, key });
-      }
-      return checked;
-    }
-
-    async _getPlanstartMemberFilter(ds, dimension, range) {
-      if (typeof ds.getMembers !== "function") {
-        throw new Error("Die SAC-Datenquelle stellt getMembers() zum Lesen der Planstart-Tageswerte nicht bereit.");
-      }
-      // Eine falsch gebundene Sekunden-Zeitstempeldimension bereits mit
-      // einer kleinen Probe zurückweisen, bevor ein großer Abruf erfolgt.
-      // Dokumentierter Standard: MasterData, aktive Hierarchie. Damit können
-      // auch Zeiträume außerhalb der bisher geladenen Ergebniszeilen gewählt
-      // werden. Keine erfundene accessMode-Konstante für die native JS-Brücke.
-      const probeLimit = 32;
-      const probe = await ds.getMembers(dimension, { limit: probeLimit });
-      let checked = this._checkPlanstartDayMembers(probe, dimension);
-      if (probe.length >= probeLimit) {
-        // Eigene Schutzgrenze für TAGE (über 130 Jahre), keine SAC-Systemgrenze.
-        // getMembers bietet kein Paging. Bei einer vollen Antwort niemals
-        // eine möglicherweise unvollständige Auswahl anwenden.
-        const maxDays = 50000;
-        const members = await ds.getMembers(dimension, { limit: maxDays + 1 });
-        if (!Array.isArray(members) || members.length > maxDays) {
-          throw new Error(`Die vollständige Liste der Planstart-Tage für „${dimension}“ konnte nicht ermittelt werden. Es wird kein Teilfilter angewendet; Tagesmerkmal bzw. eine BW-Intervallvariable prüfen.`);
-        }
-        checked = this._checkPlanstartDayMembers(members, dimension);
-        const completeIds = new Set(checked.map(member => member.id));
-        if (probe.some(member => !completeIds.has(member.id))) {
-          throw new Error("Die Planstart-Tagesmember haben sich während des Abrufs geändert. Bitte die Auswahl erneut anwenden.");
+    async _getCalendarMemberFilter(ds, dimension, selection) {
+      const keys = selection.code === '0CALWEEK' ? [selection.week] : [];
+      if (selection.code === '0CALDAY') {
+        const day = WEEngine.parsePlanDay(selection.from), end = WEEngine.parsePlanDay(selection.to);
+        if (!day || !end || day > end) throw new Error('Ungültiger Kalenderzeitraum.');
+        for (; day <= end; day.setUTCDate(day.getUTCDate() + 1)) {
+          keys.push(day.toISOString().slice(0, 10).replace(/-/g, ''));
         }
       }
-      const fromDay = range.from.slice(0, 8), toDay = range.to.slice(0, 8);
-      const allIds = new Set(), matchingIds = new Set();
-      for (const { id, key } of checked) {
-        allIds.add(id);
-        if (key && key >= fromDay && key <= toDay) matchingIds.add(id);
+      if (!keys.length) throw new Error('Es wurde kein Kalenderzeitraum ausgewählt.');
+      if (typeof ds.getMembers !== 'function') throw new Error('Die SAC-Datenquelle stellt getMembers() zur Ermittlung der Kalender-Member-IDs nicht bereit.');
+      const sample = await ds.getMembers(dimension, { limit: 32 });
+      if (!Array.isArray(sample)) throw new Error(`Die Kalender-Member von ${dimension} konnten nicht gelesen werden.`);
+      const patterns = new Map(), known = [];
+      for (const member of sample) {
+        const pattern = this._getCalendarMemberPattern(member?.id, selection.code);
+        if (pattern) { patterns.set(pattern.signature, pattern); known.push({ id: member.id, key: pattern.key }); }
       }
-      this._lastPlanstartMemberSelection = {
-        dimension, from: fromDay, to: toDay,
-        available: allIds.size, selected: matchingIds.size
-      };
-      if (matchingIds.size) return [...matchingIds];
-      // [] ist kein dokumentierter „keine Treffer“-Filter. Stattdessen alle
-      // gerade vollständig ermittelten Member ausschließen (inklusive #).
-      // Das ist ein dokumentierter MultipleFilterValue, kein Zahlenbereich.
-      return { values: [...allIds], exclude: true };
-    }
-
-    async _checkLegacyWeekFilter(ds) {
-      // Im Screenshot ist „KalJahr/Woche = 01.2026“ als zusätzlicher
-      // Widget-Filter gesetzt. Er wird nicht durch einen Planstart-Filter auf
-      // einer anderen Dimension ersetzt. Nur eindeutig erkannte normale
-      // Wochenfilter melden; die ID stammt aus der SAC-Datenquelle.
-      // Advanced Filters und übergeordnete Storyfilter sind hier nicht
-      // vollständig sichtbar und müssen bei der Einrichtung geprüft werden.
-      if (typeof ds.getDimensions !== "function" || typeof ds.getDimensionFilters !== "function") return;
-      const dimensions = await ds.getDimensions();
-      if (!Array.isArray(dimensions)) throw new Error("Die SAC-Modelldimensionen konnten nicht auf zusätzliche Wochenfilter geprüft werden.");
-      for (const info of dimensions) {
-        const id = typeof info?.id === "string" ? info.id : "";
-        const description = String(info?.description || "").replace(/\s+/g, "").toLowerCase();
-        if (!id || (!/(?:^|[\[.:/])0CALWEEK(?:$|[\].:/])/i.test(id) && description !== "kaljahr/woche")) continue;
-        const filters = await ds.getDimensionFilters(id);
-        if (Array.isArray(filters) && filters.length) {
-          throw new Error(`Zusätzlicher Wochenfilter auf „${info.description || id}“ (${id}) aktiv. In der SAC-Datenbindung den bisherigen Filter „KalJahr/Woche“ entfernen oder fachlich auf Planstart umstellen; er würde den gewählten Planstart-Zeitraum zusätzlich einschränken.`);
-        }
+      if (!patterns.size) {
+        throw new Error(`Für ${dimension} wurden keine erkennbaren Kalender-${selection.code === '0CALWEEK' ? 'Wochen' : 'Tages'}member geliefert. Das technische Schlüsselformat und die aktive Hierarchie in SAC prüfen.`);
       }
+      // Eine Notation muss sämtliche erkannten Beispiel-IDs reproduzieren.
+      // Damit sind auch ungepolsterte Wochen (1.2026 bis 53.2026) konsistent.
+      const compatible = [...patterns.values()].filter(pattern => known.every(member => pattern.render(member.key) === member.id));
+      if (compatible.length !== 1) throw new Error(`Die Kalender-Member von ${dimension} haben uneinheitliche technische Schlüssel. Die aktive Hierarchie in SAC prüfen.`);
+      const pattern = compatible[0];
+      const members = keys.map(pattern.render);
+      this._lastCalendarMemberSelection = { dimension, code: selection.code, selected: members.length,
+        first: members[0], last: members[members.length - 1] };
+      return members;
     }
 
     /* Filteränderungen nacheinander abarbeiten: schnelle Klickfolgen dürfen
@@ -2390,57 +2362,35 @@
       return result;
     }
 
-    async _applyQueryFilters(binding, ds, range, segment) {
-      // Alle Bindungen vor der ersten Änderung prüfen. 0 Ergebniszeilen
-      // sind ausdrücklich keine fehlende Datenbindung.
-      const tsDim = range ? await this._getPlanstartDimension(binding) : null;
-      const hasSegment = !!segment && segment !== "Gesamt";
-      const ladeDim = await this._getModelDimension(binding, "dimension_ladestelle", hasSegment);
-      if (typeof ds.setDimensionFilter !== "function" ||
-          (!hasSegment && (ladeDim || this._segmentFilterDimension) && typeof ds.removeDimensionFilter !== "function")) {
-        throw new Error("Die SAC-Datenquelle unterstützt die erforderliche Dimensionsfilterung nicht.");
+    async _applyQueryFilters(binding, ds, selection, segment) {
+      const calendar = selection ? await this._getCalendarDimensions(ds, selection.code) : null;
+      const hasSegment = !!segment && segment !== 'Gesamt';
+      const ladeDim = await this._getModelDimension(binding, 'dimension_ladestelle', hasSegment);
+      if (typeof ds.setDimensionFilter !== 'function' || typeof ds.removeDimensionFilter !== 'function') {
+        throw new Error('Die SAC-Datenquelle unterstützt die erforderliche Dimensionsfilterung nicht.');
       }
-      if (!range && !hasSegment && !ladeDim && !this._segmentFilterDimension) {
-        this._filterError = null;
-        return;
+      const target = selection ? calendar[selection.code] : null;
+      const otherCode = selection?.code === '0CALWEEK' ? '0CALDAY' : '0CALWEEK';
+      const members = selection ? await this._getCalendarMemberFilter(ds, target, selection) : null;
+      if (!selection && !hasSegment && !ladeDim && !this._segmentFilterDimension) {
+        this._filterError = null; return;
       }
-      // Member-Menge VOR jeder Filtermutation vollständig prüfen. Fehler beim
-      // Lesen, an der Schutzgrenze oder im Schlüsselformat erhalten die Analyse.
-      const planstartMembers = range ? await this._getPlanstartMemberFilter(ds, tsDim, range) : null;
-      if (range) await this._checkLegacyWeekFilter(ds);
-
       this._filterMutationStarted = true;
       this._filterError = null; this._rows = null; this._model = null; this._detail = null;
       this._render();
-      if (range) {
-        // Original-IDs der im Zeitraum liegenden Planstart-Tage filtern.
-        // Damit sind 00:00:00 bis 23:59:59 jedes gewählten Tages eingeschlossen.
-        // Bestehenden Zeitfilter ohne unbeschränkte Zwischenabfrage ersetzen.
-        await ds.setDimensionFilter(tsDim, planstartMembers);
-        this._planstartFilterDimension = tsDim;
+      if (selection) {
+        await ds.setDimensionFilter(target, members);
+        this._calendarFilterDimensions = calendar;
+        if (calendar[otherCode]) await ds.removeDimensionFilter(calendar[otherCode]);
+        this._calendarTimeCode = selection.code;
       }
       if (hasSegment) {
-        const values = SEGMENT_TO_LADESTELLE[segment] || [segment];
-        await ds.setDimensionFilter(ladeDim, values);
+        await ds.setDimensionFilter(ladeDim, SEGMENT_TO_LADESTELLE[segment] || [segment]);
         this._segmentFilterDimension = ladeDim;
       } else if (ladeDim || this._segmentFilterDimension) {
         await ds.removeDimensionFilter(ladeDim || this._segmentFilterDimension);
         this._segmentFilterDimension = null;
       }
-    }
-
-    /* "2026-W03" -> Kandidaten für das BW-Memberformat der Kalenderwoche.
-       Wir kennen nicht sicher, ob das Modell "03.2026" (formatiertes Label)
-       oder "202603" (6-stellige technische ID Jahr+Woche ohne Trennzeichen)
-       als Member-Schlüssel erwartet — deshalb liefern wir beide Varianten
-       als IN-Filter-Werte; BW ignoriert die nicht passende automatisch. */
-    _periodeToKWCandidates(periode) {
-      if (!periode) return [];
-      const i = String(periode).indexOf("-W");
-      if (i === -1) return [];
-      const jahr = periode.substring(0, i);
-      const kw = periode.substring(i + 2);
-      return [`${kw}.${jahr}`, `${jahr}${kw}`];
     }
 
     /* ---- Public API (aufrufbar via SAC-Script) ---- */
@@ -2506,46 +2456,61 @@
     /* Wird vom Story-Skript mit den Rohwerten aus dem Strategie-Widget
        aufgerufen: StrategieWidget.getSelectedPeriod/Segment/From/To/
        PriorYearPeriod(). Setzt den Query-Filter der EIGENEN Datenquelle
-       dieses Widgets (Planstart-Kalendertag + Ladestelle), ersetzt dabei
+       dieses Widgets (Kalenderwoche/-tag + Ladestelle), ersetzt dabei
        einen evtl. vorher aktiven Default-Filter auf derselben Dimension,
        und stößt so eine neue BW-Abfrage nur für diesen Zeitraum an.
        Sobald die Daten zurückkommen, feuert SAC erneut `set myDataSource`. */
     setPeriodFilter(periode, segment, vonISO, bisISO, vorjahr) {
-      return this._runFilterChange(() => this._applyPeriodFilter(periode, segment, vonISO, bisISO, vorjahr));
+      const yoyRevision = this._yoyRevision || 0;
+      return this._runFilterChange(() => this._applyPeriodFilter(periode, segment, vonISO, bisISO, vorjahr, yoyRevision));
     }
 
-    async _applyPeriodFilter(periode, segment, vonISO, bisISO, vorjahr) {
-      const from = this._isoToBW(vonISO), to = this._isoToBW(bisISO, true);
-      if (!from || !to || from > to) {
-        return this._filterFailed("Ungültiger Zeitraum. Bitte Start- und Enddatum prüfen.", false);
+    async _applyPeriodFilter(periode, segment, vonISO, bisISO, vorjahr, yoyRevision = this._yoyRevision || 0) {
+      const week = WEEngine.parseKw(periode);
+      let selection;
+      if (week) {
+        // Eine Strategie-Woche ist die vollständige ISO-Kalenderwoche.
+        // So passen Filter und Banner auch an ISO-Jahreswechseln zusammen.
+        const weekText = String(week.kw).padStart(2, '0');
+        const bounds = WEUX.range(`${week.jahr}-W${weekText}`);
+        vonISO = bounds.from; bisISO = bounds.to;
+        selection = { code: '0CALWEEK', week: String(week.jahr) + weekText };
+      } else {
+        if (/^\d{4}-W|^\d{6}$|^\d{1,2}\.\d{4}$/.test(String(periode || ''))) {
+          return this._filterFailed('Ungültige Kalenderwoche. Bitte Jahr und Wochennummer prüfen.', false);
+        }
+        // Monate und sonstige tagesgenaue Perioden verwenden 0CALDAY.
+        // Übergaben mit eigenen gültigen Grenzen behalten exakt diese Tage.
+        if (!vonISO && !bisISO && /^\d{4}-(?:0[1-9]|1[0-2])$/.test(String(periode || ''))) {
+          const bounds = WEUX.range(periode); vonISO = bounds.from; bisISO = bounds.to;
+        }
+        const from = this._isoToCalendarDay(vonISO), to = this._isoToCalendarDay(bisISO);
+        if (!from || !to || from > to) return this._filterFailed('Ungültiger Zeitraum. Bitte Start- und Enddatum prüfen.', false);
+        selection = { code: '0CALDAY', from, to };
       }
       const binding = await this._getQueryBinding();
       const ds = await this._getDataSource(binding);
-      if (!ds) {
-        console.warn("[WE-Cockpit] setPeriodFilter: keine DataSource — nur Kontext gesetzt, kein Requery.");
-        this.setPeriodContext(periode, segment, vorjahr);
-        return false;
-      }
-      await this._applyQueryFilters(binding, ds, { from, to }, segment);
-
-      // Kontext-Banner sofort zeigen; die eigentlichen Zeilen (myDataSource)
-      // kommen asynchron nach, sobald BW die neue Abfrage beantwortet hat.
+      if (!ds) return this._filterFailed('Keine SAC-Datenquelle verfügbar. Der Zeitraum wurde nicht angewendet.', false);
+      await this._applyQueryFilters(binding, ds, selection, segment);
+      // Das vorhandene Story-Skript setzt den Vorjahresvergleich unmittelbar
+      // nach setPeriodFilter(). Einen seitdem neu gelieferten Vergleich nicht
+      // durch den später abgeschlossenen asynchronen Filteraufruf löschen.
+      const newYoY = (this._yoyRevision || 0) !== yoyRevision;
+      const yoy = this._yoy;
       this.setPeriodContext(periode, segment, vorjahr);
-      // Tatsächlich übergebene Grenzen merken, auch wenn die Perioden-
-      // beschriftung nicht mit einer vollständigen Woche/Monat übereinstimmt.
-      Object.assign(this._periodContext, { von: vonISO, bis: bisISO });
+      if (newYoY) this._yoy = yoy;
+      Object.assign(this._periodContext, { von: vonISO, bis: bisISO, filterCode: selection.code });
       this._strategyContext = { ...this._periodContext };
+      this._strategyYoY = this._yoy;
       this._render();
       return true;
     }
 
-    /* ISO-Kalendertag -> BW-Zeitstempel. Beide Tagesgrenzen sind inklusiv:
-       "2026-09-10" -> "20260910000000" bzw. "20260910235959".
-       Die Schlüssel bleiben in der Zeitbasis des BW-Merkmals; keine
-       Umrechnung über Browserzeitzone, toISOString() oder Epoch-Millisekunden. */
-    _isoToBW(iso, endOfDay = false) {
-      if(typeof iso!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(iso)||!WEEngine.parsePlanDay(iso))return null;
-      return iso.replace(/-/g,'') + (endOfDay ? '235959' : '000000');
+    /* ISO-Kalendertag -> BW-Kalenderschlüssel, ohne Uhrzeit/Zeitzonenwechsel.
+       Ein 0CALDAY-Member umfasst den vollständigen Tag, auch den Endtag. */
+    _isoToCalendarDay(iso) {
+      if (typeof iso !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(iso) || !WEEngine.parsePlanDay(iso)) return null;
+      return iso.replace(/-/g, '');
     }
 
     /* Manueller Filter direkt im Cockpit: überschreibt die aus dem
@@ -2563,7 +2528,7 @@
       const keepTimeFilter = !vonISO && !bisISO;
       if(keepTimeFilter){const old=this._periodContext;const r=WEUX.range(old?.periode);vonISO=old?.von||r.from||'';bisISO=old?.bis||r.to||'';}
       else {vonISO=vonISO||bisISO;bisISO=bisISO||vonISO;}
-      if((vonISO&&!this._isoToBW(vonISO))||(bisISO&&!this._isoToBW(bisISO)))return this._filterFailed('Ungültiges Datum. Bitte ein vollständiges Kalenderdatum auswählen.', false);
+      if((vonISO&&!this._isoToCalendarDay(vonISO))||(bisISO&&!this._isoToCalendarDay(bisISO)))return this._filterFailed('Ungültiges Datum. Bitte ein vollständiges Kalenderdatum auswählen.', false);
       if (vonISO && bisISO && vonISO > bisISO) {
         const input=this._shadow.getElementById('fltBis');
         input?.setCustomValidity('Das Enddatum muss am oder nach dem Startdatum liegen.');input?.reportValidity();
@@ -2572,26 +2537,23 @@
       this._shadow.getElementById('fltBis')?.setCustomValidity('');
       const binding = await this._getQueryBinding();
       const ds = await this._getDataSource(binding);
-      if (!ds) {
-        console.warn("[WE-Cockpit] setManualFilter: keine DataSource — nur Kontext gesetzt, kein Requery.");
-      } else {
-        // Bei leeren Datumseingaben den bestehenden Zeitfilter tatsächlich
-        // unverändert lassen (auch externe Story-/BW-Einschränkungen).
-        const range = keepTimeFilter ? null : {
-          from: this._isoToBW(vonISO), to: this._isoToBW(bisISO, true)
-        };
-        await this._applyQueryFilters(binding, ds, range, segment);
-      }
+      if (!ds) return this._filterFailed('Keine SAC-Datenquelle verfügbar. Der manuelle Filter wurde nicht angewendet.', false);
+      // Leere Datumsfelder ändern nur das Segment. Sonst immer 0CALDAY,
+      // auch wenn die eingegebenen Tage zufällig eine ganze Woche umfassen.
+      const selection = keepTimeFilter ? null : {
+        code: '0CALDAY', from: this._isoToCalendarDay(vonISO), to: this._isoToCalendarDay(bisISO)
+      };
+      await this._applyQueryFilters(binding, ds, selection, segment);
       if (this._periodContext && !this._periodContext.manual) {
         this._strategyContext={...this._periodContext};this._strategyYoY=this._yoy;
       }
       // Banner als "manueller Filter" kennzeichnen (eigene Optik, kein
       // Bezug mehr auf die Strategie-Periode).
       const fmtD = (iso) => { if (!iso) return ""; const d = new Date(iso); return isNaN(d) ? iso :
-        d.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "2-digit" }); };
+        d.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "2-digit", timeZone: "UTC" }); };
       this._periodContext = {
         periode: "", segment: segment || "", vorjahr: "",
-        manual: true, von: vonISO || "", bis: bisISO || "",
+        manual: true, von: vonISO || "", bis: bisISO || "", filterCode: this._calendarTimeCode || this._periodContext?.filterCode || "",
         label: [vonISO || bisISO ? `${fmtD(vonISO) || "…"} – ${fmtD(bisISO) || "…"}` : "", segment].filter(Boolean).join(" · "),
       };
       this._yoy=null;
@@ -2612,11 +2574,12 @@
 
     async _restoreStrategySelection() {
       const c=this._strategyContext;
-      if(!c){await this._clearPeriodFilter();this.dispatchEvent(new CustomEvent('onContextClear'));return true;}
+      if(!c){const cleared=await this._clearPeriodFilter();if(cleared)this.dispatchEvent(new CustomEvent('onContextClear'));return cleared;}
+      const strategyYoY=this._strategyYoY;
       const r=WEUX.range(c.periode);
       const applied=await this._applyPeriodFilter(c.periode,c.segment,c.von||r.from,c.bis||r.to,c.vorjahr);
-      if(!applied&&await this._getDataSource())return false;
-      this._yoy=this._strategyYoY||null;
+      if(!applied)return false;
+      this._yoy=strategyYoY||null;this._strategyYoY=this._yoy;
       const panel=this._shadow.getElementById('filterpanel');if(panel)panel.hidden=true;
       this.dispatchEvent(new CustomEvent('onRestoreSelection',{detail:{...c}}));
       this._render();
@@ -2634,20 +2597,21 @@
     async _clearPeriodFilter() {
       const binding = await this._getQueryBinding();
       const ds = await this._getDataSource(binding);
-      if (ds) {
-        // Auch beim Zurücksetzen nur echte, aus der Bindung ermittelte IDs.
-        const tsDim = this._planstartFilterDimension || await this._getPlanstartDimension(binding, false);
-        const ladeDim = this._segmentFilterDimension || await this._getModelDimension(binding, "dimension_ladestelle", false);
-        this._filterMutationStarted = true;
-        if (tsDim) await ds.removeDimensionFilter(tsDim);
-        if (ladeDim) await ds.removeDimensionFilter(ladeDim);
+      if (!ds) return this._filterFailed('Keine SAC-Datenquelle verfügbar. Die Filter wurden nicht zurückgesetzt.', false);
+      const calendar = await this._getCalendarDimensions(ds);
+      const ladeDim = await this._getModelDimension(binding, 'dimension_ladestelle', false) || this._segmentFilterDimension;
+      if (typeof ds.removeDimensionFilter !== 'function') throw new Error('Die SAC-Datenquelle kann die Filter nicht entfernen.');
+      this._filterMutationStarted = true;
+      for (const id of [...new Set([...Object.values(calendar), ladeDim].filter(Boolean))]) {
+        await ds.removeDimensionFilter(id);
       }
-      this._planstartFilterDimension = null; this._segmentFilterDimension = null;
+      this._calendarFilterDimensions = null; this._calendarTimeCode = null; this._segmentFilterDimension = null;
       this.clearPeriodContext();
       return true;
     }
     /** Vorjahresvergleich setzen (Array oder JSON-String aus dem Strategie-Widget). */
     setYoYComparison(data) {
+      this._yoyRevision = (this._yoyRevision || 0) + 1;
       try { this._yoy = typeof data === "string" ? JSON.parse(data) : (data || []); }
       catch (e) { this._yoy = []; }
       if (this._model && this._mode === "puls") this._render();
@@ -3394,7 +3358,7 @@
       const card = document.createElement('div'); card.className='card';
       card.innerHTML=`<h3>Größte Mengenabweichungen · Artikelpositionen <span class="data-level">Position</span></h3>
         <p class="ux-meta">${rows.length} abweichende Positionen · ${all.filter(p=>!valid(p)).length} nicht bewertbar. Sortierung: größte absolute Differenz zuerst. Differenzmenge = Ist − Soll; Minus: Unterlieferung, Plus: Überlieferung.</p>
-        <p class="ux-meta">Jede Zeile ist eine Anlieferposition; derselbe Artikel kann mehrfach erscheinen. Zeitraum nach „Geplanter Start ab“. WE-Buchung zeigt den Buchungszeitpunkt der Position.</p>
+        <p class="ux-meta">Jede Zeile ist eine Anlieferposition; derselbe Artikel kann mehrfach erscheinen. Zeitraum gemäß gewähltem Kalenderfilter. WE-Buchung zeigt den Buchungszeitpunkt der Position.</p>
         <p class="ux-meta">Mengeneinheit: ${esc(this._props.quantityUnit||'nicht übermittelt; Vergleich der Rohmengen nur bei gleicher Einheit aussagekräftig')}.</p>
         <div id="article-positions"></div>`;
       main.appendChild(card);
@@ -3587,7 +3551,7 @@
         <p class="ux-meta">Paletten = Summe der je Anlieferposition aufgerundeten Werte (Menge Anlieferung IST ÷ PA1). Jede eindeutige Position zählt je Prozessschritt einmal. F = Frühschicht, S = Spätschicht. Die drei Prozesssummen dürfen nicht zu einer Gesamtpalettenzahl addiert werden.</p>
         ${stages.map(stage=>`<p class="ux-meta"><strong>${stage.label}</strong>: Zuordnung nach „${stage.source}“. Ausgeschlossen: ${stage.stats.ungueltig} Positionen wegen fehlender/ungültiger Istmenge, PA1 oder widersprüchlicher Daten; ${stage.stats.ohneSchicht} weitere Positionen ohne gültige Schicht F/S für diesen Schritt.</p>`).join('')}
         <p class="ux-meta">Entladen verwendet das vereinbarte tatsächliche Entladeende. PA1 muss größer als null sein. Es wird jeweils dieselbe Istmenge in Paletten umgerechnet; tatsächliche HU-Zählungen liegen hier nicht zugrunde.</p>
-        <p class="ux-meta">TE, Positionen, Menge und Volumen oben beziehen sich auf die Ankunftsschicht. Die Paletten beziehen sich auf die Schicht des jeweiligen Prozessschritts. Der Zeitraum bleibt nach „Geplanter Start ab“ gefiltert; keine Auswahl nach Buchungs- oder Einlagerungsdatum.</p></details>`;
+        <p class="ux-meta">TE, Positionen, Menge und Volumen oben beziehen sich auf die Ankunftsschicht. Die Paletten beziehen sich auf die Schicht des jeweiligen Prozessschritts. Die Zeitraumsauswahl folgt dem Kalenderfilter (Woche oder Tag). Die Schichtzuordnung verwendet weiterhin das jeweilige Prozessereignis.</p></details>`;
     }
 
     // Median-Zeit je Phase, gruppierte Balken Früh vs. Spät
@@ -4395,6 +4359,20 @@
     return s[lo] + (s[hi] - s[lo]) * (p - lo);
   }
 
+  // Eine bereits registrierte Web Component lässt sich in derselben Seite
+  // nicht neu definieren. In diesem Fall niemals die neue Fassung als aktiv
+  // melden, solange die alte Klasse tatsächlich noch verwendet wird.
+  const registeredCockpit = customElements.get?.("we-cockpit");
+  if (registeredCockpit) {
+    if (registeredCockpit.buildVersion !== WE_COCKPIT_BUILD) {
+      console.warn("[WE-Cockpit] Die geladene Kalenderfilter-Datei " + WE_COCKPIT_BUILD +
+        " konnte nicht aktiviert werden: In dieser Seite ist bereits eine andere Fassung registriert (" +
+        (registeredCockpit.buildVersion || "ohne Build-Kennung") +
+        "). Die main-URL in der Widget-JSON prüfen und die Story vollständig neu öffnen.");
+    }
+    return;
+  }
   WEUX.install(WECockpit, 'process');
   customElements.define("we-cockpit", WECockpit);
+  console.info?.("[WE-Cockpit] Aktiv: " + WE_COCKPIT_BUILD + " | Filter: 0CALWEEK / 0CALDAY");
 })();
