@@ -1,5 +1,5 @@
 /* WE Cockpit 0.28.0 – Detailanalysen; Datenvertrag widget (10).json. */
-/* Planstart-Korrektur 2026-09-15, Revision 2: SAC-Modelldimension aus Feed/Metadaten. */
+/* Planstart-Korrektur 2026-09-15, Revision 3: BW-Textmerkmal über echte Member-IDs filtern. */
 /* BEGIN SHARED UX */
 /* Shared presentation helpers, embedded in each SAC widget at build time. */
 (function () {
@@ -2143,15 +2143,30 @@
     /* Dokumentierte SAC-APIs (SAP API Reference, geprüft 2026-09-15):
        https://help.sap.com/doc/958d4c11261f42e992e8d01a4c0dde25/release/en-US/index.html#DataBinding_MgetDimensions
        https://help.sap.com/doc/958d4c11261f42e992e8d01a4c0dde25/release/en-US/index.html#DataSource_MsetDimensionFilter
-       https://help.sap.com/doc/958d4c11261f42e992e8d01a4c0dde25/release/en-US/index.html#RangeFilterValue
+       https://help.sap.com/doc/958d4c11261f42e992e8d01a4c0dde25/release/en-US/index.html#DataSource_MgetMembers
+       https://help.sap.com/doc/958d4c11261f42e992e8d01a4c0dde25/release/en-US/index.html#MembersOptions
+       https://help.sap.com/doc/958d4c11261f42e992e8d01a4c0dde25/release/en-US/index.html#MultipleFilterValue
+       https://help.sap.com/doc/00f68c2e08b941f081002fd3691d86a7/2023.20/en-US/c1ba2b9531d3438da16fa18f107ea164.html
 
        getDimensions(feed) liefert technische MODELL-IDs; Feed-IDs wie
        dimension_geplant_start dürfen nicht an die DataSource gehen.
-       [0WM_SPFRG] ist hier der numerische BW-Zeitstempel JJJJMMTThhmmss.
-       setDimensionFilter(dim, {from, to}) setzt EIN inklusives Intervall.
-       Die Grenzen bleiben Strings; keine Epoch-/UTC-Umrechnung und kein
-       TimeRange für eine nur als Zeitstempel kodierte BW-Zahl verwenden.
-       Voraussetzung: Das BW-Merkmal unterstützt einen Bereichsfilter.
+       „Geplanter Start ab [0WM_SPFRG]“ ist ein BW-TEXTMERKMAL mit Schlüsseln
+       im Format JJJJMMTThhmmss (gemeldete Modelldimension: 0WM_SPFR).
+       Ziffern im Schlüssel machen die Dimension NICHT numerisch.
+       SAC unterstützt {from, to} hier nicht; auch Number(), greaterOrEqual
+       oder TimeRange ändern den Dimensionstyp nicht. SAP BW unterstützt
+       laut obiger SAP-Hilfe keine numerischen Dimensionen.
+
+       Daher: Master-Data-Member lesen, ihre 14-stelligen Schlüssel inklusiv
+       vergleichen und die ORIGINALEN Member-IDs als IN-Filter setzen.
+       Keine Beschreibungen, erzeugten Sekundenlisten oder schon gefilterten
+       Ergebniszeilen als Ersatz für die verfügbare Member-Menge verwenden.
+       Der Member-Filter wird bei jeder Datumsauswahl neu ermittelt und ist
+       eine Momentaufnahme; neue BW-Member erfordern erneutes Anwenden.
+       Bei sehr großen Merkmalen ist eine passende BW-Intervallvariable mit
+       setVariableValue(variableId, {from, to}) der skalierbare Weg. Deren
+       Existenz, Merkmalszuordnung und Intervallfähigkeit sind aus dem Feed
+       nicht ableitbar; deshalb wird keine Variable automatisch geraten.
        SAC überschreibt den normalen Dimensionsfilter; Advanced Filters,
        Story-/Seitenfilter und BW-Variablen bleiben zusätzlich wirksam. */
     /* SAP Custom Widget Developer Guide, Abschnitt 6.2.3 / S. 39–40:
@@ -2261,7 +2276,7 @@
       }
       if (required) {
         // Nur Strukturinformationen protokollieren, keine Zeilen/Memberwerte.
-        console.warn("[WE-Cockpit] Planstart-Bindungsdiagnose (Revision 2):", {
+        console.warn("[WE-Cockpit] Planstart-Bindungsdiagnose (Revision 3):", {
           feeds: this._dimensionResolutionDiagnostics,
           dimensions: Object.entries(metadata.dimensions || {}).map(([alias, info]) => ({
             alias, id: info?.id, description: info?.description
@@ -2269,9 +2284,80 @@
         });
         const found = this._dimensionResolutionDiagnostics.dimension_planstart_tag?.apiIds || [];
         throw new Error('Planstart-Modelldimension nicht ermittelt: Der Feed dimension_geplant_start liefert keine verwendbare ID und die Metadaten enthalten keine eindeutige Zuordnung zu „Geplanter Start ab“. Tagesfeed-IDs: ' +
-          (found.join(', ') || 'keine') + '. Details siehe „Planstart-Bindungsdiagnose (Revision 2)“ in der Konsole.');
+          (found.join(', ') || 'keine') + '. Details siehe „Planstart-Bindungsdiagnose (Revision 3)“ in der Konsole.');
       }
       return null;
+    }
+
+    /* Nur technische Schlüssel auswerten. MemberInfo.id bleibt beim Setzen
+       unverändert, auch bei BW-Hierarchie- oder MDX-IDs. displayId ist laut
+       SAC-API ein Anzeigeschlüssel; description ist dagegen Freitext und
+       wird nicht zur Zeitraumzuordnung verwendet. */
+    _getPlanstartMemberKey(member) {
+      const keys = [];
+      for (const value of [member?.id, member?.displayId]) {
+        if (typeof value !== "string") continue;
+        const text = value.trim();
+        const plain = /^!?(\d{14})$/.exec(text);
+        if (plain) { keys.push(plain[1]); continue; }
+        const mdx = Array.from(text.matchAll(/\.\&\[((?:[^\]]|\]\])*)\]/g));
+        if (mdx.length === 1 && /^\d{14}$/.test(mdx[0][1])) keys.push(mdx[0][1]);
+      }
+      const unique = [...new Set(keys)];
+      if (unique.length > 1) throw new Error("Planstart-Member enthält widersprüchliche technische Zeitstempelschlüssel.");
+      return unique[0] || null;
+    }
+
+    async _getPlanstartMemberFilter(ds, dimension, range) {
+      if (typeof ds.getMembers !== "function") {
+        throw new Error("Die SAC-Datenquelle stellt getMembers() für die Planstart-Auswahl nicht bereit. Für dieses BW-Textmerkmal wird dann eine passende BW-Intervallvariable benötigt.");
+      }
+      // Eigene Schutzgrenze, keine behauptete SAC-Systemgrenze. Ein Element
+      // mehr anfordern, um eine am Limit abgeschnittene Antwort zu erkennen.
+      // MembersOptions hat KEIN offset / Paging. Bei Überschreitung niemals
+      // nur die ersten Member filtern. Kein dauerhafter Member-Cache.
+      const maxMembers = 100000;
+      // Dokumentierter Standard ohne accessMode: MemberAccessMode.MasterData
+      // (alle verfügbaren Member), NICHT BookedValues. Die aktive Hierarchie
+      // bleibt erhalten; IDs derselben Hierarchie werden weiterverwendet.
+      const members = await ds.getMembers(dimension, { limit: maxMembers + 1 });
+      if (!Array.isArray(members) || !members.length) {
+        throw new Error(`Für die Planstart-Dimension „${dimension}“ wurden keine verwendbaren Master-Data-Member geliefert. Member-Zugriff und aktive Hierarchie prüfen; die bisherige Auswahl bleibt erhalten.`);
+      }
+      if (members.length > maxMembers) {
+        throw new Error(`Planstart-Auswahl nicht angewendet: Die Member-Abfrage für „${dimension}“ erreicht die Schutzgrenze von ${maxMembers.toLocaleString("de-DE")} Membern. Eine vollständige Auswahl ist so nicht gesichert. Für diese Datenmenge eine BW-Intervallvariable für Planstart bereitstellen.`);
+      }
+      const allIds = new Set(), matchingIds = new Set();
+      let unreadable = 0;
+      for (const member of members) {
+        if (typeof member?.id !== "string" || !member.id) {
+          throw new Error(`Die Member-Abfrage für „${dimension}“ enthält Einträge ohne technische Member-ID.`);
+        }
+        allIds.add(member.id);
+        const key = this._getPlanstartMemberKey(member);
+        if (key) {
+          // Gleich lange JJJJMMTThhmmss-Strings sind chronologisch sortierbar.
+          // Keine Datums-/Zeitzonen- oder Zahlenkonvertierung der Schlüssel.
+          if (key >= range.from && key <= range.to) matchingIds.add(member.id);
+        } else {
+          // BW „nicht zugeordnet“ hat keinen Planstart. Andere unbekannte
+          // Formate nicht still übergehen: Es könnten echte Treffer sein.
+          const id = member.id.trim();
+          if (id !== "#" && id !== "!#" && !/\.\&\[#\]$/.test(id)) unreadable++;
+        }
+      }
+      if (unreadable) {
+        throw new Error(`Planstart-Auswahl nicht angewendet: ${unreadable} Member von „${dimension}“ haben keinen eindeutigen technischen Schlüssel im Format JJJJMMTThhmmss. Member-ID/Anzeigeschlüssel und Hierarchie prüfen.`);
+      }
+      this._lastPlanstartMemberSelection = {
+        dimension, from: range.from, to: range.to,
+        available: allIds.size, selected: matchingIds.size
+      };
+      if (matchingIds.size) return [...matchingIds];
+      // [] ist kein dokumentierter „keine Treffer“-Filter. Stattdessen alle
+      // gerade vollständig ermittelten Member ausschließen (inklusive #).
+      // Das ist ein dokumentierter MultipleFilterValue, kein Zahlenbereich.
+      return { values: [...allIds], exclude: true };
     }
 
     /* Filteränderungen nacheinander abarbeiten: schnelle Klickfolgen dürfen
@@ -2304,14 +2390,17 @@
         this._filterError = null;
         return;
       }
+      // Member-Menge VOR jeder Filtermutation vollständig prüfen. Fehler beim
+      // Lesen, an der Schutzgrenze oder im Schlüsselformat erhalten die Analyse.
+      const planstartMembers = range ? await this._getPlanstartMemberFilter(ds, tsDim, range) : null;
 
       this._filterMutationStarted = true;
       this._filterError = null; this._rows = null; this._model = null; this._detail = null;
       this._render();
       if (range) {
-        // Kein removeDimensionFilter voranstellen: setDimensionFilter
-        // ersetzt den bisherigen Bereich ohne unbeschränkte Zwischenabfrage.
-        await ds.setDimensionFilter(tsDim, { from: range.from, to: range.to });
+        // Ein Member-Filter ist auch für nicht numerische BW-Merkmale gültig.
+        // Bestehenden Zeitfilter ohne unbeschränkte Zwischenabfrage ersetzen.
+        await ds.setDimensionFilter(tsDim, planstartMembers);
         this._planstartFilterDimension = tsDim;
       }
       if (hasSegment) {
