@@ -1,4 +1,5 @@
 /* WE Cockpit 0.28.0 – Detailanalysen; Datenvertrag widget (10).json. */
+/* Planstart-Korrektur 2026-09-15: BW-Zeitstempel [0WM_SPFRG], vollständige Tage. */
 /* BEGIN SHARED UX */
 /* Shared presentation helpers, embedded in each SAC widget at build time. */
 (function () {
@@ -20,7 +21,7 @@
     shift: ['Schichtvergleich','Die Periodenauswahl bleibt am Planstart ausgerichtet. Innerhalb dieser Auswahl werden die Schichten anhand der jeweiligen BW-Ereignismerkmale betrachtet.','Schichtzeiten und die wöchentliche Mannschaftsrotation sind von der Planstartperiode zu unterscheiden. Die verwendete Schicht steht am Diagramm, beispielsweise Ankunftsschicht.']
   };
   topics.start=['So verwendest du die Analyse','1. In der Strategieübersicht Periode und Ladestelle wählen. Dort stehen ausschließlich aggregierte BW-Kennzahlen.','2. „Im Cockpit analysieren“ öffnet den Analysebereich. In SAC setzt die gemeinsame Zeitraumfilterung eine passende Datenbindung in beiden Widgets voraus.','3. Im Cockpit die neun Analysereiter verwenden. TE-Details zeigen Anlieferungen und Positionen; der Zurück-Button führt zur vorherigen Analyse.'];
-  topics.data[2]='Die gemeinsame Planstart-Auswahl setzt eine entsprechende Bindung beider Widgets voraus. Die gelieferte Strategie-JSON enthält zunächst eine BW-Kalenderwoche; die Cockpit-JSON enthält noch keinen Planstart-Tag. Ohne diese Bindung werden geladene Daten nicht als automatisch nach Planstart gefiltert ausgegeben. Die sichtbaren Bindungshinweise nennen fehlende Felder.';
+  topics.data[2]='Die Zeitraumsauswahl im Cockpit bezieht sich auf „Geplanter Start ab“ [0WM_SPFRG]. Start- und Endtag werden vollständig eingeschlossen. Der Zeitstempel muss in der Datenbindung des Cockpits vorhanden sein; ein zusätzliches Planstart-Tagesmerkmal ist dafür nicht erforderlich. Die Strategieauswahl und eigene Datumsbereiche verwenden dieselbe Filterung.';
   topics.comparison[1]='Das Strategiewidget zeigt ausschließlich BW-Aggregate, keine Trendpfeile oder Vorjahresquoten. Detailvergleiche gehören ins Cockpit und benötigen passende Daten für die Vergleichszeiträume.';
   const metrics = {
     dwell_avg:['Ø Standzeit','TE','Aufenthaltsdauer der TE am Standort.','Abfahrt Kontrollpunkt − Ankunft Kontrollpunkt','dwell'],
@@ -87,7 +88,7 @@
     const ctx=w._periodContext;
     const per=type==='strategy'?(w._rows?.length?w._perioden?.[w._scrubIdx ?? w._perioden.length-1]:null):ctx?.periode;
     const seg=type==='strategy'?w._seg:ctx?.segment;
-    const r=ctx?.manual?{from:ctx.von,to:ctx.bis}:range(per);
+    const r=ctx?.manual||(type==='process'&&ctx?.von&&ctx?.bis)?{from:ctx.von,to:ctx.bis}:range(per);
     return {per,seg:!seg||seg==='Gesamt'?'Alle Ladestellen':seg,range:r.from?`${date(r.from)} – ${date(r.to)}`:'Gesamter geladener Datenbestand'};
   }
   function open(w,key,trigger){
@@ -2106,10 +2107,14 @@
       try {
         this._boundFeeds=new Set((dataBinding.data||[]).flatMap(row=>Object.keys(row).map(k=>k.replace(/_\d+$/,''))));
         const missing=[];
-        if(!this._boundFeeds.has('dimension_planstart_tag'))missing.push('Planstart-Tagesbindung fehlt: Die Strategieauswahl kann nicht als Planstart-Zeitraum abgefragt werden.');
-        if(!this._boundFeeds.has('dimension_geplant_start'))missing.push('Geplanter Start ab fehlt: berechnete Termintreue nicht verfügbar.');
-        if(!this._boundFeeds.has('dimension_sap_puenktlich'))missing.push('BW-Pünktlichkeit P/N fehlt: kein Spediteurranking nach BW-Pünktlichkeit.');
-        if(!this._boundFeeds.has('dimension_sap_otif')||!this._boundFeeds.has('dimension_sap_otif_position'))missing.push('BW-OTIF-Bindungen fehlen; Mengentreue aus Soll/Ist bleibt separat berechenbar.');
+        // Die Query-Filterung prüft DataBinding.getDimensions(), nicht die
+        // Ergebnismenge. Auch nach 0 Treffern muss ein Zeitraumwechsel gehen.
+        // Ein eigener Planstart-Tag ist für [0WM_SPFRG] nicht erforderlich.
+        if(this._boundFeeds.size) {
+          if(!this._boundFeeds.has('dimension_geplant_start'))missing.push('Geplanter Start ab fehlt: berechnete Termintreue nicht verfügbar.');
+          if(!this._boundFeeds.has('dimension_sap_puenktlich'))missing.push('BW-Pünktlichkeit P/N fehlt: kein Spediteurranking nach BW-Pünktlichkeit.');
+          if(!this._boundFeeds.has('dimension_sap_otif')||!this._boundFeeds.has('dimension_sap_otif_position'))missing.push('BW-OTIF-Bindungen fehlen; Mengentreue aus Soll/Ist bleibt separat berechenbar.');
+        }
         this._bindingNotice=missing.join(' ');
         this._rows = ingestRows(dataBinding.data ?? []);
       } catch (e) {
@@ -2119,16 +2124,109 @@
       this._rebuild();
     }
 
-    /* Eigene Datenquelle der Widget-Bindung holen (gleiches Muster wie
-       this.dataBindings.getDataBinding('myDataSource').getDataSource()
-       im GeoMapWidget) — NICHT auf einer fremden Tabelle/Chart aufrufen,
-       sondern auf der eigenen Bindung dieses Custom Widgets. */
-    _getDataSource() {
+    /* Ausschließlich die eigene SAC-Bindung verwenden. await unterstützt
+       sowohl direkte SDK-Rückgaben als auch Promise-basierte JS-Brücken. */
+    _getQueryBinding() {
+      return this.dataBindings?.getDataBinding("myDataSource") ?? null;
+    }
+
+    async _getDataSource(binding) {
       try {
-        return this.dataBindings?.getDataBinding("myDataSource")?.getDataSource() ?? null;
+        const ownBinding = binding || await this._getQueryBinding();
+        return (await ownBinding?.getDataSource()) ?? null;
       } catch (e) {
         console.warn("[WE-Cockpit] DataSource nicht verfügbar:", e);
         return null;
+      }
+    }
+
+    /* Dokumentierte SAC-APIs (SAP API Reference, geprüft 2026-09-15):
+       https://help.sap.com/doc/958d4c11261f42e992e8d01a4c0dde25/release/en-US/index.html#DataBinding_MgetDimensions
+       https://help.sap.com/doc/958d4c11261f42e992e8d01a4c0dde25/release/en-US/index.html#DataSource_MsetDimensionFilter
+       https://help.sap.com/doc/958d4c11261f42e992e8d01a4c0dde25/release/en-US/index.html#RangeFilterValue
+
+       getDimensions(feed) liefert technische MODELL-IDs; Feed-IDs wie
+       dimension_geplant_start dürfen nicht an die DataSource gehen.
+       [0WM_SPFRG] ist hier der numerische BW-Zeitstempel JJJJMMTThhmmss.
+       setDimensionFilter(dim, {from, to}) setzt EIN inklusives Intervall.
+       Die Grenzen bleiben Strings; keine Epoch-/UTC-Umrechnung und kein
+       TimeRange für eine nur als Zeitstempel kodierte BW-Zahl verwenden.
+       Voraussetzung: Das BW-Merkmal unterstützt einen Bereichsfilter.
+       SAC überschreibt den normalen Dimensionsfilter; Advanced Filters,
+       Story-/Seitenfilter und BW-Variablen bleiben zusätzlich wirksam. */
+    async _getModelDimension(binding, feed, required = true) {
+      if (typeof binding?.getDimensions !== "function") {
+        throw new Error("Die SAC-Datenbindung unterstützt getDimensions() nicht.");
+      }
+      const dimensions = await binding.getDimensions(feed);
+      if (dimensions != null && !Array.isArray(dimensions)) {
+        throw new Error("Ungültige Dimensionsangabe der Datenbindung: " + feed);
+      }
+      const ids = [...new Set((dimensions || []).filter(id => typeof id === "string" && id.trim()))];
+      if (ids.length > 1) throw new Error("Mehrdeutige Datenbindung: " + feed);
+      if (!ids.length && required) throw new Error("Keine Modelldimension gebunden: " + feed);
+      return ids[0] || null;
+    }
+
+    async _getPlanstartDimension(binding, required = true) {
+      // Primär der bereits vorhandene Zeitstempel-Feed. Den älteren Feed
+      // nur akzeptieren, wenn dort ebenfalls genau [0WM_SPFRG] gebunden ist.
+      // Kein Ersatz durch Ankunft, Kalenderwoche oder einen BW-Ladetag.
+      for (const feed of ["dimension_geplant_start", "dimension_planstart_tag"]) {
+        const id = await this._getModelDimension(binding, feed, false);
+        if (id && /^(?:0WM_SPFRG|\[0WM_SPFRG\])$/i.test(id)) return id;
+      }
+      if (required) throw new Error('Für die Planstart-Auswahl muss [0WM_SPFRG] an „Geplanter Start ab“ gebunden sein.');
+      return null;
+    }
+
+    /* Filteränderungen nacheinander abarbeiten: schnelle Klickfolgen dürfen
+       Zeitraum und Ladestelle verschiedener Auswahlen nicht vermischen.
+       Die öffentlichen Filtermethoden liefern Promise<boolean>; bei eigener
+       JavaScript-Ansteuerung das Ergebnis mit await auswerten. */
+    _runFilterChange(change) {
+      const result = (this._filterQueue || Promise.resolve()).then(() => {
+        this._filterMutationStarted = false;
+        return change();
+      }).catch(error => {
+        console.warn("[WE-Cockpit] Filteränderung fehlgeschlagen:", error);
+        return this._filterFailed(error?.message || "Die Auswahl konnte nicht angewendet werden.", this._filterMutationStarted);
+      });
+      this._filterQueue = result;
+      return result;
+    }
+
+    async _applyQueryFilters(binding, ds, range, segment) {
+      // Alle Bindungen vor der ersten Änderung prüfen. 0 Ergebniszeilen
+      // sind ausdrücklich keine fehlende Datenbindung.
+      const tsDim = range ? await this._getPlanstartDimension(binding) : null;
+      const hasSegment = !!segment && segment !== "Gesamt";
+      const ladeDim = await this._getModelDimension(binding, "dimension_ladestelle", hasSegment);
+      if (typeof ds.setDimensionFilter !== "function" ||
+          (!hasSegment && (ladeDim || this._segmentFilterDimension) && typeof ds.removeDimensionFilter !== "function")) {
+        throw new Error("Die SAC-Datenquelle unterstützt die erforderliche Dimensionsfilterung nicht.");
+      }
+      if (!range && !hasSegment && !ladeDim && !this._segmentFilterDimension) {
+        this._filterError = null;
+        return;
+      }
+
+      this._filterMutationStarted = true;
+      this._filterError = null; this._rows = null; this._model = null; this._detail = null;
+      this._render();
+      if (range) {
+        // Kein removeDimensionFilter voranstellen: setDimensionFilter
+        // ersetzt den bisherigen Bereich ohne unbeschränkte Zwischenabfrage.
+        await ds.setDimensionFilter(tsDim, { from: range.from, to: range.to });
+        this._planstartFilterDimension = tsDim;
+      }
+      if (hasSegment) {
+        const values = SEGMENT_TO_LADESTELLE[segment] || [segment];
+        await ds.setDimensionFilter(ladeDim, values);
+        this._segmentFilterDimension = ladeDim;
+      } else if (ladeDim || this._segmentFilterDimension) {
+        await ds.removeDimensionFilter(ladeDim || this._segmentFilterDimension);
+        this._segmentFilterDimension = null;
       }
     }
 
@@ -2199,56 +2297,56 @@
       this._render();
     }
 
-    _filterFailed(message) {
-      this._filterError=message;this._rows=[];this._model=null;this._detail=null;this._render();return false;
+    _filterFailed(message, discardRows = true) {
+      this._filterError = message;
+      if (discardRows) { this._rows = []; this._model = null; this._detail = null; }
+      this._render();
+      return false;
     }
 
     /* Wird vom Story-Skript mit den Rohwerten aus dem Strategie-Widget
        aufgerufen: StrategieWidget.getSelectedPeriod/Segment/From/To/
        PriorYearPeriod(). Setzt den Query-Filter der EIGENEN Datenquelle
-       dieses Widgets (Periode/Kalenderwoche + Ladestelle), löscht dabei
+       dieses Widgets (Planstart-Zeitstempel + Ladestelle), ersetzt dabei
        einen evtl. vorher aktiven Default-Filter auf derselben Dimension,
        und stößt so eine neue BW-Abfrage nur für diesen Zeitraum an.
        Sobald die Daten zurückkommen, feuert SAC erneut `set myDataSource`. */
     setPeriodFilter(periode, segment, vonISO, bisISO, vorjahr) {
-      if(this._boundFeeds&&!this._boundFeeds.has('dimension_planstart_tag'))return this._filterFailed('Die Auswahl kann nicht übernommen werden: dimension_planstart_tag fehlt in der Datenbindung. Keine Ersatzfilterung nach Ankunft oder BW-Übertragung.');
-      const LADE_DIM = "dimension_ladestelle"; // technischen Namen ggf. anpassen
-      const TS_DIM = "dimension_planstart_tag";   // technischen Namen ggf. anpassen
-      const ds = this._getDataSource();
+      return this._runFilterChange(() => this._applyPeriodFilter(periode, segment, vonISO, bisISO, vorjahr));
+    }
+
+    async _applyPeriodFilter(periode, segment, vonISO, bisISO, vorjahr) {
+      const from = this._isoToBW(vonISO), to = this._isoToBW(bisISO, true);
+      if (!from || !to || from > to) {
+        return this._filterFailed("Ungültiger Zeitraum. Bitte Start- und Enddatum prüfen.", false);
+      }
+      const binding = await this._getQueryBinding();
+      const ds = await this._getDataSource(binding);
       if (!ds) {
         console.warn("[WE-Cockpit] setPeriodFilter: keine DataSource — nur Kontext gesetzt, kein Requery.");
         this.setPeriodContext(periode, segment, vorjahr);
         return false;
       }
-
-      // Einen evtl. aktiven manuellen Datumsbereich-Filter entfernen — die
-      // Strategie-Auswahl hat wieder Vorrang, bis der Nutzer erneut manuell
-      // filtert.
-      const from=this._isoToBW(vonISO), to=this._isoToBW(bisISO);
-      if (!from || !to || from > to) return false;
-      this._filterError=null;this._rows=null;this._model=null;this._detail=null;
-      try { ds.removeDimensionFilter(TS_DIM); } catch (e) {}
-      try { ds.setDimensionFilterRange(TS_DIM, from, to); }
-      catch(e) { console.warn("[WE-Cockpit] Planstart-Filter fehlgeschlagen:",e); return this._filterFailed('Zeitraum konnte nicht angewendet werden. Auswahl bitte erneut übernehmen.'); }
-
-      // Segment-Filter: nur setzen wenn nicht "Gesamt"/leer; sonst entfernen.
-      try { ds.removeDimensionFilter(LADE_DIM); } catch (e) {}
-      if (segment && segment !== "Gesamt") {
-        const werte = SEGMENT_TO_LADESTELLE[segment] || [segment];
-        try { ds.setDimensionFilter(LADE_DIM, werte); }
-        catch (e) { console.warn("[WE-Cockpit] Segment-Filter fehlgeschlagen:", e && e.message); return this._filterFailed('Ladestelle konnte nicht angewendet werden. Auswahl bitte erneut übernehmen.'); }
-      }
+      await this._applyQueryFilters(binding, ds, { from, to }, segment);
 
       // Kontext-Banner sofort zeigen; die eigentlichen Zeilen (myDataSource)
       // kommen asynchron nach, sobald BW die neue Abfrage beantwortet hat.
       this.setPeriodContext(periode, segment, vorjahr);
+      // Tatsächlich übergebene Grenzen merken, auch wenn die Perioden-
+      // beschriftung nicht mit einer vollständigen Woche/Monat übereinstimmt.
+      Object.assign(this._periodContext, { von: vonISO, bis: bisISO });
+      this._strategyContext = { ...this._periodContext };
+      this._render();
       return true;
     }
 
-    /* "2026-01-13" -> "20260113" (BW-Datumsformat, ohne Trennzeichen) */
-    _isoToBW(iso) {
+    /* ISO-Kalendertag -> BW-Zeitstempel. Beide Tagesgrenzen sind inklusiv:
+       "2026-09-10" -> "20260910000000" bzw. "20260910235959".
+       Die Schlüssel bleiben in der Zeitbasis des BW-Merkmals; keine
+       Umrechnung über Browserzeitzone, toISOString() oder Epoch-Millisekunden. */
+    _isoToBW(iso, endOfDay = false) {
       if(typeof iso!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(iso)||!WEEngine.parsePlanDay(iso))return null;
-      return iso.replace(/-/g,'');
+      return iso.replace(/-/g,'') + (endOfDay ? '235959' : '000000');
     }
 
     /* Manueller Filter direkt im Cockpit: überschreibt die aus dem
@@ -2258,40 +2356,35 @@
        leer erlaubt (dann bleibt der Zeitfilter unverändert). segment ist
        "" (alle) oder einer von Container/Landverkehr/BSL/Sonstige. */
     setManualFilter(vonISO, bisISO, segment) {
-      if(this._boundFeeds&&!this._boundFeeds.has('dimension_planstart_tag'))return this._filterFailed('Manueller Planstart-Zeitraum nicht verfügbar: dimension_planstart_tag fehlt in der Datenbindung.');
+      return this._runFilterChange(() => this._applyManualFilter(vonISO, bisISO, segment));
+    }
+
+    async _applyManualFilter(vonISO, bisISO, segment) {
       // Empty date inputs keep the previous effective date window.
-      if(!vonISO&&!bisISO){const old=this._periodContext;const r=old?.manual?{from:old.von,to:old.bis}:WEUX.range(old?.periode);vonISO=r.from||'';bisISO=r.to||'';}
+      const keepTimeFilter = !vonISO && !bisISO;
+      if(keepTimeFilter){const old=this._periodContext;const r=WEUX.range(old?.periode);vonISO=old?.von||r.from||'';bisISO=old?.bis||r.to||'';}
       else {vonISO=vonISO||bisISO;bisISO=bisISO||vonISO;}
-      if((vonISO&&!this._isoToBW(vonISO))||(bisISO&&!this._isoToBW(bisISO)))return this._filterFailed('Ungültiges Datum. Bitte ein vollständiges Kalenderdatum auswählen.');
+      if((vonISO&&!this._isoToBW(vonISO))||(bisISO&&!this._isoToBW(bisISO)))return this._filterFailed('Ungültiges Datum. Bitte ein vollständiges Kalenderdatum auswählen.', false);
       if (vonISO && bisISO && vonISO > bisISO) {
         const input=this._shadow.getElementById('fltBis');
-        input.setCustomValidity('Das Enddatum muss am oder nach dem Startdatum liegen.');input.reportValidity();return false;
+        input?.setCustomValidity('Das Enddatum muss am oder nach dem Startdatum liegen.');input?.reportValidity();
+        return this._filterFailed('Das Enddatum muss am oder nach dem Startdatum liegen.', false);
       }
       this._shadow.getElementById('fltBis')?.setCustomValidity('');
-      if (this._periodContext && !this._periodContext.manual) {
-        this._strategyContext={...this._periodContext};this._strategyYoY=this._yoy;
-      }
-      const LADE_DIM = "dimension_ladestelle";
-      const TS_DIM = "dimension_planstart_tag";
-      const ds = this._getDataSource();
+      const binding = await this._getQueryBinding();
+      const ds = await this._getDataSource(binding);
       if (!ds) {
         console.warn("[WE-Cockpit] setManualFilter: keine DataSource — nur Kontext gesetzt, kein Requery.");
       } else {
-        this._filterError=null;this._rows=null;this._model=null;this._detail=null;
-        // Ein Datumsbereich ersetzt die Kalenderwochen-Filterung der
-        // Strategie-Kopplung vollständig (präziser, tagesgenau statt KW).
-        const vonBW = this._isoToBW(vonISO), bisBW = this._isoToBW(bisISO);
-        if (vonBW || bisBW) {
-          try { ds.removeDimensionFilter(TS_DIM); } catch (e) {}
-          try { ds.setDimensionFilterRange(TS_DIM, vonBW || bisBW, bisBW || vonBW); }
-          catch (e) { console.warn("[WE-Cockpit] Datumsfilter fehlgeschlagen:", e && e.message);return this._filterFailed('Zeitraum konnte nicht angewendet werden. Bitte erneut versuchen.'); }
-        }
-        try { ds.removeDimensionFilter(LADE_DIM); } catch (e) {}
-        if (segment) {
-          const werte = SEGMENT_TO_LADESTELLE[segment] || [segment];
-          try { ds.setDimensionFilter(LADE_DIM, werte); }
-          catch (e) { console.warn("[WE-Cockpit] Segment-Filter fehlgeschlagen:", e && e.message);return this._filterFailed('Ladestelle konnte nicht angewendet werden. Bitte erneut versuchen.'); }
-        }
+        // Bei leeren Datumseingaben den bestehenden Zeitfilter tatsächlich
+        // unverändert lassen (auch externe Story-/BW-Einschränkungen).
+        const range = keepTimeFilter ? null : {
+          from: this._isoToBW(vonISO), to: this._isoToBW(bisISO, true)
+        };
+        await this._applyQueryFilters(binding, ds, range, segment);
+      }
+      if (this._periodContext && !this._periodContext.manual) {
+        this._strategyContext={...this._periodContext};this._strategyYoY=this._yoy;
       }
       // Banner als "manueller Filter" kennzeichnen (eigene Optik, kein
       // Bezug mehr auf die Strategie-Periode).
@@ -2315,15 +2408,20 @@
     }
 
     restoreStrategySelection() {
+      return this._runFilterChange(() => this._restoreStrategySelection());
+    }
+
+    async _restoreStrategySelection() {
       const c=this._strategyContext;
-      if(!c){this.clearPeriodFilter();this.dispatchEvent(new CustomEvent('onContextClear'));return;}
+      if(!c){await this._clearPeriodFilter();this.dispatchEvent(new CustomEvent('onContextClear'));return true;}
       const r=WEUX.range(c.periode);
-      const applied=this.setPeriodFilter(c.periode,c.segment,r.from,r.to,c.vorjahr);
-      if(!applied&&this._getDataSource())return false;
+      const applied=await this._applyPeriodFilter(c.periode,c.segment,c.von||r.from,c.bis||r.to,c.vorjahr);
+      if(!applied&&await this._getDataSource())return false;
       this._yoy=this._strategyYoY||null;
       const panel=this._shadow.getElementById('filterpanel');if(panel)panel.hidden=true;
       this.dispatchEvent(new CustomEvent('onRestoreSelection',{detail:{...c}}));
       this._render();
+      return applied;
     }
 
     /* Gegenstück beim Schließen der Detailansicht: Periode/Segment-Filter
@@ -2331,15 +2429,23 @@
        (nutzt die bestehende clearPeriodContext() für den UI-Teil). Optional
        könnt ihr hier einen festen Default-Zeitraum erneut setzen. */
     clearPeriodFilter() {
-      const LADE_DIM = "dimension_ladestelle";
-      const TS_DIM = "dimension_planstart_tag";
-      const ds = this._getDataSource();
+      return this._runFilterChange(() => this._clearPeriodFilter());
+    }
+
+    async _clearPeriodFilter() {
+      const binding = await this._getQueryBinding();
+      const ds = await this._getDataSource(binding);
       if (ds) {
-        try { ds.removeDimensionFilter(LADE_DIM); } catch (e) {}
-        try { ds.removeDimensionFilter(TS_DIM); } catch (e) {}
-        // Beispiel Default-Zeitraum (an euer Modell anpassen):
+        // Auch beim Zurücksetzen nur echte, aus der Bindung ermittelte IDs.
+        const tsDim = this._planstartFilterDimension || await this._getPlanstartDimension(binding, false);
+        const ladeDim = this._segmentFilterDimension || await this._getModelDimension(binding, "dimension_ladestelle", false);
+        this._filterMutationStarted = true;
+        if (tsDim) await ds.removeDimensionFilter(tsDim);
+        if (ladeDim) await ds.removeDimensionFilter(ladeDim);
       }
+      this._planstartFilterDimension = null; this._segmentFilterDimension = null;
       this.clearPeriodContext();
+      return true;
     }
     /** Vorjahresvergleich setzen (Array oder JSON-String aus dem Strategie-Widget). */
     setYoYComparison(data) {
@@ -2405,9 +2511,9 @@
           <button id="ctxclear" title="Detailanalyse verlassen">← Zurück zur Strategieübersicht</button>`;
       }
       const btn = this._shadow.getElementById("ctxclear");
-      if (btn) btn.onclick = () => {
-        if(ctx.manual){this.restoreStrategySelection();return;}
-        this.clearPeriodFilter();
+      if (btn) btn.onclick = async () => {
+        if(ctx.manual){await this.restoreStrategySelection();return;}
+        if(!await this.clearPeriodFilter())return;
         // Story-Skript kann zusätzlich den Datenquellen-Filter zurücksetzen;
         // dafür feuern wir ein Event, auf das die Story hören kann.
         try { this.dispatchEvent(new CustomEvent("onContextClear", { detail: {} })); } catch (e) {}
