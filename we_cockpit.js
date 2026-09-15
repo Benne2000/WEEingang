@@ -1,5 +1,13 @@
 /* WE Cockpit 0.28.0 – Detailanalysen; Datenvertrag widget (10).json. */
-/* Planstart-Korrektur 2026-09-15, Revision 3: BW-Textmerkmal über echte Member-IDs filtern. */
+/* Planstart-Korrektur 2026-09-15, Revision 4: SAC/BW-Filter über Planstart-Kalendertage.
+ * VORAUSSETZUNG IM MODELL: dimension_planstart_tag muss an einen aus
+ * [0WM_SPFRG] abgeleiteten Kalendertag mit Schlüssel JJJJMMTT gebunden sein.
+ * Der 14-stellige Originalzeitstempel gehört an dimension_geplant_start.
+ * Ein Feedname oder eine Anzeigeformatierung erzeugt KEIN Tagesmerkmal.
+ * Für freie Planstart-Zeiträume den alten Widget-Filter
+ * „KalJahr/Woche = 01.2026“ entfernen bzw. fachlich passend ersetzen.
+ * Diese Datei erstellt keine BW-Merkmale und verändert keine fremden Filter.
+ */
 /* BEGIN SHARED UX */
 /* Shared presentation helpers, embedded in each SAC widget at build time. */
 (function () {
@@ -21,7 +29,7 @@
     shift: ['Schichtvergleich','Die Periodenauswahl bleibt am Planstart ausgerichtet. Innerhalb dieser Auswahl werden die Schichten anhand der jeweiligen BW-Ereignismerkmale betrachtet.','Schichtzeiten und die wöchentliche Mannschaftsrotation sind von der Planstartperiode zu unterscheiden. Die verwendete Schicht steht am Diagramm, beispielsweise Ankunftsschicht.']
   };
   topics.start=['So verwendest du die Analyse','1. In der Strategieübersicht Periode und Ladestelle wählen. Dort stehen ausschließlich aggregierte BW-Kennzahlen.','2. „Im Cockpit analysieren“ öffnet den Analysebereich. In SAC setzt die gemeinsame Zeitraumfilterung eine passende Datenbindung in beiden Widgets voraus.','3. Im Cockpit die neun Analysereiter verwenden. TE-Details zeigen Anlieferungen und Positionen; der Zurück-Button führt zur vorherigen Analyse.'];
-  topics.data[2]='Die Zeitraumsauswahl im Cockpit bezieht sich auf „Geplanter Start ab“ [0WM_SPFRG]. Start- und Endtag werden vollständig eingeschlossen. Der Zeitstempel muss in der Datenbindung des Cockpits vorhanden sein; ein zusätzliches Planstart-Tagesmerkmal ist dafür nicht erforderlich. Die Strategieauswahl und eigene Datumsbereiche verwenden dieselbe Filterung.';
+  topics.data[2]='Die Zeitraumsauswahl bezieht sich auf den Kalendertag von „Geplanter Start ab“ [0WM_SPFRG]. Start- und Endtag werden vollständig eingeschlossen. Dafür muss im Modell ein aus dem Planstart abgeleiteter Tageswert bereitstehen. Die Strategieauswahl und eigene Datumsbereiche verwenden denselben Tageswert; der vollständige Planstart bleibt für die Zeitdifferenzen erhalten.';
   topics.comparison[1]='Das Strategiewidget zeigt ausschließlich BW-Aggregate, keine Trendpfeile oder Vorjahresquoten. Detailvergleiche gehören ins Cockpit und benötigen passende Daten für die Vergleichszeiträume.';
   const metrics = {
     dwell_avg:['Ø Standzeit','TE','Aufenthaltsdauer der TE am Standort.','Abfahrt Kontrollpunkt − Ankunft Kontrollpunkt','dwell'],
@@ -2109,8 +2117,10 @@
         const missing=[];
         // Die Query-Filterung prüft DataBinding.getDimensions(), nicht die
         // Ergebnismenge. Auch nach 0 Treffern muss ein Zeitraumwechsel gehen.
-        // Ein eigener Planstart-Tag ist für [0WM_SPFRG] nicht erforderlich.
+        // Der Tagesfeed braucht einen echten abgeleiteten Kalendertag. Der
+        // vollständige Zeitstempel bleibt separat für Zeitdifferenzen nötig.
         if(this._boundFeeds.size) {
+          if(!this._boundFeeds.has('dimension_planstart_tag'))missing.push('Planstart-Tagesbindung fehlt: Für die Zeitraumsauswahl wird ein aus Geplanter Start ab abgeleiteter Kalendertag benötigt.');
           if(!this._boundFeeds.has('dimension_geplant_start'))missing.push('Geplanter Start ab fehlt: berechnete Termintreue nicht verfügbar.');
           if(!this._boundFeeds.has('dimension_sap_puenktlich'))missing.push('BW-Pünktlichkeit P/N fehlt: kein Spediteurranking nach BW-Pünktlichkeit.');
           if(!this._boundFeeds.has('dimension_sap_otif')||!this._boundFeeds.has('dimension_sap_otif_position'))missing.push('BW-OTIF-Bindungen fehlen; Mengentreue aus Soll/Ist bleibt separat berechenbar.');
@@ -2150,23 +2160,29 @@
 
        getDimensions(feed) liefert technische MODELL-IDs; Feed-IDs wie
        dimension_geplant_start dürfen nicht an die DataSource gehen.
-       „Geplanter Start ab [0WM_SPFRG]“ ist ein BW-TEXTMERKMAL mit Schlüsseln
-       im Format JJJJMMTThhmmss (gemeldete Modelldimension: 0WM_SPFR).
-       Ziffern im Schlüssel machen die Dimension NICHT numerisch.
-       SAC unterstützt {from, to} hier nicht; auch Number(), greaterOrEqual
-       oder TimeRange ändern den Dimensionstyp nicht. SAP BW unterstützt
-       laut obiger SAP-Hilfe keine numerischen Dimensionen.
+       Der ursprüngliche Planstart JJJJMMTThhmmss (gemeldete Modelldimension:
+       0WM_SPFR) unterstützt den numerischen SAC-Bereichsfilter NICHT.
+       Ein getMembers()-Abruf aller Sekunden-Zeitstempel ist bei der
+       vorliegenden Datenmenge ebenfalls ungeeignet.
 
-       Daher: Master-Data-Member lesen, ihre 14-stelligen Schlüssel inklusiv
-       vergleichen und die ORIGINALEN Member-IDs als IN-Filter setzen.
-       Keine Beschreibungen, erzeugten Sekundenlisten oder schon gefilterten
-       Ergebniszeilen als Ersatz für die verfügbare Member-Menge verwenden.
-       Der Member-Filter wird bei jeder Datumsauswahl neu ermittelt und ist
-       eine Momentaufnahme; neue BW-Member erfordern erneutes Anwenden.
-       Bei sehr großen Merkmalen ist eine passende BW-Intervallvariable mit
-       setVariableValue(variableId, {from, to}) der skalierbare Weg. Deren
-       Existenz, Merkmalszuordnung und Intervallfähigkeit sind aus dem Feed
-       nicht ableitbar; deshalb wird keine Variable automatisch geraten.
+       Diese Fassung setzt deshalb ein ECHTES Planstart-Tagesmerkmal voraus:
+       - Im BW-Modell aus dem Originalzeitstempel in der fachlich gewählten
+         Standortzeitzone ableiten; Schlüssel JJJJMMTT, nicht JJJJMMTThhmmss.
+       - An dimension_planstart_tag binden. Das Umbenennen eines Feeds oder
+         das Wegformatieren der Uhrzeit wandelt das BW-Merkmal nicht um.
+       - dimension_geplant_start bleibt am vollständigen Originalzeitstempel.
+       - Bisherige Wochenfilter wie „KalJahr/Woche = 01.2026“ in SAC entfernen
+         oder fachlich passend umstellen, sonst wirken sie zusätzlich.
+
+       Zuerst eine kleine Member-Probe prüfen, dann nur die verfügbaren
+       TAGES-Member lesen und ihre Original-IDs mit setDimensionFilter setzen.
+       Eine Tages-ID umfasst automatisch alle Planstarts dieses Kalendertags.
+       Es gibt keine Ersatzfilterung über Ankunft, Übertragungszeit oder die
+       schon geladenen Ergebniszeilen und kein Abschneiden von Zeitstempeln
+       zu erfundenen Filter-IDs. Der Tages-Member-Filter wird bei jeder
+       Datumsauswahl neu ermittelt; neu hinzukommende BW-Tage erfordern
+       erneutes Anwenden. Eine BW-Intervallvariable ist eine alternative
+       Modelllösung, wird hier jedoch weder vorausgesetzt noch geraten.
        SAC überschreibt den normalen Dimensionsfilter; Advanced Filters,
        Story-/Seitenfilter und BW-Variablen bleiben zusätzlich wirksam. */
     /* SAP Custom Widget Developer Guide, Abschnitt 6.2.3 / S. 39–40:
@@ -2224,133 +2240,110 @@
       return ids[0] || null;
     }
 
-    _isPlanstartDimensionInfo(info) {
-      const id = typeof info?.id === "string" ? info.id : "";
-      // Nur zur Erkennung außerhalb des eindeutig benannten Planstart-Feeds.
-      // Ein vollständiger technischer Namensbestandteil, keine Teiltreffer
-      // wie 0WM_SPFRG_TEXT oder 0WM_SPFRG_END.
-      const technical = /(?:^|[\[.:/])0WM_SPFRG(?:$|[\].:/])/i.test(id);
-      const description = String(info?.description || "").trim()
-        .replace(/\s*\[0WM_SPFRG\]\s*$/i, '').replace(/\s+/g, ' ').toLowerCase();
-      return technical || description === "geplanter start ab";
-    }
-
     async _getPlanstartDimension(binding, required = true) {
-      // Der Feed definiert die fachliche Rolle. Seine SAC-Modelldimension
-      // kann einen generierten oder qualifizierten Namen haben. Ein exakter
-      // Vergleich der gelieferten ID mit "[0WM_SPFRG]" ist deshalb falsch.
+      // Nur der explizit dafür vorgesehene Tagesfeed legt die fachliche
+      // Zuordnung fest. Keine Kalenderdimension anhand ihres Namens raten.
       this._dimensionResolutionDiagnostics = {};
       this._lastPlanstartResolution = null;
-      const feed = "dimension_geplant_start";
+      const feed = "dimension_planstart_tag";
       const id = await this._getModelDimension(binding, feed, false);
-      if (id) {
-        this._lastPlanstartResolution = { feed, id };
-        return id;
+      if (!id) {
+        if (required) throw new Error('Am Feed „Planstart-Tag“ (dimension_planstart_tag) fehlt ein aus Geplanter Start ab abgeleitetes Tagesmerkmal mit Schlüssel JJJJMMTT. Der vollständige Zeitstempel JJJJMMTThhmmss gehört an dimension_geplant_start.');
+        return null;
       }
-
-      // Alternative Feed-Namen nur akzeptieren, wenn die gebundenen
-      // Metadaten explizit [0WM_SPFRG] / Geplanter Start ab bezeichnen.
-      const metadata = this._dataBinding?.metadata || {};
-      const feeds = new Set(["dimension_planstart_tag", ...Object.keys(metadata.feeds || {}),
-        ...Object.keys(metadata.dimensions || {}).map(alias => alias.replace(/_\d+$/, ''))]);
-      const candidates = new Map();
-      for (const otherFeed of feeds) {
-        if (otherFeed === feed) continue;
-        const infos = this._getDimensionMetadata(otherFeed);
-        if (otherFeed !== "dimension_planstart_tag" && !infos.some(info => this._isPlanstartDimensionInfo(info))) continue;
-        // Ein generischer "dimensions"-Feed darf mehrere Dimensionen haben.
-        // Daraus nur den durch ID/Beschreibung bestätigten Planstart wählen.
-        for (const otherId of await this._getModelDimensions(binding, otherFeed)) {
-          if (this._isPlanstartDimensionInfo({ id: otherId }) ||
-              infos.some(info => info.id === otherId && this._isPlanstartDimensionInfo(info))) {
-            candidates.set(otherId, { feed: otherFeed, id: otherId });
-          }
-        }
+      const timestampId = await this._getModelDimension(binding, "dimension_geplant_start", false);
+      if (id === timestampId) {
+        if (required) throw new Error(`„Planstart-Tag“ und „Geplanter Start ab“ sind beide an „${id}“ gebunden. Für die Zeitraumsauswahl wird ein eigenes, im Modell abgeleitetes Tagesmerkmal JJJJMMTT benötigt.`);
+        return null;
       }
-      if (candidates.size > 1) {
-        throw new Error("Mehrere Planstart-Dimensionen gefunden: " + [...candidates.keys()].join(", ") + ". Bitte den Planstart-Feed eindeutig binden.");
-      }
-      if (candidates.size === 1) {
-        this._lastPlanstartResolution = [...candidates.values()][0];
-        return this._lastPlanstartResolution.id;
-      }
-      if (required) {
-        // Nur Strukturinformationen protokollieren, keine Zeilen/Memberwerte.
-        console.warn("[WE-Cockpit] Planstart-Bindungsdiagnose (Revision 3):", {
-          feeds: this._dimensionResolutionDiagnostics,
-          dimensions: Object.entries(metadata.dimensions || {}).map(([alias, info]) => ({
-            alias, id: info?.id, description: info?.description
-          }))
-        });
-        const found = this._dimensionResolutionDiagnostics.dimension_planstart_tag?.apiIds || [];
-        throw new Error('Planstart-Modelldimension nicht ermittelt: Der Feed dimension_geplant_start liefert keine verwendbare ID und die Metadaten enthalten keine eindeutige Zuordnung zu „Geplanter Start ab“. Tagesfeed-IDs: ' +
-          (found.join(', ') || 'keine') + '. Details siehe „Planstart-Bindungsdiagnose (Revision 3)“ in der Konsole.');
-      }
-      return null;
+      this._lastPlanstartResolution = { feed, id };
+      return id;
     }
 
     /* Nur technische Schlüssel auswerten. MemberInfo.id bleibt beim Setzen
        unverändert, auch bei BW-Hierarchie- oder MDX-IDs. displayId ist laut
        SAC-API ein Anzeigeschlüssel; description ist dagegen Freitext und
        wird nicht zur Zeitraumzuordnung verwendet. */
-    _getPlanstartMemberKey(member) {
+    _getPlanstartDayMemberKey(member) {
       const keys = [];
       for (const value of [member?.id, member?.displayId]) {
         if (typeof value !== "string") continue;
         const text = value.trim();
-        const plain = /^!?(\d{14})$/.exec(text);
+        const plain = /^!?(\d{8})$/.exec(text);
         if (plain) { keys.push(plain[1]); continue; }
         const mdx = Array.from(text.matchAll(/\.\&\[((?:[^\]]|\]\])*)\]/g));
-        if (mdx.length === 1 && /^\d{14}$/.test(mdx[0][1])) keys.push(mdx[0][1]);
+        if (mdx.length === 1 && /^\d{8}$/.test(mdx[0][1])) keys.push(mdx[0][1]);
       }
       const unique = [...new Set(keys)];
-      if (unique.length > 1) throw new Error("Planstart-Member enthält widersprüchliche technische Zeitstempelschlüssel.");
-      return unique[0] || null;
+      if (unique.length > 1) throw new Error("Planstart-Tagesmember enthält widersprüchliche technische Tagesschlüssel.");
+      return unique.length && WEEngine.parsePlanDay(unique[0]) ? unique[0] : null;
+    }
+
+    _checkPlanstartDayMembers(members, dimension) {
+      if (!Array.isArray(members) || !members.length) {
+        throw new Error(`Für die Planstart-Tagesdimension „${dimension}“ wurden keine Member geliefert. Die Bindung und die aktive Hierarchie in SAC prüfen.`);
+      }
+      const checked = [];
+      for (const member of members) {
+        if (typeof member?.id !== "string" || !member.id) {
+          throw new Error(`Die Tagesmember-Abfrage für „${dimension}“ enthält Einträge ohne technische Member-ID.`);
+        }
+        // Auch dann abbrechen, wenn die Anzeige-ID auf acht Stellen gekürzt
+        // wurde: ein 14-stelliger technischer Schlüssel bleibt ein Zeitstempel.
+        const isTimestamp = [member.id, member.displayId].some(value => {
+          const text = typeof value === "string" ? value.trim() : "";
+          return /^!?\d{14}$/.test(text) || /\.\&\[\d{14}\]$/.test(text);
+        });
+        if (isTimestamp) {
+          throw new Error(`Am Feed „Planstart-Tag“ ist „${dimension}“ mit 14-stelligen Zeitstempeln gebunden. Benötigt wird ein im Modell aus Geplanter Start ab abgeleiteter Kalendertag JJJJMMTT. Das Umbenennen des Feeds oder der Anzeige reicht nicht aus.`);
+        }
+        const key = this._getPlanstartDayMemberKey(member);
+        if (!key) {
+          const id = member.id.trim();
+          if (id !== "#" && id !== "!#" && !/^!?0{8}$/.test(id) && !/\.\&\[(?:#|0{8})\]$/.test(id)) {
+            throw new Error(`Ein Member von „${dimension}“ hat keinen gültigen technischen Tagesschlüssel JJJJMMTT. Planstart-Tagesableitung und aktive Hierarchie prüfen.`);
+          }
+        }
+        checked.push({ id: member.id, key });
+      }
+      return checked;
     }
 
     async _getPlanstartMemberFilter(ds, dimension, range) {
       if (typeof ds.getMembers !== "function") {
-        throw new Error("Die SAC-Datenquelle stellt getMembers() für die Planstart-Auswahl nicht bereit. Für dieses BW-Textmerkmal wird dann eine passende BW-Intervallvariable benötigt.");
+        throw new Error("Die SAC-Datenquelle stellt getMembers() zum Lesen der Planstart-Tageswerte nicht bereit.");
       }
-      // Eigene Schutzgrenze, keine behauptete SAC-Systemgrenze. Ein Element
-      // mehr anfordern, um eine am Limit abgeschnittene Antwort zu erkennen.
-      // MembersOptions hat KEIN offset / Paging. Bei Überschreitung niemals
-      // nur die ersten Member filtern. Kein dauerhafter Member-Cache.
-      const maxMembers = 100000;
-      // Dokumentierter Standard ohne accessMode: MemberAccessMode.MasterData
-      // (alle verfügbaren Member), NICHT BookedValues. Die aktive Hierarchie
-      // bleibt erhalten; IDs derselben Hierarchie werden weiterverwendet.
-      const members = await ds.getMembers(dimension, { limit: maxMembers + 1 });
-      if (!Array.isArray(members) || !members.length) {
-        throw new Error(`Für die Planstart-Dimension „${dimension}“ wurden keine verwendbaren Master-Data-Member geliefert. Member-Zugriff und aktive Hierarchie prüfen; die bisherige Auswahl bleibt erhalten.`);
+      // Eine falsch gebundene Sekunden-Zeitstempeldimension bereits mit
+      // einer kleinen Probe zurückweisen, bevor ein großer Abruf erfolgt.
+      // Dokumentierter Standard: MasterData, aktive Hierarchie. Damit können
+      // auch Zeiträume außerhalb der bisher geladenen Ergebniszeilen gewählt
+      // werden. Keine erfundene accessMode-Konstante für die native JS-Brücke.
+      const probeLimit = 32;
+      const probe = await ds.getMembers(dimension, { limit: probeLimit });
+      let checked = this._checkPlanstartDayMembers(probe, dimension);
+      if (probe.length >= probeLimit) {
+        // Eigene Schutzgrenze für TAGE (über 130 Jahre), keine SAC-Systemgrenze.
+        // getMembers bietet kein Paging. Bei einer vollen Antwort niemals
+        // eine möglicherweise unvollständige Auswahl anwenden.
+        const maxDays = 50000;
+        const members = await ds.getMembers(dimension, { limit: maxDays + 1 });
+        if (!Array.isArray(members) || members.length > maxDays) {
+          throw new Error(`Die vollständige Liste der Planstart-Tage für „${dimension}“ konnte nicht ermittelt werden. Es wird kein Teilfilter angewendet; Tagesmerkmal bzw. eine BW-Intervallvariable prüfen.`);
+        }
+        checked = this._checkPlanstartDayMembers(members, dimension);
+        const completeIds = new Set(checked.map(member => member.id));
+        if (probe.some(member => !completeIds.has(member.id))) {
+          throw new Error("Die Planstart-Tagesmember haben sich während des Abrufs geändert. Bitte die Auswahl erneut anwenden.");
+        }
       }
-      if (members.length > maxMembers) {
-        throw new Error(`Planstart-Auswahl nicht angewendet: Die Member-Abfrage für „${dimension}“ erreicht die Schutzgrenze von ${maxMembers.toLocaleString("de-DE")} Membern. Eine vollständige Auswahl ist so nicht gesichert. Für diese Datenmenge eine BW-Intervallvariable für Planstart bereitstellen.`);
-      }
+      const fromDay = range.from.slice(0, 8), toDay = range.to.slice(0, 8);
       const allIds = new Set(), matchingIds = new Set();
-      let unreadable = 0;
-      for (const member of members) {
-        if (typeof member?.id !== "string" || !member.id) {
-          throw new Error(`Die Member-Abfrage für „${dimension}“ enthält Einträge ohne technische Member-ID.`);
-        }
-        allIds.add(member.id);
-        const key = this._getPlanstartMemberKey(member);
-        if (key) {
-          // Gleich lange JJJJMMTThhmmss-Strings sind chronologisch sortierbar.
-          // Keine Datums-/Zeitzonen- oder Zahlenkonvertierung der Schlüssel.
-          if (key >= range.from && key <= range.to) matchingIds.add(member.id);
-        } else {
-          // BW „nicht zugeordnet“ hat keinen Planstart. Andere unbekannte
-          // Formate nicht still übergehen: Es könnten echte Treffer sein.
-          const id = member.id.trim();
-          if (id !== "#" && id !== "!#" && !/\.\&\[#\]$/.test(id)) unreadable++;
-        }
-      }
-      if (unreadable) {
-        throw new Error(`Planstart-Auswahl nicht angewendet: ${unreadable} Member von „${dimension}“ haben keinen eindeutigen technischen Schlüssel im Format JJJJMMTThhmmss. Member-ID/Anzeigeschlüssel und Hierarchie prüfen.`);
+      for (const { id, key } of checked) {
+        allIds.add(id);
+        if (key && key >= fromDay && key <= toDay) matchingIds.add(id);
       }
       this._lastPlanstartMemberSelection = {
-        dimension, from: range.from, to: range.to,
+        dimension, from: fromDay, to: toDay,
         available: allIds.size, selected: matchingIds.size
       };
       if (matchingIds.size) return [...matchingIds];
@@ -2358,6 +2351,27 @@
       // gerade vollständig ermittelten Member ausschließen (inklusive #).
       // Das ist ein dokumentierter MultipleFilterValue, kein Zahlenbereich.
       return { values: [...allIds], exclude: true };
+    }
+
+    async _checkLegacyWeekFilter(ds) {
+      // Im Screenshot ist „KalJahr/Woche = 01.2026“ als zusätzlicher
+      // Widget-Filter gesetzt. Er wird nicht durch einen Planstart-Filter auf
+      // einer anderen Dimension ersetzt. Nur eindeutig erkannte normale
+      // Wochenfilter melden; die ID stammt aus der SAC-Datenquelle.
+      // Advanced Filters und übergeordnete Storyfilter sind hier nicht
+      // vollständig sichtbar und müssen bei der Einrichtung geprüft werden.
+      if (typeof ds.getDimensions !== "function" || typeof ds.getDimensionFilters !== "function") return;
+      const dimensions = await ds.getDimensions();
+      if (!Array.isArray(dimensions)) throw new Error("Die SAC-Modelldimensionen konnten nicht auf zusätzliche Wochenfilter geprüft werden.");
+      for (const info of dimensions) {
+        const id = typeof info?.id === "string" ? info.id : "";
+        const description = String(info?.description || "").replace(/\s+/g, "").toLowerCase();
+        if (!id || (!/(?:^|[\[.:/])0CALWEEK(?:$|[\].:/])/i.test(id) && description !== "kaljahr/woche")) continue;
+        const filters = await ds.getDimensionFilters(id);
+        if (Array.isArray(filters) && filters.length) {
+          throw new Error(`Zusätzlicher Wochenfilter auf „${info.description || id}“ (${id}) aktiv. In der SAC-Datenbindung den bisherigen Filter „KalJahr/Woche“ entfernen oder fachlich auf Planstart umstellen; er würde den gewählten Planstart-Zeitraum zusätzlich einschränken.`);
+        }
+      }
     }
 
     /* Filteränderungen nacheinander abarbeiten: schnelle Klickfolgen dürfen
@@ -2393,12 +2407,14 @@
       // Member-Menge VOR jeder Filtermutation vollständig prüfen. Fehler beim
       // Lesen, an der Schutzgrenze oder im Schlüsselformat erhalten die Analyse.
       const planstartMembers = range ? await this._getPlanstartMemberFilter(ds, tsDim, range) : null;
+      if (range) await this._checkLegacyWeekFilter(ds);
 
       this._filterMutationStarted = true;
       this._filterError = null; this._rows = null; this._model = null; this._detail = null;
       this._render();
       if (range) {
-        // Ein Member-Filter ist auch für nicht numerische BW-Merkmale gültig.
+        // Original-IDs der im Zeitraum liegenden Planstart-Tage filtern.
+        // Damit sind 00:00:00 bis 23:59:59 jedes gewählten Tages eingeschlossen.
         // Bestehenden Zeitfilter ohne unbeschränkte Zwischenabfrage ersetzen.
         await ds.setDimensionFilter(tsDim, planstartMembers);
         this._planstartFilterDimension = tsDim;
@@ -2490,7 +2506,7 @@
     /* Wird vom Story-Skript mit den Rohwerten aus dem Strategie-Widget
        aufgerufen: StrategieWidget.getSelectedPeriod/Segment/From/To/
        PriorYearPeriod(). Setzt den Query-Filter der EIGENEN Datenquelle
-       dieses Widgets (Planstart-Zeitstempel + Ladestelle), ersetzt dabei
+       dieses Widgets (Planstart-Kalendertag + Ladestelle), ersetzt dabei
        einen evtl. vorher aktiven Default-Filter auf derselben Dimension,
        und stößt so eine neue BW-Abfrage nur für diesen Zeitraum an.
        Sobald die Daten zurückkommen, feuert SAC erneut `set myDataSource`. */
