@@ -1,5 +1,5 @@
 /* WE Cockpit 0.28.0 – Detailanalysen; Datenvertrag widget (10).json. */
-/* Planstart-Korrektur 2026-09-15: BW-Zeitstempel [0WM_SPFRG], vollständige Tage. */
+/* Planstart-Korrektur 2026-09-15, Revision 2: SAC-Modelldimension aus Feed/Metadaten. */
 /* BEGIN SHARED UX */
 /* Shared presentation helpers, embedded in each SAC widget at build time. */
 (function () {
@@ -2154,29 +2154,123 @@
        Voraussetzung: Das BW-Merkmal unterstützt einen Bereichsfilter.
        SAC überschreibt den normalen Dimensionsfilter; Advanced Filters,
        Story-/Seitenfilter und BW-Variablen bleiben zusätzlich wirksam. */
+    /* SAP Custom Widget Developer Guide, Abschnitt 6.2.3 / S. 39–40:
+       https://help.sap.com/doc/c813a28922b54e50bd2a307b099787dc/2023.22/en-US/CustomWidgetDevGuide_en.pdf
+       metadata.feeds[feed].values enthält Spalten-Aliase (feedName_index).
+       metadata.dimensions[alias].id enthält die technische Modelldimension.
+       Die .id einer DATENZEILE bezeichnet dagegen einen Member und darf
+       hierfür nicht benutzt werden. Keine Auswahl anhand von Zeitwerten. */
+    _getDimensionMetadata(feed) {
+      const metadata = this._dataBinding?.metadata || {};
+      const dimensions = metadata.dimensions || {};
+      const feedInfo = metadata.feeds?.[feed];
+      // Explizit leerer Feed bleibt leer, auch bei alten Dimensions-Einträgen.
+      const aliases = Array.isArray(feedInfo?.values) ? feedInfo.values :
+        Object.keys(dimensions).filter(alias => alias.replace(/_\d+$/, '') === feed);
+      return aliases.filter(alias => typeof alias === "string").map(alias => ({
+        alias, id: dimensions[alias]?.id,
+        description: dimensions[alias]?.description || ""
+      })).filter(info => typeof info.id === "string" && info.id.trim());
+    }
+
+    async _getModelDimensions(binding, feed) {
+      const metadata = this._dataBinding?.metadata || {};
+      const feedMetadata = this._getDimensionMetadata(feed);
+      const isId = id => typeof id === "string" && id.trim() &&
+        id.replace(/_\d+$/, '') !== feed && !/\.\s*&\[/.test(id);
+      let dimensions = [], apiError = "";
+      if (typeof binding?.getDimensions === "function") {
+        try {
+          const result = await binding.getDimensions(feed);
+          if (result != null && !Array.isArray(result)) throw new Error("Dimensionsliste ist kein Array");
+          dimensions = result || [];
+        } catch (error) { apiError = error?.message || String(error); }
+      } else { apiError = "getDimensions() ist nicht verfügbar"; }
+      // Scripting-API zuerst. Falls Aliase zurückkommen, nur durch die
+      // tatsächlich gelieferten Metadaten auflösen; keine ID konstruieren.
+      const apiIds = [...new Set(dimensions.map(value => {
+        const id = typeof value === "string" ? value : value?.id;
+        return metadata.dimensions?.[id]?.id || id;
+      }).filter(isId))];
+      const metadataIds = [...new Set(feedMetadata.map(info => info.id).filter(isId))];
+      const ids = apiIds.length ? apiIds : metadataIds;
+      this._dimensionResolutionDiagnostics ||= {};
+      this._dimensionResolutionDiagnostics[feed] = { apiIds, metadata: feedMetadata, apiError };
+      return ids;
+    }
+
     async _getModelDimension(binding, feed, required = true) {
-      if (typeof binding?.getDimensions !== "function") {
-        throw new Error("Die SAC-Datenbindung unterstützt getDimensions() nicht.");
+      const ids = await this._getModelDimensions(binding, feed);
+      if (ids.length > 1) throw new Error("Mehrdeutige Datenbindung " + feed + ": " + ids.join(", "));
+      if (!ids.length && required) {
+        throw new Error("Keine Modelldimension für " + feed + " ermittelt. Bitte Feed-Bindung prüfen.");
       }
-      const dimensions = await binding.getDimensions(feed);
-      if (dimensions != null && !Array.isArray(dimensions)) {
-        throw new Error("Ungültige Dimensionsangabe der Datenbindung: " + feed);
-      }
-      const ids = [...new Set((dimensions || []).filter(id => typeof id === "string" && id.trim()))];
-      if (ids.length > 1) throw new Error("Mehrdeutige Datenbindung: " + feed);
-      if (!ids.length && required) throw new Error("Keine Modelldimension gebunden: " + feed);
+      // ID unverändert an SAC zurückgeben, einschließlich Präfix/Klammern.
       return ids[0] || null;
     }
 
+    _isPlanstartDimensionInfo(info) {
+      const id = typeof info?.id === "string" ? info.id : "";
+      // Nur zur Erkennung außerhalb des eindeutig benannten Planstart-Feeds.
+      // Ein vollständiger technischer Namensbestandteil, keine Teiltreffer
+      // wie 0WM_SPFRG_TEXT oder 0WM_SPFRG_END.
+      const technical = /(?:^|[\[.:/])0WM_SPFRG(?:$|[\].:/])/i.test(id);
+      const description = String(info?.description || "").trim()
+        .replace(/\s*\[0WM_SPFRG\]\s*$/i, '').replace(/\s+/g, ' ').toLowerCase();
+      return technical || description === "geplanter start ab";
+    }
+
     async _getPlanstartDimension(binding, required = true) {
-      // Primär der bereits vorhandene Zeitstempel-Feed. Den älteren Feed
-      // nur akzeptieren, wenn dort ebenfalls genau [0WM_SPFRG] gebunden ist.
-      // Kein Ersatz durch Ankunft, Kalenderwoche oder einen BW-Ladetag.
-      for (const feed of ["dimension_geplant_start", "dimension_planstart_tag"]) {
-        const id = await this._getModelDimension(binding, feed, false);
-        if (id && /^(?:0WM_SPFRG|\[0WM_SPFRG\])$/i.test(id)) return id;
+      // Der Feed definiert die fachliche Rolle. Seine SAC-Modelldimension
+      // kann einen generierten oder qualifizierten Namen haben. Ein exakter
+      // Vergleich der gelieferten ID mit "[0WM_SPFRG]" ist deshalb falsch.
+      this._dimensionResolutionDiagnostics = {};
+      this._lastPlanstartResolution = null;
+      const feed = "dimension_geplant_start";
+      const id = await this._getModelDimension(binding, feed, false);
+      if (id) {
+        this._lastPlanstartResolution = { feed, id };
+        return id;
       }
-      if (required) throw new Error('Für die Planstart-Auswahl muss [0WM_SPFRG] an „Geplanter Start ab“ gebunden sein.');
+
+      // Alternative Feed-Namen nur akzeptieren, wenn die gebundenen
+      // Metadaten explizit [0WM_SPFRG] / Geplanter Start ab bezeichnen.
+      const metadata = this._dataBinding?.metadata || {};
+      const feeds = new Set(["dimension_planstart_tag", ...Object.keys(metadata.feeds || {}),
+        ...Object.keys(metadata.dimensions || {}).map(alias => alias.replace(/_\d+$/, ''))]);
+      const candidates = new Map();
+      for (const otherFeed of feeds) {
+        if (otherFeed === feed) continue;
+        const infos = this._getDimensionMetadata(otherFeed);
+        if (otherFeed !== "dimension_planstart_tag" && !infos.some(info => this._isPlanstartDimensionInfo(info))) continue;
+        // Ein generischer "dimensions"-Feed darf mehrere Dimensionen haben.
+        // Daraus nur den durch ID/Beschreibung bestätigten Planstart wählen.
+        for (const otherId of await this._getModelDimensions(binding, otherFeed)) {
+          if (this._isPlanstartDimensionInfo({ id: otherId }) ||
+              infos.some(info => info.id === otherId && this._isPlanstartDimensionInfo(info))) {
+            candidates.set(otherId, { feed: otherFeed, id: otherId });
+          }
+        }
+      }
+      if (candidates.size > 1) {
+        throw new Error("Mehrere Planstart-Dimensionen gefunden: " + [...candidates.keys()].join(", ") + ". Bitte den Planstart-Feed eindeutig binden.");
+      }
+      if (candidates.size === 1) {
+        this._lastPlanstartResolution = [...candidates.values()][0];
+        return this._lastPlanstartResolution.id;
+      }
+      if (required) {
+        // Nur Strukturinformationen protokollieren, keine Zeilen/Memberwerte.
+        console.warn("[WE-Cockpit] Planstart-Bindungsdiagnose (Revision 2):", {
+          feeds: this._dimensionResolutionDiagnostics,
+          dimensions: Object.entries(metadata.dimensions || {}).map(([alias, info]) => ({
+            alias, id: info?.id, description: info?.description
+          }))
+        });
+        const found = this._dimensionResolutionDiagnostics.dimension_planstart_tag?.apiIds || [];
+        throw new Error('Planstart-Modelldimension nicht ermittelt: Der Feed dimension_geplant_start liefert keine verwendbare ID und die Metadaten enthalten keine eindeutige Zuordnung zu „Geplanter Start ab“. Tagesfeed-IDs: ' +
+          (found.join(', ') || 'keine') + '. Details siehe „Planstart-Bindungsdiagnose (Revision 2)“ in der Konsole.');
+      }
       return null;
     }
 
