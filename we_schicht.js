@@ -1,6 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
 //  SAP Custom Widget – Wareneingang Analyse (WE-Analyse)
-//  Version 2.0.0
+//  JavaScript-Arbeitsstand 2.1.7 – Prozesszeiten; Manifest kompatibel mit 2.1.0
 //
 //  Umbau des Live-Trackers zur nachträglichen Auswertung.
 //
@@ -615,6 +615,7 @@
           lieferantNr:     ohneNullen(readDim(row,  'dimension_lieferant_nr', 'WARENSENDER_NR', 'WARENSENDER')),
           lieferantName:   readLabel(row, 'dimension_lieferant_name', 'dimension_lieferant_nr', 'WARENSENDER') ?? '–',
           transportmittel: readDim(row, 'dimension_transportmittel', 'TRMIT'),
+          transportmittelName: readLabel(row, 'dimension_transportmittel', 'TRMIT'),
           halle:           normHalle(readDim(row, 'dimension_halle', 'HALLE', 'LGNUM')),
 
           teExt:           readDim(row, 'dimension_te_ext', 'TE_EXT'),
@@ -1127,6 +1128,90 @@
       .map(ls => ({ ls, ...aggregiereBasis(gruppen.get(ls)) }));
 
     return gesamt;
+  }
+
+  // Prozesszeiten: pro TE, ohne Korrektur-Fallback beim ersten Entladeende.
+  const PROZESS_DEFS = Object.freeze([
+    { id: 'anmeldung', label: 'Anmeldung / Wartezeit', von: 'tsAnkunft', bis: 'tsAngedockt', strecke: 'Ankunft → Andocken' },
+    { id: 'vorlauf', label: 'Entladevorlauf', von: 'tsAngedockt', bis: 'tsEntladenStart', strecke: 'Andocken → Entladestart' },
+    { id: 'entladung', label: 'Entladedauer', von: 'tsEntladenStart', bis: 'tsEntladenEnde', strecke: 'Entladestart → Entladen beendet' },
+    { id: 'vereinnahmung', label: 'Vereinnahmungsdauer', von: 'tsEntladenEnde', bis: 'tsWeBuchung', strecke: 'Entladen beendet → WE-Buchung' },
+    { id: 'einlagerung', label: 'Einlagerungsdauer', von: 'tsWeBuchung', bis: 'tsEinlagerung', strecke: 'WE-Buchung → vollständige Fertigstellung' },
+    { id: 'operativ', label: 'Operative WE-Durchlaufzeit', von: 'tsEntladenStart', bis: 'tsEinlagerung', strecke: 'Entladestart → vollständige Fertigstellung', gesamt: true },
+    { id: 'gesamt', label: 'Gesamtdurchlaufzeit', von: 'tsAnkunft', bis: 'tsEinlagerung', strecke: 'Ankunft → vollständige Fertigstellung', gesamt: true },
+  ]);
+
+  function prozessDauer(te, def) {
+    const von = te[def.von], bis = te[def.bis];
+    if (von == null || bis == null) return { min: null, grund: 'fehlend' };
+    const a = von.getTime(), b = bis.getTime();
+    if (!Number.isFinite(a) || !Number.isFinite(b) || b < a) return { min: null, grund: 'ungueltig' };
+    return { min: (b - a) / 60000, grund: null };
+  }
+
+  function aggregiereProzesszeiten(tes) {
+    return PROZESS_DEFS.map(def => {
+      const werte = [];
+      let fehlend = 0, ungueltig = 0;
+      for (const te of tes) {
+        const p = prozessDauer(te, def);
+        if (p.grund === 'fehlend') fehlend++;
+        else if (p.grund === 'ungueltig') ungueltig++;
+        else werte.push(p.min);
+      }
+      werte.sort((a, b) => a - b);
+      const n = werte.length, m = Math.floor(n / 2);
+      return { ...def, gesamtTEs: tes.length, n, fehlend, ungueltig,
+        mittel: n ? werte.reduce((a, b) => a + b, 0) / n : null,
+        median: n ? (n % 2 ? werte[m] : (werte[m - 1] + werte[m]) / 2) : null,
+        min: n ? werte[0] : null, max: n ? werte[n - 1] : null };
+    });
+  }
+
+  // Transportmittel ist ein eigenes BW-Merkmal, unabhängig von der Ladestelle.
+  // Gruppierung auf TE-Ebene nach Schlüssel; fehlende Werte bleiben sichtbar.
+  function aggregiereTransportzeiten(tes) {
+    const gruppen = new Map();
+    for (const te of tes) {
+      const raw = te.transportmittel == null ? '' : String(te.transportmittel).trim();
+      const key = isNull(raw) ? null : raw;
+      const text = te.transportmittelName == null ? '' : String(te.transportmittelName).trim();
+      if (!gruppen.has(key)) gruppen.set(key, {
+        key, label: key === null ? 'Ohne Transportmittel' : (isNull(text) ? key : text), tes: []
+      });
+      gruppen.get(key).tes.push(te);
+    }
+    return [...gruppen.values()].map(g => ({
+      key: g.key, label: g.label, anzahl: g.tes.length,
+      prozesse: aggregiereProzesszeiten(g.tes)
+    })).sort((a,b) => a.key === null ? 1 : b.key === null ? -1 :
+      a.label.localeCompare(b.label, 'de', {numeric:true}) || a.key.localeCompare(b.key, 'de', {numeric:true}));
+  }
+
+  function sortiereTransportgruppen(gruppen, feld, richtung, modus) {
+    return [...gruppen].sort((a,b) => {
+      if (feld === 'name') return richtung * a.label.localeCompare(b.label, 'de', {numeric:true}) ||
+        String(a.key ?? '').localeCompare(String(b.key ?? ''), 'de');
+      const av = a.prozesse.find(p=>p.id===feld)?.[modus] ?? null;
+      const bv = b.prozesse.find(p=>p.id===feld)?.[modus] ?? null;
+      if (av == null && bv != null) return 1;
+      if (bv == null && av != null) return -1;
+      return (av == null ? 0 : richtung*(av-bv)) || a.label.localeCompare(b.label,'de',{numeric:true}) ||
+        String(a.key ?? '').localeCompare(String(b.key ?? ''),'de');
+    });
+  }
+
+  function transportFarbklasse(wert, werte) {
+    if (wert == null) return 'pz-empty';
+    const gueltig = werte.filter(v=>v != null);
+    if (!gueltig.length) return 'pz-empty';
+    const min = gueltig.reduce((a,b)=>Math.min(a,b),Infinity);
+    const max = gueltig.reduce((a,b)=>Math.max(a,b),-Infinity);
+    return 'pz-heat-' + (max === min ? 2 : Math.min(4, Math.floor((wert-min)/(max-min)*5)));
+  }
+
+  function fmtProzessMin(min) {
+    return min == null ? '–' : min.toLocaleString('de-DE', { maximumFractionDigits: 1 }) + ' min';
   }
 
   // ── Template ─────────────────────────────────────────────────────────────
@@ -2761,6 +2846,111 @@
         background: rgba(0,0,0,0.02);
       }
 
+
+      /* Prozesszeiten-Widgets 2.1.2 */
+      #prozesszeiten { container-type:inline-size; }
+      .pz-dashboard { display:grid; grid-template-columns:minmax(0,2fr) minmax(230px,1fr); gap:16px; }
+      .pz-chart, .pz-card, .pz-info { background:var(--c-bg2); border:1px solid var(--c-border); border-radius:var(--r-lg); box-shadow:var(--shadow-sm); }
+      .pz-chart { padding:22px; min-width:0; }
+      .pz-head { display:flex; justify-content:space-between; gap:16px; align-items:flex-start; flex-wrap:wrap; margin-bottom:24px; }
+      .pz-title { font-size:16px; font-weight:650; color:var(--c-text); }
+      .pz-sub { color:var(--c-text2); font-size:11px; line-height:1.6; margin-top:5px; }
+      .pz-switch { display:flex; padding:3px; gap:3px; background:var(--c-bg); border:1px solid var(--c-border); border-radius:8px; }
+      .pz-switch button { padding:7px 10px; border-radius:5px; color:var(--c-text2); font-size:11px; }
+      .pz-switch button[aria-pressed="true"] { background:var(--c-bg4); color:var(--c-text); box-shadow:var(--shadow-sm); }
+      .pz-plot-row { display:grid; width:100%; grid-template-columns:154px minmax(40px,1fr) 80px; align-items:center; gap:12px; padding:16px 10px; margin:5px 0; border:1px solid transparent; border-radius:8px; text-align:left; color:var(--c-text); }
+      .pz-plot-row:hover { background:var(--c-bg3); }
+      .pz-plot-row[aria-pressed="true"] { background:var(--c-bg3); border-color:var(--c-border2); }
+      .pz-plot-row:focus-visible, .pz-switch button:focus-visible { outline:2px solid var(--c-blue); outline-offset:2px; }
+      .pz-phase { font-size:12px; font-weight:600; line-height:1.5; }
+      .pz-step { font-family:var(--font-mono); font-size:9px; color:var(--c-text3); display:block; font-weight:400; letter-spacing:1px; }
+      .pz-track { height:24px; background:var(--c-bg); border-radius:5px; overflow:hidden; background-image:linear-gradient(to right,var(--c-border) 1px,transparent 1px); background-size:25% 100%; }
+      .pz-bar { height:100%; border-radius:4px; background:var(--c-blue); transition:width .2s ease; }
+      .pz-bar.pz-longest { background:var(--c-red-light); }
+      .pz-chart-value { font-size:14px; font-family:var(--font-mono); font-weight:600; text-align:right; }
+      .pz-axis { display:grid; grid-template-columns:154px minmax(40px,1fr) 80px; gap:12px; padding:0 10px; }
+      .pz-ticks { display:flex; justify-content:space-between; color:var(--c-text3); font:10px var(--font-mono); }
+      .pz-legend { display:flex; gap:16px; flex-wrap:wrap; color:var(--c-text2); font-size:10px; margin:20px 0 0; }
+      .pz-dot { display:inline-block; width:7px; height:7px; border-radius:50%; margin-right:6px; background:var(--c-blue); }
+      .pz-dot.red { background:var(--c-red-light); }
+      .pz-side { display:flex; flex-direction:column; gap:16px; }
+      .pz-card { padding:20px; }
+      .pz-total { border-top:3px solid var(--c-red); }
+      .pz-overall { border-top-color:var(--c-blue); }
+      .pz-totals { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
+      .pz-cohort-note { margin:10px 0 18px; }
+      @container (max-width:520px) { .pz-totals { grid-template-columns:1fr; } }
+      .pz-kicker { font:10px var(--font-mono); text-transform:uppercase; letter-spacing:1.2px; color:var(--c-text2); }
+      .pz-big { font:600 38px var(--font-mono); letter-spacing:-1.5px; margin:12px 0 4px; color:var(--c-text); }
+      .pz-big small { font:12px var(--font); letter-spacing:0; color:var(--c-text2); }
+      .pz-pill { display:inline-block; color:var(--c-text2); font-size:10px; border:1px solid var(--c-border2); border-radius:12px; padding:4px 8px; margin-top:12px; }
+      .pz-inspector { flex:1; }
+      .pz-metrics { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin:18px 0 14px; }
+      .pz-metric span { display:block; color:var(--c-text3); font-size:10px; margin-bottom:5px; }
+      .pz-metric strong { color:var(--c-text); font:600 14px var(--font-mono); }
+      .pz-coverage { height:5px; border-radius:3px; overflow:hidden; background:var(--c-bg4); margin:8px 0; }
+      .pz-coverage div { height:100%; background:var(--c-blue); }
+      .pz-info { margin-top:16px; padding:14px 18px; color:var(--c-text2); font-size:11px; line-height:1.7; }
+      .pz-info summary { cursor:pointer; color:var(--c-text); font-weight:600; }
+      .pz-scroll { overflow-x:auto; margin:14px 0; }
+      .pz-table { border-collapse:collapse; width:100%; font-size:11px; white-space:nowrap; }
+      .pz-table th, .pz-table td { padding:9px 12px; border-bottom:1px solid var(--c-border); text-align:right; }
+      .pz-table th:first-child, .pz-table td:first-child { text-align:left; }
+      .pz-table th { color:var(--c-text3); font-weight:500; }
+      .pz-detail { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:12px; }
+      .pz-detail-item { background:var(--c-bg2); border:1px solid var(--c-border); border-radius:var(--r-md); padding:16px; }
+      .pz-name { font-size:12px; font-weight:600; }
+      .pz-route, .pz-stats, .pz-note { font-size:11px; color:var(--c-text2); line-height:1.6; margin-top:6px; }
+      .pz-value { font:600 24px var(--font-mono); margin-top:12px; }
+      @container (max-width:850px) { .pz-dashboard { grid-template-columns:1fr; } .pz-side { display:grid; grid-template-columns:1fr; } }
+      @container (max-width:520px) { .pz-chart { padding:14px; } .pz-plot-row, .pz-axis { grid-template-columns:105px minmax(30px,1fr) 66px; gap:8px; padding-left:0; padding-right:0; } .pz-phase { font-size:11px; } .pz-chart-value { font-size:12px; } .pz-side { grid-template-columns:1fr; } }
+
+
+      .pz-transport { margin-top:18px; padding:22px; background:var(--c-bg2); border:1px solid var(--c-border); border-radius:var(--r-lg); box-shadow:var(--shadow-sm); }
+      .pz-matrix-scroll { overflow-x:auto; margin-top:20px; border:1px solid var(--c-border); border-radius:8px; }
+      .pz-matrix { width:100%; min-width:1040px; border-collapse:separate; border-spacing:0; table-layout:fixed; }
+      .pz-matrix caption { text-align:left; padding:12px; color:var(--c-text2); font-size:11px; }
+      .pz-matrix th, .pz-matrix td { padding:7px; border-bottom:1px solid var(--c-border); vertical-align:middle; }
+      .pz-matrix thead th { background:var(--c-bg3); color:var(--c-text2); font-size:11px; }
+      .pz-matrix th:first-child { position:sticky; left:0; width:190px; background:var(--c-bg2); z-index:1; text-align:left; border-right:1px solid var(--c-border); }
+      .pz-matrix thead th:first-child { background:var(--c-bg3); z-index:2; }
+      .pz-matrix tbody tr:last-child th, .pz-matrix tbody tr:last-child td { border-bottom:0; }
+      .pz-matrix .pz-matrix-total { border-left:2px solid var(--c-border2); background:var(--c-bg3); }
+      .pz-sort { width:100%; color:inherit; padding:8px 2px; font:600 11px var(--font); line-height:1.5; min-height:48px; }
+      .pz-sort span { color:var(--c-text3); font-size:10px; margin-left:4px; }
+      .pz-cell { display:block; width:100%; min-height:90px; border:1px solid transparent; border-radius:8px; padding:12px 9px; color:var(--c-text); text-align:center; }
+      .pz-cell strong { display:block; font:600 15px var(--font-mono); }
+      .pz-cell small { display:block; color:var(--c-text2); font-size:9px; margin-top:7px; }
+      .pz-cell[aria-pressed="true"] { border-color:var(--c-red-light); box-shadow:inset 0 0 0 1px var(--c-red-light); }
+      .pz-cell:hover { outline:1px solid var(--c-red-border); }
+      .pz-cell:focus-visible, .pz-sort:focus-visible { outline:2px solid var(--c-red-light); outline-offset:1px; }
+      .pz-heat-0 { background:rgba(192,57,43,.08); } .pz-heat-1 { background:rgba(192,57,43,.13); }
+      .pz-heat-2 { background:rgba(192,57,43,.19); } .pz-heat-3 { background:rgba(192,57,43,.25); }
+      .pz-heat-4 { background:rgba(192,57,43,.33); } .pz-empty { background:var(--c-bg3); color:var(--c-text3); }
+      .pz-tm-label { font-size:12px; font-weight:600; overflow-wrap:anywhere; }
+      .pz-cell-track { display:block; height:6px; margin:10px 0 7px; border-radius:4px; background:var(--c-red-dim); overflow:hidden; }
+      .pz-cell-fill { display:block; height:100%; border-radius:4px; background:var(--c-red-light); }
+      .pz-empty .pz-cell-track { background:var(--c-border); }
+      .pz-empty .pz-cell-fill { background:transparent; }
+      .pz-transport .pz-switch button[aria-pressed="true"] { background:var(--c-red-dim); box-shadow:inset 0 0 0 1px var(--c-red-border); }
+      .pz-transport .pz-switch button:focus-visible { outline-color:var(--c-red-light); }
+      :host([theme="light"]) .pz-cell-fill { background:var(--c-red); }
+      .pz-matrix-legend { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:14px 0 4px; font-size:10px; color:var(--c-text2); }
+      .pz-scale-swatches { display:flex; gap:3px; } .pz-scale-swatches i { display:block; width:22px; height:12px; border-radius:2px; }
+      .pz-matrix-detail { padding:18px; margin-top:16px; border:1px solid var(--c-border); border-radius:8px; background:var(--c-bg); }
+      .pz-matrix-detail .pz-metrics { grid-template-columns:repeat(4,minmax(0,1fr)); }
+      @container (max-width:520px) { .pz-transport { padding:14px; } .pz-matrix-detail .pz-metrics { grid-template-columns:1fr 1fr; } }
+
+      .analyse-tabs { display:flex; gap:6px; border-bottom:1px solid var(--c-border2); margin:0 0 20px; }
+      .analyse-tab { color:var(--c-text2); font-size:14px; font-weight:600; padding:13px 20px; border-bottom:3px solid transparent; border-radius:7px 7px 0 0; }
+      .analyse-tab:hover { color:var(--c-text); background:var(--c-bg3); }
+      .analyse-tab[aria-selected="true"] { color:var(--c-text); background:var(--c-red-dim); border-bottom-color:var(--c-red-light); }
+      .analyse-tab:focus-visible, .analyse-panel:focus-visible { outline:2px solid var(--c-red-light); outline-offset:2px; }
+      .analyse-panel[hidden] { display:none !important; }
+      .analyse-period-compare { margin:0 0 20px; }
+      .analyse-period-compare .kpi-cards { margin-top:16px; grid-template-columns:minmax(240px,420px); }
+      @container (max-width:520px) { .analyse-tab { flex:1; padding:12px 8px; } }
+
 </style>
 
     <!-- ── DOM ────────────────────────────────────────────────────────── -->
@@ -2868,6 +3058,11 @@
             <span class="zr-aktiv-meta" id="zr-aktiv-meta"></span>
           </div>
 
+          <div class="analyse-tabs" role="tablist" aria-label="Auswertung wählen">
+            <button id="tab-kennzahlen" class="analyse-tab" role="tab" aria-selected="true" aria-controls="panel-kennzahlen" tabindex="0" data-analyse-tab="kennzahlen">Kennzahlen</button>
+            <button id="tab-durchlaufzeiten" class="analyse-tab" role="tab" aria-selected="false" aria-controls="panel-durchlaufzeiten" tabindex="-1" data-analyse-tab="durchlaufzeiten">Durchlaufzeiten</button>
+          </div>
+          <section id="panel-kennzahlen" class="analyse-panel" role="tabpanel" aria-labelledby="tab-kennzahlen" tabindex="0">
           <div class="u-abschnitt">
             <div class="u-titel" id="kpi-titel">Kennzahlen</div>
             <div class="kpi-cards" id="kpi-cards"></div>
@@ -2910,7 +3105,6 @@
                 <option value="otif">OTIF</option>
                 <option value="puenktlich">Pünktlichkeit</option>
                 <option value="mengentreu">Mengentreue</option>
-                <option value="durchlaufzeitMin">Durchlaufzeit</option>
                 <option value="abweichendeMengeAbs">Abweichende Menge</option>
               </select>
 
@@ -2919,6 +3113,17 @@
 
             <div id="te-liste"></div>
           </div>
+          </section>
+          <section id="panel-durchlaufzeiten" class="analyse-panel" role="tabpanel" aria-labelledby="tab-durchlaufzeiten" tabindex="0" hidden>
+            <details class="pz-info analyse-period-compare" open>
+              <summary>Durchlaufzeit im Vorperiodenvergleich</summary>
+              <div class="kpi-cards" id="zeit-kpi-cards"></div>
+            </details>
+            <div class="u-abschnitt">
+              <div class="u-titel">Prozesszeiten · Analyse je TE</div>
+              <div id="prozesszeiten" aria-live="polite"></div>
+            </div>
+          </section>
         </div>
 
         <!-- ── VIEW 2: DETAIL (aus der Referenz übernommen) ── -->
@@ -2958,6 +3163,7 @@
       this._teMap       = new Map();    // { teNr → TEObjekt }
       this._activeTE    = null;         // aktuell im Detail angezeigte TE-Nummer
       this._activeView  = 'uebersicht';
+      this._analyseTab  = 'kennzahlen';
       this._herkunftView = 'uebersicht'; // Ansicht, aus der ins Detail gesprungen wurde
       this._theme       = 'dark';       // 'dark' | 'light'
       this._ac          = new AbortController();
@@ -3073,6 +3279,22 @@
 
     _bindEvents() {
       const opts = { signal: this._ac.signal };
+      this._shadow.querySelectorAll('[data-analyse-tab]').forEach(button => {
+        button.addEventListener('click', () => this._setAnalyseTab(button.dataset.analyseTab), opts);
+        button.addEventListener('keydown', e => {
+          const namen = ['kennzahlen', 'durchlaufzeiten'];
+          const i = namen.indexOf(button.dataset.analyseTab);
+          let ziel;
+          if (e.key === 'ArrowRight') ziel = namen[(i + 1) % namen.length];
+          else if (e.key === 'ArrowLeft') ziel = namen[(i + namen.length - 1) % namen.length];
+          else if (e.key === 'Home') ziel = namen[0];
+          else if (e.key === 'End') ziel = namen[namen.length - 1];
+          else return;
+          e.preventDefault();
+          this._setAnalyseTab(ziel, true);
+        }, opts);
+      });
+
 
       // Theme
       this._$('theme-btn')?.addEventListener('click', () => this._toggleTheme(), opts);
@@ -3165,6 +3387,17 @@
     }
 
     // ── View-Switching ────────────────────────────────────────────────────
+
+    _setAnalyseTab(name, fokus = false) {
+      if (!['kennzahlen', 'durchlaufzeiten'].includes(name)) return;
+      this._analyseTab = name;
+      for (const id of ['kennzahlen', 'durchlaufzeiten']) {
+        const aktiv = id === name, button = this._$(`tab-${id}`), panel = this._$(`panel-${id}`);
+        if (button) { button.setAttribute('aria-selected', String(aktiv)); button.tabIndex = aktiv ? 0 : -1; }
+        if (panel) panel.hidden = !aktiv;
+      }
+      if (fokus) this._$(`tab-${name}`)?.focus({preventScroll:true});
+    }
 
     _switchView(name) {
       this._activeView = name;
@@ -3458,6 +3691,7 @@
     _renderUebersicht() {
       this._updateKopf();
       this._renderKpiCards();
+      this._renderProzesszeiten();
       this._renderTabelle();
     }
 
@@ -3494,8 +3728,168 @@
     //  Wert der unmittelbar vorausgehenden Periode gleicher Länge als
     //  Vergleich — das funktioniert für die Presets ebenso wie für jeden per
     //  Slider gewählten Zeitraum.
+    _renderProzesszeiten() {
+      const host = this._$('prozesszeiten');
+      if (!host) return;
+      const tes = this._tesZeitraum();
+      if (!tes.length) {
+        host.innerHTML = '<div class="u-leer">Keine Transporteinheiten im ausgewählten Zeitraum.</div>';
+        return;
+      }
+      const daten = aggregiereProzesszeiten(tes);
+      const phasen = daten.filter(d => !d.gesamt);
+      const modus = this._prozessModus === 'median' ? 'median' : 'mittel';
+      const label = modus === 'median' ? 'Median' : 'Durchschnitt';
+      const prefix = modus === 'median' ? '' : 'Ø ';
+      const gesamtKarten = ['gesamt', 'operativ'].map(id => daten.find(d => d.id === id));
+      const longest = phasen.filter(d => d[modus] != null).reduce((a, b) => !a || b[modus] > a[modus] ? b : a, null);
+      const focus = phasen.find(d => d.id === this._prozessFokus) ?? longest ?? phasen[0];
+      const top = Math.max(1, ...phasen.map(d => d[modus] ?? 0));
+      const step = top <= 20 ? 5 : top <= 100 ? 25 : top <= 400 ? 100 : Math.pow(10, Math.floor(Math.log10(top)));
+      const skala = Math.ceil(top / step) * step;
+      const num = n => n == null ? '–' : n.toLocaleString('de-DE', {maximumFractionDigits:1});
+      host.innerHTML = `<div class="pz-totals">
+        ${gesamtKarten.map(d => `<section class="pz-card pz-total ${d.id === 'gesamt' ? 'pz-overall' : ''}" data-prozess="${d.id}">
+          <div class="pz-kicker">${esc(d.label)}</div>
+          <div class="pz-big">${prefix}${num(d[modus])} <small>min</small></div>
+          <div class="pz-sub">${esc(d.strecke)}</div>
+          <span class="pz-pill">${label} · ${d.n} / ${tes.length} TEs auswertbar</span>
+        </section>`).join('')}
+      </div><div class="pz-sub pz-cohort-note">Beide Kennzahlen enden bei der vollständigen Fertigstellung aller Positionen. Bestandsarten bleiben unberücksichtigt. Unterschiedliche Fallzahlen sind bei fehlenden Zeitstempeln möglich.</div>
+      <div class="pz-dashboard">
+        <section class="pz-chart" aria-label="Prozesszeiten im Vergleich">
+          <div class="pz-head"><div><div class="pz-title">Durchlaufzeit</div>
+            <div class="pz-sub">${esc(bereichLabel(this._bereich))} · ${tes.length} TEs im Zeitraum</div></div>
+            <div class="pz-switch" aria-label="Statistik wählen">
+              <button data-pz-modus="mittel" aria-pressed="${modus === 'mittel'}">Durchschnitt</button>
+              <button data-pz-modus="median" aria-pressed="${modus === 'median'}">Median</button>
+            </div></div>
+          <div aria-label="${label} je Prozessphase in Minuten">${phasen.map((d,i) => `
+            <button class="pz-plot-row" data-prozess="${d.id}" data-pz-fokus="${d.id}" aria-pressed="${d.id === focus.id}"
+              aria-label="${esc(d.label)}: ${d[modus] == null ? 'nicht bewertbar' : fmtProzessMin(d[modus])}. Details anzeigen">
+              <div class="pz-phase"><span class="pz-step">PHASE 0${i+1}</span>${esc(d.label)}</div>
+              <div class="pz-track" aria-hidden="true"><div class="pz-bar${longest && d.id === longest.id ? ' pz-longest' : ''}" style="width:${d[modus] == null ? 0 : 100*d[modus]/skala}%"></div></div>
+              <div class="pz-chart-value">${num(d[modus])}<span class="pz-step">MINUTEN</span></div>
+            </button>`).join('')}</div>
+          <div class="pz-axis" aria-hidden="true"><span></span><div class="pz-ticks">${[0,1,2,3,4].map(i=>`<span>${num(skala*i/4)}</span>`).join('')}</div><span></span></div>
+          <div class="pz-legend"><span><i class="pz-dot"></i>${label} je TE</span><span><i class="pz-dot red"></i>Längste Phase · kein Zielwert</span></div>
+          <div class="pz-sub">Balken anklicken für Detailwerte. Alle TEs des Zeitraums; Listenfilter gelten nur für die TE-Liste.</div>
+        </section>
+        <aside class="pz-side">
+          <section class="pz-card pz-inspector" aria-live="polite">
+            <div class="pz-kicker">Ausgewählte Phase</div><div class="pz-title" style="margin-top:10px">${esc(focus.label)}</div>
+            <div class="pz-sub">${esc(focus.strecke)}</div>
+            <div class="pz-metrics">${[['Durchschnitt',focus.mittel],['Median',focus.median],['Minimum',focus.min],['Maximum',focus.max]].map(([l,v])=>`<div class="pz-metric"><span>${l}</span><strong>${fmtProzessMin(v)}</strong></div>`).join('')}</div>
+            <div class="pz-sub">${focus.n} / ${tes.length} TEs auswertbar</div>
+            <div class="pz-coverage" aria-hidden="true"><div style="width:${focus.n/tes.length*100}%"></div></div>
+            <div class="pz-sub">${focus.fehlend} unvollständig · ${focus.ungueltig} ungültige Zeitfolge</div>
+          </section>
+        </aside>
+      </div>
+      ${this._transportzeitenHTML(tes, modus)}
+      <details class="pz-info"><summary>Detailtabelle und Berechnungsgrundlage</summary>
+        <div class="pz-scroll"><table class="pz-table"><thead><tr><th>Prozess</th><th>Ø</th><th>Median</th><th>Min.</th><th>Max.</th><th>Auswertbar</th><th>Fehlend</th><th>Ungültig</th></tr></thead><tbody>
+          ${daten.map(d=>`<tr><td>${esc(d.label)}</td><td>${fmtProzessMin(d.mittel)}</td><td>${fmtProzessMin(d.median)}</td><td>${fmtProzessMin(d.min)}</td><td>${fmtProzessMin(d.max)}</td><td>${d.n} / ${tes.length}</td><td>${d.fehlend}</td><td>${d.ungueltig}</td></tr>`).join('')}
+        </tbody></table></div>
+        Jede TE zählt je Schritt einmal. Fehlende Zeitstempel und negative Zeitdifferenzen werden ausgeschlossen; 0 Minuten sind gültig.
+        Zeitraumzuordnung: geplanter Start, ersatzweise Ankunft, ersatzweise vollständige Fertigstellung.
+        Einlagerung endet mit dem letzten Fertigstellungszeitstempel aller Positionen; Bestandsarten bleiben unberücksichtigt.
+        Entladeende: regulärer Zeitstempel ohne Korrektur-Fallback. Die Zuordnung zum ersten Entladeende bleibt fachlich zu prüfen.
+        Unterschiedliche Fallzahlen je Schritt: Phasendurchschnitte nicht zur Gesamtdauer addieren. Die beiden Durchlaufzeiten werden direkt ab Ankunft beziehungsweise Entladestart bis Fertigstellung berechnet.
+      </details>`;
+      host.onclick = e => {
+        const button = e.target.closest('[data-pz-modus], [data-pz-fokus], [data-pz-sort], [data-pz-cell]');
+        if (!button || !host.contains(button)) return;
+        const metric = button.dataset.pzModus, phase = button.dataset.pzFokus;
+        const sort = button.dataset.pzSort, cell = button.dataset.pzCell;
+        const scroll = host.querySelector('.pz-matrix-scroll')?.scrollLeft ?? 0;
+        let selector;
+        if (metric) { this._prozessModus = metric; selector = `${button.closest('.pz-transport') ? '.pz-transport ' : '.pz-chart '}[data-pz-modus="${metric}"]`; }
+        if (phase) { this._prozessFokus = phase; selector = `[data-pz-fokus="${phase}"]`; }
+        if (sort) {
+          const previous = this._tmSort ?? 'gesamt';
+          this._tmRichtung = previous === sort ? -(this._tmRichtung ?? -1) : (sort === 'name' ? 1 : -1);
+          this._tmSort = sort;
+          selector = `[data-pz-sort="${sort}"]`;
+        }
+        if (cell) {
+          const [key,id] = JSON.parse(decodeURIComponent(cell));
+          this._tmAuswahl = {key,id};
+          selector = `[data-pz-cell="${cell}"]`;
+        }
+        this._renderProzesszeiten();
+        const wrapper = host.querySelector('.pz-matrix-scroll');
+        if (wrapper) wrapper.scrollLeft = scroll;
+        host.querySelector(selector)?.focus({preventScroll:true});
+      };
+    }
+
+    _transportzeitenHTML(tes, modus) {
+      const gruppen = aggregiereTransportzeiten(tes);
+      const spalten = [
+        {id:'anmeldung',label:'Wartezeit'}, {id:'vorlauf',label:'Entladevorlauf'},
+        {id:'entladung',label:'Entladung'}, {id:'vereinnahmung',label:'Vereinnahmung'},
+        {id:'einlagerung',label:'Einlagerung'}, {id:'gesamt',label:'Gesamt',gesamt:true},
+        {id:'operativ',label:'Operativ',gesamt:true}
+      ];
+      const feld = this._tmSort ?? 'gesamt', richtung = this._tmRichtung ?? -1;
+      const sortiert = sortiereTransportgruppen(gruppen,feld,richtung,modus);
+      const stat = modus === 'median' ? 'Median' : 'Durchschnitt';
+      const werte = Object.fromEntries(spalten.map(c=>[c.id,gruppen.map(g=>g.prozesse.find(p=>p.id===c.id)[modus])]));
+      const maxima = Object.fromEntries(spalten.map(c=>[c.id,werte[c.id].reduce((m,v)=>Math.max(m,v ?? 0),0)]));
+      const sortAttr = id => feld === id ? (richtung === 1 ? 'ascending' : 'descending') : 'none';
+      const sortIcon = id => feld === id ? (richtung === 1 ? '↑' : '↓') : '↕';
+      const gAktiv = gruppen.find(g=>this._tmAuswahl && g.key === this._tmAuswahl.key);
+      const dAktiv = gAktiv?.prozesse.find(d=>d.id === this._tmAuswahl.id);
+      const detail = dAktiv ? `<div class="pz-title">${esc(gAktiv.label)} · ${esc(dAktiv.label)}</div>
+        <div class="pz-sub">${esc(dAktiv.strecke)}${gAktiv.key != null && gAktiv.key !== gAktiv.label ? ' · '+esc(gAktiv.key) : ''}</div>
+        <div class="pz-metrics">${[['Durchschnitt',dAktiv.mittel],['Median',dAktiv.median],['Minimum',dAktiv.min],['Maximum',dAktiv.max]].map(([l,v])=>`<div class="pz-metric"><span>${l}</span><strong>${fmtProzessMin(v)}</strong></div>`).join('')}</div>
+        <div class="pz-sub"><strong>${dAktiv.n} / ${gAktiv.anzahl} TEs auswertbar (${Math.round(dAktiv.n/gAktiv.anzahl*100)} %)</strong> · ${dAktiv.fehlend} unvollständig · ${dAktiv.ungueltig} ungültige Zeitfolge</div>` :
+        '<div class="pz-sub">Klicke auf einen Zeitwert, um Median, Minimum, Maximum und Datenabdeckung zu sehen.</div>';
+      return `<section class="pz-transport" aria-label="Durchlaufzeit nach Transportmittel">
+        <div class="pz-head"><div><div class="pz-title">Durchlaufzeit nach Transportmittel</div>
+          <div class="pz-sub">${stat} je TE · ${esc(bereichLabel(this._bereich))} · ${gruppen.length} Transportmittelgruppen</div></div>
+          <div class="pz-switch" aria-label="Statistik der Transportmittelmatrix wählen">
+            <button data-pz-modus="mittel" aria-pressed="${modus==='mittel'}">Durchschnitt</button>
+            <button data-pz-modus="median" aria-pressed="${modus==='median'}">Median</button>
+          </div></div>
+        <div class="pz-matrix-scroll" role="region" aria-label="Transportmittelmatrix, horizontal scrollbar" tabindex="0">
+          <table class="pz-matrix"><caption>Zeitwerte in Minuten · Spaltenüberschrift zum Sortieren anklicken</caption>
+            <thead><tr><th scope="col" aria-sort="${sortAttr('name')}"><button class="pz-sort" data-pz-sort="name">Transportmittel <span>${sortIcon('name')}</span></button></th>
+              ${spalten.map(c=>`<th scope="col" class="${c.gesamt?'pz-matrix-total':''}" aria-sort="${sortAttr(c.id)}"><button class="pz-sort" data-pz-sort="${c.id}">${c.label} <span>${sortIcon(c.id)}</span></button></th>`).join('')}
+            </tr></thead><tbody>${sortiert.map(g=>`<tr>
+              <th scope="row"><div class="pz-tm-label">${esc(g.label)}</div><div class="pz-sub">${g.anzahl} TEs${g.key != null && g.key!==g.label?' · '+esc(g.key):''}</div></th>
+              ${spalten.map(c=>{
+                const d=g.prozesse.find(p=>p.id===c.id),v=d[modus];
+                const token=encodeURIComponent(JSON.stringify([g.key,c.id]));
+                const selected=this._tmAuswahl?.key===g.key && this._tmAuswahl?.id===c.id;
+                return `<td class="${c.gesamt?'pz-matrix-total':''}"><button class="pz-cell ${transportFarbklasse(v,werte[c.id])}" data-pz-cell="${esc(token)}" aria-pressed="${selected}"
+                  aria-label="${esc(g.label)}, ${esc(d.label)}: ${v==null?'nicht bewertbar':fmtProzessMin(v)}; ${d.n} von ${g.anzahl} TEs auswertbar. Details anzeigen">
+                  <strong>${v==null?'n. b.':fmtProzessMin(v)}</strong>
+                  <span class="pz-cell-track" aria-hidden="true"><span class="pz-cell-fill" style="width:${v==null || maxima[c.id]===0 ? 0 : Math.max(0,Math.min(100,v/maxima[c.id]*100))}%"></span></span>
+                  <small>${d.n} / ${g.anzahl} TEs</small></button></td>`;
+              }).join('')}</tr>`).join('')}</tbody>
+          </table></div>
+        <div class="pz-matrix-legend"><span>Kürzer</span><span class="pz-scale-swatches">${[0,1,2,3,4].map(i=>`<i class="pz-heat-${i}"></i>`).join('')}</span><span>Länger</span><span>· Farbe und Balken innerhalb derselben Spalte vergleichen · keine Zielwertbewertung</span></div>
+        <div class="pz-sub">Gesamt: Ankunft → Fertigstellung · Operativ: Entladestart → Fertigstellung. n. b. = nicht bewertbar. Unterschiedliche Fallzahlen beachten. Balken beginnen bei 0; der längste gültige Wert je Spalte füllt die Kachelbreite. Gleiche Zeitwerte erhalten dieselbe Farbe und Balkenlänge.</div>
+        <div class="pz-matrix-detail" aria-live="polite">${detail}</div>
+      </section>`;
+    }
+
+    _prozessDetailHTML(te) {
+      return `<div class="detail-section"><div class="d-section-title">Prozesszeiten dieser TE</div>
+        <div class="pz-detail">${PROZESS_DEFS.map(def => {
+          const p = prozessDauer(te, def);
+          return `<div class="pz-detail-item"><div class="pz-name">${esc(def.label)}</div>
+            <div class="pz-route">${esc(def.strecke)}</div>
+            <div class="pz-value">${fmtProzessMin(p.min)}</div>
+            ${p.grund ? `<div class="pz-stats">${p.grund === 'fehlend' ? 'Zeitstempel fehlen / Abschluss nicht vollständig' : 'Ungültige Zeitfolge'}</div>` : ''}</div>`;
+        }).join('')}</div><div class="pz-note">Einlagerung: vollständige Fertigstellung aller Positionen, ohne Berücksichtigung der Bestandsarten. Entladeende: regulärer Zeitstempel, ohne Korrektur-Fallback.</div></div>`;
+    }
+
     _renderKpiCards() {
       const host = this._$('kpi-cards');
+      const zeitHost = this._$('zeit-kpi-cards');
       if (!host) return;
 
       const vp    = vorperiode(this._bereich);
@@ -3506,11 +3900,13 @@
         host.innerHTML = `<div class="u-leer" style="grid-column:1/-1">
           Keine Transporteinheiten im Zeitraum ${esc(bereichLabel(this._bereich))}
         </div>`;
+        if (zeitHost) zeitHost.innerHTML = host.innerHTML;
         return;
       }
 
       const vglName = `Vorperiode: ${bereichLabel(vp)}`;
-      host.innerHTML = KPI_DEFS.map(def => this._kpiCardHTML(def, aktiv, vgl, vglName)).join('');
+      host.innerHTML = KPI_DEFS.filter(def => def.id !== 'durchlaufzeit').map(def => this._kpiCardHTML(def, aktiv, vgl, vglName)).join('');
+      if (zeitHost) zeitHost.innerHTML = KPI_DEFS.filter(def => def.id === 'durchlaufzeit').map(def => this._kpiCardHTML(def, aktiv, vgl, vglName)).join('');
 
       // Aufklapp-Richtung der Aufschlüsselung bestimmen: Standard ist nach
       // unten; ist dort im scrollbaren View zu wenig Platz, nach oben klappen.
@@ -3533,6 +3929,7 @@
         const card = e.target.closest('.kpi-card.hat-breakdown');
         if (card) richtungPruefen(card);
       };
+      if (zeitHost) { zeitHost.onpointerover = host.onpointerover; zeitHost.onfocusin = host.onfocusin; }
     }
 
     // Formatiert den Wert einer Kennzahl aus einem aggregierten Datensatz
@@ -3708,7 +4105,6 @@
         { feld: 'otif',                label: 'OTIF',          cls: 'mid' },
         { feld: 'puenktlich',          label: 'Pünktlichkeit', cls: 'mid' },
         { feld: 'mengentreu',          label: 'Mengentreue',   cls: 'mid' },
-        { feld: 'durchlaufzeitMin',    label: 'Durchlaufzeit', cls: 'num' },
         { feld: 'abweichendeMengeAbs', label: 'Abw. Menge',    cls: 'num' },
       ];
 
@@ -3794,9 +4190,6 @@
           <td class="mid">${boolChip(te.otif, 'OTIF', 'Verletzt')}</td>
           <td class="mid">${boolChip(te.puenktlich, 'Pünktlich', 'Verspätet')}${puenktZusatz}</td>
           <td class="mid">${boolChip(te.mengentreu, 'Vollständig', 'Abweichung')}</td>
-          <td class="num tt-num">${te.durchlaufzeitMin == null
-              ? '<span class="tt-muted">n. b.</span>'
-              : esc(fmtDauerAbs(te.durchlaufzeitMin))}</td>
           <td class="num tt-num">${abwHTML}</td>
           <td class="mid"><span class="tt-detail-btn">Detail →</span></td>
         </tr>`;
@@ -3957,6 +4350,8 @@
           </div>
           ${this._zeitstrahlHTML(te, isVerspaetet)}
         </div>
+
+        ${this._prozessDetailHTML(te)}
 
         <div class="d-cols">
           <div class="detail-section">
