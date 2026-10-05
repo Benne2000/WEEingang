@@ -1,6 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
 //  SAP Custom Widget – Wareneingang Analyse (WE-Analyse)
-//  JavaScript-Arbeitsstand 2.1.30 – Tagesverlauf der Durchlaufzeiten
+//  JavaScript-Arbeitsstand 2.1.40 – stabile Partnerdetails und Diagrammbedienung
 //
 //  Umbau des Live-Trackers zur nachträglichen Auswertung.
 //
@@ -19,6 +19,14 @@
 
 (function () {
   'use strict';
+
+  // Runde Achsenabstände für die Anzeige; keine Änderung der Messwerte.
+  function runderAchsenSchritt(ziel) {
+    if (!Number.isFinite(ziel) || ziel <= 1) return 1;
+    const faktor = Math.pow(10, Math.floor(Math.log10(ziel)));
+    const norm = ziel/faktor;
+    return (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10)*faktor;
+  }
 
   // ── Konstanten ───────────────────────────────────────────────────────────
 
@@ -129,43 +137,19 @@
   // Parst einen Timestamp aus BW – gibt ein Date-Objekt zurück oder null
   const parseTs = (raw) => {
     if (isNull(raw)) return null;
-    let s = String(raw).trim();
-    if (!s || s === '#') return null;
-
-    // Deutsches Format: "07.07.2026  06:00:00" (auch mit Doppel-Leerzeichen)
-    //                   oder "07.07.2026 06:00" oder nur "07.07.2026"
+    const s = String(raw).trim();
+    let parts;
     const de = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
-    if (de) {
-      const [, dd, mm, yyyy, hh, mi, ss] = de;
-      // Als UTC konstruieren → die Ziffern bleiben "Wanduhrzeit", keine TZ-Umrechnung
-      return new Date(Date.UTC(+yyyy, +mm - 1, +dd, +(hh||0), +(mi||0), +(ss||0)));
-    }
-
-    // ISO 8601: "2025-05-20T07:37:00" — ohne TZ-Angabe als UTC interpretieren
-    const isoMatch = s.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?/);
-    if (isoMatch) {
-      const [, yyyy, mm, dd, hh, mi, ss] = isoMatch;
-      return new Date(Date.UTC(+yyyy, +mm - 1, +dd, +hh, +mi, +(ss||0)));
-    }
-    // ISO nur Datum
-    const isoDate = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    if (isoDate) {
-      const [, yyyy, mm, dd] = isoDate;
-      return new Date(Date.UTC(+yyyy, +mm - 1, +dd));
-    }
-
-    // SAP-Format: "20250520073700" (YYYYMMDDHHmmss)
-    if (/^\d{14}$/.test(s)) {
-      return new Date(Date.UTC(
-        +s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8),
-        +s.slice(8, 10), +s.slice(10, 12), +s.slice(12, 14)
-      ));
-    }
-    // SAP-Datum ohne Zeit: "20250520" → Mitternacht
-    if (/^\d{8}$/.test(s)) {
-      return new Date(Date.UTC(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8)));
-    }
-    return null;
+    const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/);
+    if (de) parts=[+de[3],+de[2],+de[1],+(de[4]||0),+(de[5]||0),+(de[6]||0)];
+    else if (iso) parts=[+iso[1],+iso[2],+iso[3],+(iso[4]||0),+(iso[5]||0),+(iso[6]||0)];
+    else if (/^\d{14}$/.test(s)) parts=[+s.slice(0,4),+s.slice(4,6),+s.slice(6,8),+s.slice(8,10),+s.slice(10,12),+s.slice(12,14)];
+    else if (/^\d{8}$/.test(s)) parts=[+s.slice(0,4),+s.slice(4,6),+s.slice(6,8),0,0,0];
+    else return null;
+    const [year,month,day,hour,minute,second]=parts;
+    if (year<100 || year>9999 || month<1 || month>12 || day<1 || day>31 || hour>23 || minute>59 || second>59) return null;
+    const d=new Date(Date.UTC(year,month-1,day,hour,minute,second));
+    return d.getUTCFullYear()===year && d.getUTCMonth()===month-1 && d.getUTCDate()===day ? d : null;
   };
 
   // Aktuelle Zeit als UTC-"Wanduhrzeit": nimmt die lokale Uhrzeit des Nutzers
@@ -200,18 +184,19 @@
   };
 
   // Vollständiger Zeitstempel für Detailtabellen mit mehrtägigem Zeitraum.
-  const fmtDateTimeVoll = (d) => d ? `${fmtDate(d)} ${fmtTime(d)}` : '–';
+  const fmtDateTimeVoll = (d) => d ? `${fmtDate(d)} ${fmtTime(d)}${d.getUTCSeconds() ? ':' + String(d.getUTCSeconds()).padStart(2, '0') : ''}` : '–';
 
   // Berechnet Differenz zweier Date-Objekte in Minuten (kann negativ sein)
   const diffMin = (a, b) => {
     if (!a || !b) return null;
-    return Math.round((b.getTime() - a.getTime()) / 60000);
+    const delta = (b.getTime() - a.getTime()) / 60000;
+    return Number.isFinite(delta) ? delta : null;
   };
 
   // Formatiert Minuten als lesbare Zeitdauer: "1h 23min" oder "45min"
   const fmtDauer = (min) => {
-    if (min == null) return '–';
-    const abs = Math.abs(min);
+    if (min == null || !Number.isFinite(min)) return '–';
+    const abs = Math.round(Math.abs(min));
     const sign = min < 0 ? '−' : '+';
     if (abs < 60) return `${sign}${abs}min`;
     const h = Math.floor(abs / 60);
@@ -414,7 +399,11 @@
         const v = row[k];
         if (v == null) continue;
         const num = (typeof v === 'object' && 'raw' in v) ? v.raw : v;
-        if (num != null && !isNull(String(num))) return Number(num);
+        if (num == null || typeof num==='boolean' || typeof num==='object') continue;
+        const raw=String(num).trim();
+        if (!raw || /^#+$/.test(raw) || /^(?:@NullMember|NULL|null|undefined|NaN)$/i.test(raw)) continue;
+        const number=Number(raw);
+        if (Number.isFinite(number)) return number;
       }
     }
     return null;
@@ -609,7 +598,7 @@
       if (!teNrRaw) continue;
       // Führende Nullen entfernen und als einheitlichen Schlüssel verwenden,
       // damit Map-Key, te.te und data-te im DOM identisch sind (Klick funktioniert).
-      const teNr = String(teNrRaw).replace(/^0+/, '') || String(teNrRaw);
+      const teNr = ohneNullen(String(teNrRaw));
 
       if (!teMap.has(teNr)) {
         teMap.set(teNr, {
@@ -686,13 +675,14 @@
       const supplierName = readLabel(row, 'dimension_lieferant_name') ?? readLabel(row, 'dimension_lieferant_nr', 'WARENSENDER');
       const supplierKey = !isNull(supplierNr) ? 'nr:' + String(supplierNr).trim()
         : !isNull(supplierName) && supplierName !== '–' ? 'text:' + String(supplierName).trim() : null;
-      te._lieferantenMap.set(supplierKey, {key:supplierKey, nr:supplierKey?.startsWith('nr:') ? String(supplierNr).trim() : null,
-        label:!isNull(supplierName) && supplierName !== '–' ? String(supplierName).trim() : String(supplierNr ?? 'Ohne Lieferant')});
+      const supplierIdentitaet = {key:supplierKey, nr:supplierKey?.startsWith('nr:') ? String(supplierNr).trim() : null,
+        label:!isNull(supplierName) && supplierName !== '–' ? String(supplierName).trim() : String(supplierNr ?? 'Ohne Lieferant')};
+      te._lieferantenMap.set(supplierKey, supplierIdentitaet);
 
       // Frachtführer getrennt vom Lieferanten je Datenzeile erfassen.
       const carrier = readKeyTextNum(row, 'dimension_frachtfuehrer');
-      const carrierKey = !isNull(carrier.key) ? String(carrier.key).trim() : null;
-      te._frachtfuehrerMap.set(carrierKey, {key:carrierKey, nr:carrierKey,
+      const carrierKey = !isNull(carrier.key) ? String(carrier.key).trim() : !isNull(carrier.text) ? 'text:'+String(carrier.text).trim() : null;
+      te._frachtfuehrerMap.set(carrierKey, {key:carrierKey, nr:!isNull(carrier.key) ? String(carrier.key).trim() : null,
         label:!isNull(carrier.text) ? String(carrier.text).trim() : carrierKey ?? 'Ohne Frachtführer/Spediteur'});
 
       // Liefer- und Bestellnummer je Position sammeln (eine TE kann mehrere
@@ -719,8 +709,10 @@
           // Positionsgenaue Zuordnung, damit der Lieferanten-Drill-down bei
           // mehreren Anlieferungen pro TE keine Produktzeile falsch zuordnet.
           liefernummer: lief,
+          lieferantBewertung: supplierIdentitaet,
+          transportmittelBewertung: readKeyText(row, 'dimension_transportmittel', 'TRMIT'),
           // menge = Ist-Menge (Anzeige in der Positionstabelle der Detailsicht)
-          menge:        mengeIst ?? 0,
+          menge:        mengeIst,
           mengeIst:     mengeIst,
           mengeSoll:    mengeSoll,
           mengeAbweichung: mengeAbw,
@@ -769,6 +761,12 @@
   // Produkt-/Packmittelgruppen. Erst die Mengen einer Gruppe summieren, dann
   // Menge / PA1 aufrunden – dadurch werden mehrere Positionen desselben
   // Produkts nicht fälschlich jeweils einzeln aufgerundet.
+  function palettenAufrunden(menge,pa1) {
+    if (!Number.isFinite(menge) || menge<0 || !Number.isFinite(pa1) || pa1<=0) return null;
+    const q=menge/pa1;
+    return q===0 ? 0 : Math.max(1,Math.ceil(q-Number.EPSILON*Math.max(1,q)*4));
+  }
+
   function aggregiereTeProdukte(te) {
     const gruppen = new Map();
     const produktIds = new Set();
@@ -795,35 +793,44 @@
           pa1,
           menge: 0,
           mengeVollstaendig: true,
+          bekanntePositionen:0,
           positionen: 0,
         });
       }
       const g = gruppen.get(key);
       g.positionen++;
       if (menge == null || menge < 0) g.mengeVollstaendig = false;
-      else g.menge += menge;
+      else { g.menge += menge;g.bekanntePositionen++; }
     }
 
-    const produkte = [...gruppen.values()].map(g => ({
-      ...g,
-      paletten: g.mengeVollstaendig && g.pa1 != null ? Math.ceil(g.menge / g.pa1) : null,
-    })).sort((a, b) => a.nr.localeCompare(b.nr, 'de', { numeric: true })
+    const faktoren=new Map();
+    for (const g of gruppen.values()) {
+      const key=JSON.stringify([g.nr,g.einheit,g.packmittel?.key ?? g.packmittel?.text ?? null]);
+      if (!faktoren.has(key)) faktoren.set(key,new Set());
+      faktoren.get(key).add(g.pa1);
+    }
+    const produkte = [...gruppen.values()].map(g => {
+      const key=JSON.stringify([g.nr,g.einheit,g.packmittel?.key ?? g.packmittel?.text ?? null]);
+      const pa1Konflikt=faktoren.get(key).size>1;
+      return {...g,pa1Konflikt,paletten:g.mengeVollstaendig && g.pa1!=null && !pa1Konflikt ? palettenAufrunden(g.menge,g.pa1) : null};
+    }).sort((a, b) => a.nr.localeCompare(b.nr, 'de', { numeric: true })
       || String(a.packmittelText ?? '').localeCompare(String(b.packmittelText ?? ''), 'de'));
 
     const mengen = new Map();
     for (const p of produkte) {
-      if (!p.mengeVollstaendig) continue;
       const einheit = p.einheit || 'ohne Einheit';
-      mengen.set(einheit, (mengen.get(einheit) ?? 0) + p.menge);
+      if (!mengen.has(einheit)) mengen.set(einheit,{einheit,menge:0,vollstaendig:true,bekanntePositionen:0});
+      const m=mengen.get(einheit);m.menge+=p.menge;m.bekanntePositionen+=p.bekanntePositionen;m.vollstaendig=m.vollstaendig && p.mengeVollstaendig;
     }
     const palettenVollstaendig = produkte.length > 0 && produkte.every(p => p.paletten != null);
     return {
       anzahlProdukte: produktIds.size,
       produkte,
-      mengen: [...mengen].map(([einheit, menge]) => ({ einheit, menge })),
+      mengen: [...mengen.values()],
       paletten: palettenVollstaendig ? produkte.reduce((summe, p) => summe + p.paletten, 0) : null,
       palettenVollstaendig,
       fehlendePa1: produkte.filter(p => p.pa1 == null).length,
+      pa1Konflikte:produkte.filter(p=>p.pa1Konflikt).length,
       packmittel: [...new Set(produkte.map(p => p.packmittelText).filter(Boolean))],
     };
   }
@@ -834,13 +841,13 @@
     const z = te?.produktZusammenfassung ?? aggregiereTeProdukte(te);
     const produktText = `${z.anzahlProdukte} ${z.anzahlProdukte === 1 ? 'Produkt' : 'Produkte'}`;
     const mengenText = z.mengen.length
-      ? z.mengen.map(m => `${fmtMenge(m.menge)} ${m.einheit}`).join(' · ')
+      ? z.mengen.map(m => `${m.bekanntePositionen===0 ? 'n. b.' : fmtMenge(m.menge)} ${m.einheit}${m.vollstaendig===false && m.bekanntePositionen>0 ? ' (Teilsumme)' : ''}`).join(' · ')
       : 'Menge n. b.';
     const palettenText = z.paletten == null ? 'Paletten n. b.' : `${fmtNum(z.paletten)} Pal.`;
     const packmittelText = z.packmittel.length ? z.packmittel.join(' / ') : 'n. b.';
     const details = z.produkte.length ? z.produkte.map(p => {
       const menge = p.mengeVollstaendig ? `${fmtMenge(p.menge)} ${p.einheit || 'ohne Einheit'}` : 'Menge n. b.';
-      const pa1 = p.pa1 == null ? 'PA1 fehlt' : `PA1 ${fmtMenge(p.pa1)}`;
+      const pa1 = p.pa1Konflikt ? 'PA1 widersprüchlich' : p.pa1 == null ? 'PA1 fehlt' : `PA1 ${fmtMenge(p.pa1)}`;
       const paletten = p.paletten == null ? 'Paletten n. b.' : `${fmtNum(p.paletten)} Pal.`;
       return `${p.nr}${p.name && p.name !== '–' ? ` – ${p.name}` : ''}: ${menge}; ${pa1}; ${paletten}; ${p.packmittelText || 'Packmittel n. b.'}`;
     }).join(' | ') : 'Keine Produktdaten';
@@ -903,7 +910,7 @@
       }
     } else if (te.status !== 'eingelagert'
                && te.verzoegerungMin != null
-               && te.verzoegerungMin >= cfg.toleranzMin) {
+               && te.verzoegerungMin > cfg.toleranzMin) {
       te.planabweichung  = true;
       te.abweichungGrund = 'verzögert';
     }
@@ -956,31 +963,34 @@
     }
 
     // ── Mengentreue / Abweichende Menge ──
-    let ist = null, soll = null, abw = null;
+    const mengenGruppen = new Map();
     for (const p of te.produkte) {
-      if (p.mengeIst  != null) ist  = (ist  ?? 0) + p.mengeIst;
-      if (p.mengeSoll != null) soll = (soll ?? 0) + p.mengeSoll;
-      if (p.mengeAbweichung != null) abw = (abw ?? 0) + p.mengeAbweichung;
-    }
-    te.mengeIst  = ist;
-    te.mengeSoll = soll;
-    // Abweichung: vorberechnete Summe bevorzugen, sonst aus Ist/Soll ableiten.
-    te.abweichendeMenge = abw != null ? abw
-                        : (ist != null && soll != null ? ist - soll : null);
-    te.abweichendeMengeAbs = te.abweichendeMenge == null ? null : Math.abs(te.abweichendeMenge);
-
-    te.mengenAbwPct = null;
-    te.mengentreu   = null;
-    if (te.abweichendeMenge != null) {
-      if (soll != null && soll !== 0) {
-        te.mengenAbwPct = (te.abweichendeMenge / soll) * 100;
-        te.mengentreu   = Math.abs(te.mengenAbwPct) <= cfg.mengenToleranzPct;
-      } else {
-        // Kein (oder Null-)Soll: nur exakte Nullabweichung gilt als mengentreu.
-        te.mengenAbwPct = te.abweichendeMenge === 0 ? 0 : null;
-        te.mengentreu   = te.abweichendeMenge === 0;
+      const einheit=isNull(p.einheit) ? '' : String(p.einheit).trim();
+      if (!mengenGruppen.has(einheit)) mengenGruppen.set(einheit,{einheit,ist:0,soll:0,abweichung:0,abweichungSkala:0,istVollstaendig:true,sollVollstaendig:true,abweichungVollstaendig:true});
+      const g=mengenGruppen.get(einheit);
+      for (const [quelle,ziel,voll] of [['mengeIst','ist','istVollstaendig'],['mengeSoll','soll','sollVollstaendig'],['mengeAbweichung','abweichung','abweichungVollstaendig']]) {
+        if (Number.isFinite(p[quelle])) {
+          g[ziel]+=p[quelle];
+          if (quelle==='mengeAbweichung') g.abweichungSkala+=Math.abs(p[quelle]);
+        } else g[voll]=false;
       }
     }
+    te.mengenGruppen=[...mengenGruppen.values()].map(g=>{
+      // Nur Rundungsreste nahe der Maschinenpräzision neutralisieren.
+      // Keine feste Dezimalgrenze: echte kleine Mengenabweichungen bleiben erhalten.
+      const epsilon=Number.EPSILON*Math.max(Math.abs(g.ist),Math.abs(g.soll),g.abweichungSkala)*8;
+      if (g.abweichungVollstaendig && Math.abs(g.abweichung)<=epsilon) g.abweichung=0;
+      const pct=g.abweichungVollstaendig && g.sollVollstaendig && g.soll!==0 ? g.abweichung/g.soll*100 : null;
+      return {...g,pct,mengentreu:!g.abweichungVollstaendig ? null : pct!=null ? Math.abs(pct)<=cfg.mengenToleranzPct : g.abweichung===0};
+    });
+    const einzel=te.mengenGruppen.length===1 ? te.mengenGruppen[0] : null;
+    te.mengeIst=einzel?.istVollstaendig ? einzel.ist : null;
+    te.mengeSoll=einzel?.sollVollstaendig ? einzel.soll : null;
+    te.abweichendeMenge=einzel?.abweichungVollstaendig ? einzel.abweichung : null;
+    te.abweichendeMengeAbs=te.abweichendeMenge==null ? null : Math.abs(te.abweichendeMenge);
+    te.mengenAbwPct=einzel?.pct ?? (einzel?.abweichungVollstaendig && einzel.abweichung===0 ? 0 : null);
+    te.mengentreu=te.mengenGruppen.some(g=>g.mengentreu===false) ? false
+      : !te.mengenGruppen.length || te.mengenGruppen.some(g=>g.mengentreu==null) ? null : true;
 
     // ── Durchlaufzeit: Ankunft → Fertigstellung ──
     te.durchlaufzeitMin = (te.tsAnkunft && te.tsEinlagerung)
@@ -1047,7 +1057,7 @@
     }
 
     // 5) Nullbestand — Positionsebene.
-    const nullPos = pos.filter(p => p.bestand == null || p.bestand === 0);
+    const nullPos = pos.filter(p => p.bestand === 0);
     if (nullPos.length) {
       const namen = nullPos.slice(0, 5).map(p => p.name);
       w.push({
@@ -1059,6 +1069,9 @@
       });
     }
 
+    const unbekannterBestand=pos.filter(p=>p.bestand==null);
+    if (unbekannterBestand.length) w.push({typ:'bestand_nb',icon:'📦',farbe:'info',label:'Bestand n. b.',tooltip:`${unbekannterBestand.length} von ${n} Positionen ohne Bestandsdaten`});
+
     // 6) TE-Hinweis — Freitext.
     if (!isNull(te.teHinweis)) {
       w.push({
@@ -1069,12 +1082,12 @@
     }
 
     // 7) Mengenabweichung — neue Kennzahl, auch im Detail sichtbar machen.
-    if (te.abweichendeMenge != null && te.abweichendeMenge !== 0) {
+    if (te.mengenGruppen?.some(g=>g.abweichungVollstaendig && g.abweichung!==0) || te.abweichendeMenge != null && te.abweichendeMenge !== 0) {
       w.push({
         typ: 'menge', icon: '⚖', farbe: 'warn',
         label: 'Mengenabweichung',
-        tooltip: `Abweichende Menge: ${fmtDelta(te.abweichendeMenge)}`
-               + (te.mengeSoll != null ? ` (Soll ${fmtNum(te.mengeSoll)} / Ist ${fmtNum(te.mengeIst)})` : ''),
+        tooltip: `Abweichende Menge: ${te.mengenGruppen?.length ? te.mengenGruppen.filter(g=>g.abweichungVollstaendig).map(g=>`${fmtDelta(g.abweichung)} ${g.einheit||'ohne Einheit'}`).join(' · ') : fmtDelta(te.abweichendeMenge)}`
+               + (te.mengeSoll != null ? ` (Soll ${fmtMenge(te.mengeSoll)} / Ist ${te.mengeIst == null ? 'n. b.' : fmtMenge(te.mengeIst)})` : ''),
       });
     }
 
@@ -1200,12 +1213,17 @@
     const dlzSum = dlz.reduce((s, v) => s + v, 0);
 
     let summeAbs = 0, netto = 0, betroffen = 0, mengeBewertbar = 0;
+    const einheiten=new Map();
     for (const te of tes) {
-      if (te.abweichendeMenge == null) continue;
+      const gruppen=te.mengenGruppen ?? (Number.isFinite(te.abweichendeMenge) ? [{einheit:'',abweichung:te.abweichendeMenge,abweichungVollstaendig:true}] : []);
+      if (!gruppen.length || gruppen.some(g=>!g.abweichungVollstaendig)) continue;
       mengeBewertbar++;
-      summeAbs += Math.abs(te.abweichendeMenge);
-      netto    += te.abweichendeMenge;
-      if (te.abweichendeMenge !== 0) betroffen++;
+      if (gruppen.some(g=>g.abweichung!==0)) betroffen++;
+      for (const g of gruppen) {
+        if (!einheiten.has(g.einheit)) einheiten.set(g.einheit,{einheit:g.einheit,wert:0,netto:0});
+        const e=einheiten.get(g.einheit);e.wert+=Math.abs(g.abweichung);e.netto+=g.abweichung;
+        summeAbs+=Math.abs(g.abweichung);netto+=g.abweichung;
+      }
     }
 
     return {
@@ -1217,12 +1235,13 @@
         wert:      dlz.length ? dlzSum / dlz.length : null,
         bewertbar: dlz.length,
         nb:        tes.length - dlz.length,
-        min:       dlz.length ? Math.min(...dlz) : null,
-        max:       dlz.length ? Math.max(...dlz) : null,
+        min:       dlz.length ? dlz.reduce((a,b)=>Math.min(a,b),Infinity) : null,
+        max:       dlz.length ? dlz.reduce((a,b)=>Math.max(a,b),-Infinity) : null,
       },
       abwMenge: {
-        wert:      mengeBewertbar ? summeAbs : null,   // Summe der Beträge
-        netto:     mengeBewertbar ? netto : null,
+        wert:      mengeBewertbar && einheiten.size<=1 ? summeAbs : null,   // Summe der Beträge
+        netto:     mengeBewertbar && einheiten.size<=1 ? netto : null,
+        einheiten: [...einheiten.values()],
         betroffen,
         bewertbar: mengeBewertbar,
         nb:        tes.length - mengeBewertbar,
@@ -1286,6 +1305,57 @@
     });
   }
 
+  // Gemeinsame Kalenderachse: kurze Punktdaten, ab >120 Tagen Monatsmarken.
+  // Jahresabschnitte und Grenzen beruhen auf UTC wie die Zeitraumzuordnung.
+  // Tageswerte und vollständige Datumsangaben in Punkt-Tooltips bleiben bestehen.
+  function trendDatumsAchse(punkte, achseY, labelY, plotTop = 50, links = 78, rechts = 922) {
+    if (!punkte.length) return '';
+    const erster = punkte[0], letzter = punkte[punkte.length - 1];
+    const von = erster.datum.getTime(), bis = letzter.datum.getTime();
+    const x = ms => von === bis ? erster.x : erster.x + (ms-von)*(letzter.x-erster.x)/(bis-von);
+    const monatsmodus = bis-von > 120*86400000;
+    const monate = ['Jan','Feb','Mär','Apr','Mai','Jun','Jul','Aug','Sep','Okt','Nov','Dez'];
+    let kandidaten = punkte.map(p => ({...p, label:`${String(p.datum.getUTCDate()).padStart(2,'0')}.${String(p.datum.getUTCMonth()+1).padStart(2,'0')}.`}));
+    if (monatsmodus) {
+      kandidaten = [];
+      const monat = new Date(Date.UTC(erster.datum.getUTCFullYear(), erster.datum.getUTCMonth(), 1));
+      while (monat.getTime() <= bis) {
+        const ms = Math.max(von,monat.getTime());
+        kandidaten.push({datum:new Date(ms),x:x(ms),label:monate[monat.getUTCMonth()]});
+        monat.setUTCMonth(monat.getUTCMonth()+1);
+      }
+    }
+    const mindestabstand = monatsmodus ? 52 : 64;
+    const letzteMarke = kandidaten[kandidaten.length-1];
+    let letzteBeschriftung = -Infinity;
+    const unten = kandidaten.map((punkt, i) => {
+      if (i === kandidaten.length - 1 && i > 0 && punkt.x - kandidaten[0].x < mindestabstand) return '';
+      const rand = i === 0 || i === kandidaten.length - 1;
+      if (!rand && (punkt.x - letzteBeschriftung < mindestabstand || letzteMarke.x - punkt.x < mindestabstand)) return '';
+      letzteBeschriftung = punkt.x;
+      const px = punkt.x.toFixed(1);
+      return `<line class="lb-chart-date-tick" x1="${px}" y1="${achseY}" x2="${px}" y2="${achseY + 8}"></line>
+        <text class="lb-chart-label" x="${px}" y="${labelY}" text-anchor="middle">${punkt.label}</text>`;
+    }).join('');
+    const jahrVon = erster.datum.getUTCFullYear(), jahrBis = letzter.datum.getUTCFullYear();
+    const oben = [];
+    for (let jahr=jahrVon; jahr<=jahrBis; jahr++) {
+      const beginn = Date.UTC(jahr,0,1), ende = Date.UTC(jahr+1,0,1);
+      const startX = jahr === jahrVon ? links : x(beginn);
+      const endeX = jahr === jahrBis ? rechts : x(ende);
+      const breite = endeX-startX;
+      const schmal = breite < 56;
+      const anchor = schmal ? jahr === jahrVon ? 'start' : 'end' : 'middle';
+      const mitte = schmal ? jahr === jahrVon ? startX : endeX : (startX+endeX)/2;
+      oben.push(`<text class="lb-chart-year" x="${mitte.toFixed(1)}" y="${plotTop-22}" text-anchor="${anchor}">${jahr}</text>`);
+      if (jahr > jahrVon) {
+        const px = x(beginn).toFixed(1);
+        oben.push(`<line class="lb-chart-year-boundary" x1="${px}" y1="${plotTop-12}" x2="${px}" y2="${achseY}"><title>Jahreswechsel 01.01.${jahr}</title></line>`);
+      }
+    }
+    return oben.join('') + unten;
+  }
+
   function datumSchluessel(datum) {
     if (!(datum instanceof Date) || !Number.isFinite(datum.getTime())) return null;
     const y = datum.getUTCFullYear();
@@ -1319,7 +1389,7 @@
           id: def.id, label: def.label, index,
           startMs: te[def.von].getTime(), endeMs: te[def.bis].getTime(), min: dauer.min,
         };
-      }).filter(Boolean);
+      }).filter(seg=>seg && seg.startMs>=te.tsAnkunft.getTime() && seg.endeMs<=te.tsEinlagerung.getTime());
       zeilen.push({ te, startMs: te.tsAnkunft.getTime(), endeMs: te.tsEinlagerung.getTime(),
         dauerMin: gesamt.min, segmente });
     }
@@ -1335,14 +1405,17 @@
     if (endeMs <= startMs) endeMs = startMs + stunde;
     const stunden = (endeMs - startMs) / stunde;
     const ticks = [];
+    if (stunden>24*90) return {tage,datum,kandidaten:kandidaten.length,fehlend,ungueltig,alleZeilen,weitere:alleZeilen-sichtbar.length,zeilen:sichtbar,startMs,endeMs,ticks,breitePx:900,zuLang:true};
     // Fester Stundentakt – auch bei mehrtägigen Durchläufen. Die Achse wird
     // entsprechend breit und bleibt über den bestehenden Scrollbereich
     // bedienbar, statt die Stundenbeschriftung automatisch auszudünnen.
     for (let ms = startMs; ms <= endeMs; ms += stunde) ticks.push(ms);
     const [jahr, monat, tag] = datum.split('-').map(Number);
     const schichtMs = Date.UTC(jahr, monat - 1, tag, 14, 30);
+    const schichtMarkers=[];
+    for(let ms=Date.UTC(new Date(startMs).getUTCFullYear(),new Date(startMs).getUTCMonth(),new Date(startMs).getUTCDate(),14,30);ms<=endeMs;ms+=TAG_MS) if(ms>=startMs) schichtMarkers.push(ms);
     return { tage, datum, kandidaten: kandidaten.length, fehlend, ungueltig, alleZeilen,
-      weitere: Math.max(0, alleZeilen - sichtbar.length), zeilen: sichtbar, startMs, endeMs, ticks,
+      schichtMarkers, weitere: Math.max(0, alleZeilen - sichtbar.length), zeilen: sichtbar, startMs, endeMs, ticks,
       schichtMs, schichtSichtbar: schichtMs >= startMs && schichtMs <= endeMs,
       breitePx: Math.round(Math.max(900, stunden * TE_ZEITSTRAHL_PX_PRO_STUNDE)) };
   }
@@ -1414,6 +1487,10 @@
     const min = gueltig.reduce((a,b)=>Math.min(a,b),Infinity);
     const max = gueltig.reduce((a,b)=>Math.max(a,b),-Infinity);
     return 'pz-heat-' + (max === min ? 2 : Math.min(4, Math.floor((wert-min)/(max-min)*5)));
+  }
+
+  function fmtAbweichungMin(min) {
+    return min == null ? '–' : min.toLocaleString('de-DE', { maximumFractionDigits: 2 }) + ' min';
   }
 
   function fmtProzessMin(min) {
@@ -1496,7 +1573,11 @@
         --c-bg4:        #e8eaee;
         --c-text:       #1a1d23;
         --c-text2:      #4a5060;
-        --c-text3:      #8b90a0;
+        --c-text3:      #626979;
+        --c-green:      #137a42;
+        --c-yellow:     #9c5b00;
+        --c-blue:       #176ba0;
+        --c-red-light:  #a82b22;
         --c-border:     rgba(0, 0, 0, 0.08);
         --c-border2:    rgba(0, 0, 0, 0.14);
         --shadow-sm:    0 2px 8px  rgba(0, 0, 0, 0.07);
@@ -2883,6 +2964,10 @@
       .d-info-val.dim { color: var(--c-text3); }
 
       /* ── Zeitstrahl ── */
+      .zs-event-list { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:8px; margin:10px 0; }
+      .zs-event { padding:10px; background:var(--c-bg3); border:1px solid var(--c-border); border-radius:6px; }
+      .zs-event strong, .zs-event span { display:block; font-size:11px; line-height:1.6; }
+      .zs-event span { font-family:var(--font-mono); color:var(--c-text2); }
       .zs-wrap {
         overflow-x: auto;
         padding: 8px 0 4px;
@@ -3229,7 +3314,12 @@
       .analyse-period-compare .kpi-cards { margin-top:16px; grid-template-columns:minmax(240px,420px); }
       @container (max-width:520px) { .analyse-tab { flex:1; padding:12px 8px; } }
 
+      .kpi-menge-list { font-size:18px; line-height:1.35; overflow-wrap:anywhere; }
       .lb-toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin:0 0 16px; }
+      .lb-mode { display:inline-flex; border:1px solid var(--c-border2); border-radius:8px; padding:2px; background:var(--c-bg3); }
+      .lb-mode button { padding:8px 12px; color:var(--c-text2); border-radius:6px; font-size:12px; }
+      .lb-mode button[aria-pressed="true"] { color:var(--c-text); background:var(--c-red-dim); box-shadow:inset 0 -2px var(--c-red-light); }
+      .lb-mode button:focus-visible { outline:2px solid var(--c-red-light); outline-offset:2px; }
       .lb-toolbar input { background:var(--c-bg3); color:var(--c-text); border:1px solid var(--c-border2); border-radius:7px; padding:10px 12px; max-width:100%; width:300px; }
       .lb-context { color:var(--c-text2); font-size:12px; line-height:1.6; margin:8px 0 14px; }
       .lb-summary { display:grid; grid-template-columns:repeat(2,minmax(180px,280px)); gap:10px; margin:10px 0 16px; }
@@ -3238,16 +3328,34 @@
       .lb-summary-label { color:var(--c-text2); font-size:10px; letter-spacing:.08em; text-transform:uppercase; }
       .lb-summary-value { display:block; margin-top:5px; color:var(--c-text); font:700 22px var(--font-mono); }
       .lb-summary-note { display:block; margin-top:4px; color:var(--c-text2); font-size:10px; line-height:1.4; }
-      .lb-scroll { overflow:auto; margin-bottom:18px; border:1px solid var(--c-border2); border-radius:9px; }
+      .lb-scroll { container-type:inline-size; overflow-anchor:none; overflow:auto; max-height:560px; position:relative; isolation:isolate; scrollbar-gutter:stable; margin-bottom:18px; border:1px solid var(--c-border2); border-radius:9px; }
+      .lb-scroll:focus-visible { outline:2px solid var(--c-red-light); outline-offset:2px; }
+      .lb-scroll > .lb-table > thead > tr > th { position:sticky; top:0; z-index:2; background:var(--c-bg3); }
+      .lb-scroll > .lb-table > thead > tr > th:first-child { left:0; z-index:3; box-shadow:1px 0 var(--c-border2); }
+      .lb-scroll > .lb-table > tbody > tr:not(.lb-inline-detail-row) > :first-child { position:sticky; left:0; z-index:1; background:inherit; box-shadow:1px 0 var(--c-border2); }
+      .lb-scroll > .lb-table > tbody > tr:not(.lb-inline-detail-row):hover > :first-child { background:var(--c-bg3); }
       .lb-table { width:100%; min-width:500px; border-collapse:collapse; text-align:left; }
       .lb-table thead { background:var(--c-bg3); }
       .lb-table th, .lb-table td { padding:16px 12px; border-bottom:1px solid var(--c-border2); }
+      .lb-table tbody > tr { background:var(--c-bg); }
+      .lb-table tbody > tr:not(.lb-inline-detail-row):hover { background:var(--c-bg3); }
       .lb-table tbody th { font-size:13px; min-width:190px; }
       .lb-table td { min-width:140px; }
       .lb-table td:nth-child(2) { min-width:65px; }
       .lb-table small { display:block; color:var(--c-text2); font-size:10px; font-weight:400; margin-top:7px; }
       .lb-table button { color:var(--c-text); font-size:12px; text-align:left; }
       .lb-table strong { font-size:16px; }
+      .lb-mengen-table { min-width:1000px; font-size:12px; }
+      .lb-mengen-table th, .lb-mengen-table td { padding:12px; }
+      .lb-mengen-table th { vertical-align:bottom; }
+      .lb-mengen-table th button { line-height:1.45; }
+      .lb-mengen-table td { min-width:100px; }
+      .lb-mengen-table td:first-child { min-width:200px; }
+      .lb-mengen-table td:nth-child(2) { min-width:140px; }
+      .lb-mengen-table .lb-num { text-align:right; font-family:var(--font-mono); }
+      .lb-mengen-table .lb-diff { color:var(--c-red-light); font-weight:600; }
+      .lb-mengen-table tbody tr:nth-child(even) { background:var(--c-bg2); }
+      .lb-mengen-table tbody tr:hover { background:var(--c-bg3); }
       .lb-track { height:5px; margin-top:9px; background:var(--c-bg3); border-radius:4px; overflow:hidden; }
       .lb-track span { display:block; height:100%; background:var(--c-red-light); }
       .lb-table button:focus-visible, .lb-toolbar input:focus-visible { outline:2px solid var(--c-red-light); outline-offset:3px; }
@@ -3256,7 +3364,11 @@
       .fb-name-btn[aria-expanded="true"] { color:var(--c-red-light); }
       .fb-name-btn .fb-chevron { float:right; margin-left:10px; color:var(--c-text3); }
       .lb-inline-detail-row > td { padding:0 12px 18px; background:var(--c-bg); border-bottom:1px solid var(--c-border2); }
-      .lb-inline-detail-row .fb-detail { margin:0; }
+      .lb-inline-detail-row .fb-detail { margin:0; position:sticky; left:12px; width:calc(100cqw - 24px); min-width:0; box-sizing:border-box; }
+      /* Ein vertikaler Scrollbereich; Detailtabellen scrollen nur horizontal. */
+      .lb-inline-detail-row .lb-scroll { max-height:none; }
+      .lb-inline-detail-row .lb-scroll > .lb-table > thead > tr > th { position:static; }
+      .fb-detail-head > div { min-width:0; overflow-wrap:anywhere; }
       .fb-detail { margin:4px 0 18px; padding:18px; border:1px solid var(--c-red-border); border-radius:var(--r-md); background:var(--c-bg2); box-shadow:var(--shadow-sm); }
       .fb-detail-head { display:flex; align-items:flex-start; justify-content:space-between; gap:14px; margin-bottom:12px; }
       .fb-detail-title { color:var(--c-text); font-size:14px; font-weight:600; }
@@ -3281,24 +3393,64 @@
       .lb-analysis-table td:last-child { color:var(--c-text); font:inherit; }
       .lb-trend { margin-top:18px; padding:16px; border:1px solid var(--c-border2); border-radius:9px; background:var(--c-bg); }
       .lb-chart-scroll { overflow-x:auto; }
+      .lb-chart-scroll:focus-visible { outline:2px solid var(--c-red-light); outline-offset:2px; }
+      .analyse-sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; border:0; }
       .lb-trend-chart { display:block; width:100%; min-width:720px; height:auto; }
       .lb-chart-grid { stroke:var(--c-border2); stroke-width:1; stroke-dasharray:3 4; vector-effect:non-scaling-stroke; }
       .lb-chart-axis { stroke:var(--c-text3); stroke-width:1; vector-effect:non-scaling-stroke; }
+      .lb-chart-date-tick { stroke:var(--c-text2); stroke-width:1.5; vector-effect:non-scaling-stroke; }
+      .lb-chart-year { fill:var(--c-text2); font:600 11px var(--font-mono); }
+      .lb-chart-year-boundary { stroke:var(--c-text3); stroke-width:1.5; stroke-dasharray:4 5; opacity:.65; vector-effect:non-scaling-stroke; }
       .lb-chart-line { fill:none; stroke:var(--c-red-light); stroke-width:3; stroke-linecap:round; stroke-linejoin:round; vector-effect:non-scaling-stroke; }
       .lb-chart-point { fill:var(--c-red-light); stroke:var(--c-bg); stroke-width:2; vector-effect:non-scaling-stroke; }
       .lb-chart-label { fill:var(--c-text2); font:11px var(--font-mono); }
       .lb-chart-value { fill:var(--c-text); font:600 10px var(--font-mono); }
       .dlz-trend-head { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; }
+      .dlz-trend-controls { display:flex; align-items:center; flex-wrap:wrap; gap:10px; }
+      .dlz-trend-control { display:flex; align-items:center; gap:6px; }
+      .dlz-trend-control > span { color:var(--c-text2); font-size:10px; }
+      .lb-trend-caption { margin:6px 0 8px; color:var(--c-text2); font-size:11px; line-height:1.6; }
+      .lb-chart-info { margin-top:8px; border-top:1px solid var(--c-border); padding-top:10px; }
+      .lb-chart-info > summary { color:var(--c-text2); font-size:11px; font-weight:600; cursor:pointer; }
+      .lb-chart-info > summary:focus-visible { outline:2px solid var(--c-red-light); outline-offset:2px; }
       .dlz-trend .lb-chart-value { font-size:11px; }
       .dlz-trend .pz-switch button:focus-visible { outline:2px solid var(--c-blue); outline-offset:2px; }
       .lb-product-details { margin-top:18px; }
       .lb-product-details > summary { color:var(--c-text2); font-size:12px; font-weight:600; cursor:pointer; }
       .lb-product-details .lb-scroll { margin-top:12px; }
       @container (max-width:650px) { .analyse-tabs { overflow-x:auto; } .analyse-tab { white-space:nowrap; font-size:12px; } .lb-summary { grid-template-columns:1fr 1fr; } }
+
+      /* Lesbare Statusfarben auf hellen Karten. */
+      :host([theme="light"]) .kpi-card-wert.q-gut,
+      :host([theme="light"]) .kpi-bd-wert.q-gut,
+      :host([theme="light"]) .kpi-trend.auf,
+      :host([theme="light"]) .k-ja,
+      :host([theme="light"]) .dh-delta.neg,
+      :host([theme="light"]) .d-info-val.ok,
+      :host([theme="light"]) .badge-fertigstellung,
+      :host([theme="light"]) .badge-eingelagert,
+      :host([theme="light"]) .ls-land { color:var(--c-green); }
+      :host([theme="light"]) .kpi-card-wert.q-mittel,
+      :host([theme="light"]) .kpi-bd-wert.q-mittel,
+      :host([theme="light"]) .k-delta.pos,
+      :host([theme="light"]) .badge-ankunft,
+      :host([theme="light"]) .badge-angedockt,
+      :host([theme="light"]) .ls-cont { color:var(--c-yellow); }
+      :host([theme="light"]) .kpi-card-wert.q-schlecht,
+      :host([theme="light"]) .kpi-bd-wert.q-schlecht,
+      :host([theme="light"]) .kpi-trend.ab,
+      :host([theme="light"]) .k-nein,
+      :host([theme="light"]) .dh-delta.pos,
+      :host([theme="light"]) .d-info-val.bad { color:var(--c-red-light); }
+      :host([theme="light"]) .badge-entladen,
+      :host([theme="light"]) .badge-entladen_fertig { color:var(--c-blue); }
+      :host([theme="light"]) .ls-bsl { color:#713d87; }
+      .te-tabelle th button { color:inherit; font:inherit; text-align:inherit; }
     </style>
 
     <!-- ── DOM ────────────────────────────────────────────────────────── -->
     <div class="widget-root">
+      <div id="analyse-status" class="analyse-sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
 
       <!-- Header -->
       <div class="header">
@@ -3470,28 +3622,36 @@
               <summary>Durchlaufzeit im Vorperiodenvergleich</summary>
               <div class="kpi-cards" id="zeit-kpi-cards"></div>
             </details>
-            <div id="durchlauf-trend" aria-live="polite"></div>
+            <div id="durchlauf-trend"></div>
             <div class="u-abschnitt">
               <div class="u-titel">Prozesszeiten · Analyse je TE</div>
-              <div id="prozesszeiten" aria-live="polite"></div>
+              <div id="prozesszeiten"></div>
             </div>
           </section>
 
           <section id="panel-lieferanten" class="analyse-panel" role="tabpanel" aria-labelledby="tab-lieferanten" tabindex="0" hidden>
-            <div id="lieferanten-trend" aria-live="polite"></div>
+            <div id="lieferanten-trend"></div>
             <div class="u-abschnitt">
-              <div class="u-titel">Die 10 schlechtesten Lieferanten · nach Mengentreue</div>
-              <div class="lb-toolbar"><label for="lieferanten-suche">In Rangliste suchen</label><input id="lieferanten-suche" type="search" placeholder="Name oder Nummer" autocomplete="off"></div>
-              <div id="lieferanten-vergleich" aria-live="polite"></div>
+              <div class="u-titel">Warensender im ausgewählten Zeitraum · Mengenabweichungen</div>
+              <div class="lb-toolbar"><label for="lieferanten-mengen-suche">Warensender durchsuchen</label><input id="lieferanten-mengen-suche" type="search" placeholder="Lieferant, Transportmittel, Einheit oder HWG" autocomplete="off"></div>
+              <div id="lieferanten-mengen"></div>
+            </div>
+            <div class="u-abschnitt">
+              <div class="u-titel">Lieferantenbewertung · Mengentreue</div>
+              <div class="lb-toolbar"><div class="lb-mode" role="group" aria-label="Lieferantenauswahl"><button type="button" data-lb-mode="alle" aria-pressed="true">Alle</button><button type="button" data-lb-mode="schlechteste" aria-pressed="false">10 schlechteste</button></div><label for="lieferanten-suche">Lieferanten suchen</label><input id="lieferanten-suche" type="search" placeholder="Name oder Nummer" autocomplete="off"></div>
+              <div id="lieferanten-vergleich"></div>
             </div>
           </section>
 
           <section id="panel-spediteure" class="analyse-panel" role="tabpanel" aria-labelledby="tab-spediteure" tabindex="0" hidden>
-            <div id="spediteure-trend" aria-live="polite"></div>
+            <div id="spediteure-trend"></div>
             <div class="u-abschnitt">
-              <div class="u-titel">Die 10 schlechtesten Frachtführer/Spediteure · nach Pünktlichkeit</div>
-              <div class="lb-toolbar"><label for="spediteure-suche">In Rangliste suchen</label><input id="spediteure-suche" type="search" placeholder="Name oder Schlüssel" autocomplete="off"></div>
-              <div id="spediteure-vergleich" aria-live="polite"></div>
+              <div class="u-titel">Frachtführer/Spediteure im ausgewählten Zeitraum · Pünktlichkeit</div>
+              <div class="lb-toolbar"><div class="lb-mode" role="group" aria-label="Frachtführerauswahl"><button type="button" data-fg-mode="alle" aria-pressed="true">Alle</button><button type="button" data-fg-mode="schlechteste" aria-pressed="false">10 schlechteste</button></div><label for="spediteure-gesamt-suche">Frachtführer/Spediteure durchsuchen</label><input id="spediteure-gesamt-suche" type="search" placeholder="Name, Schlüssel oder Transportmittel" autocomplete="off"></div>
+              <div id="spediteure-gesamt"></div>
+            </div>
+            <div class="u-abschnitt">
+
             </div>
           </section>
         </div>
@@ -3554,6 +3714,8 @@
       this._maxTEs       = 50;
       this._lieferantDetailKey = null;
       this._spediteurDetailKey = null;
+      this._lieferantenModus = 'alle';
+      this._spediteureModus = 'alle';
 
       // Instanz-eigene Berechnungs-Konfiguration (aus den Properties gespeist)
       this._cfg          = { ...CFG_DEFAULT };
@@ -3647,6 +3809,54 @@
 
     _$(id) { return this._shadow.getElementById(id); }
 
+    // UI-Zustand erhalten, ohne SAC-Seite oder Widget-Viewport zu scrollen.
+    _analyseUiVorRender(host) {
+      if (!host?.querySelectorAll) return [];
+      this._analyseOffeneErklaerungen ??= new Map();
+      host.querySelectorAll('details').forEach((detail, i) => {
+        const partner = detail.closest('.fb-detail')?.dataset.partnerKey ?? 'gesamt';
+        const key = `${host.id}|${partner}|${detail.className}|${i}`;
+        this._analyseOffeneErklaerungen.set(key, detail.open);
+      });
+      return Array.from(host.querySelectorAll('.lb-scroll, .lb-chart-scroll'), el => ({
+        label:el.getAttribute('aria-label'), top:el.scrollTop, left:el.scrollLeft
+      }));
+    }
+
+    _analyseUiNachRender(host, scrolls = []) {
+      if (!host?.querySelectorAll) return;
+      host.querySelectorAll('details').forEach((detail, i) => {
+        const partner = detail.closest('.fb-detail')?.dataset.partnerKey ?? 'gesamt';
+        const key = `${host.id}|${partner}|${detail.className}|${i}`;
+        if (this._analyseOffeneErklaerungen?.has(key)) detail.open = this._analyseOffeneErklaerungen.get(key);
+      });
+      host.querySelectorAll('.lb-scroll, .lb-chart-scroll').forEach(el => {
+        const saved = scrolls.find(item => item.label === el.getAttribute('aria-label'));
+        if (saved) { el.scrollTop = saved.top; el.scrollLeft = saved.left; }
+      });
+    }
+
+    _analyseZeileFokussieren(host, selector) {
+      const button = host?.querySelector(selector);
+      button?.focus({preventScroll:true});
+      const wrapper = button?.closest?.('.lb-scroll');
+      const row = button?.closest?.('tr');
+      if (!wrapper || !row) return;
+      const box = wrapper.getBoundingClientRect(), rect = row.getBoundingClientRect();
+      const head = wrapper.querySelector('thead')?.getBoundingClientRect().height ?? 0;
+      const top = box.top + wrapper.clientTop + head, bottom = box.top + wrapper.clientTop + wrapper.clientHeight;
+      if (rect.top < top) wrapper.scrollTop += rect.top - top;
+      else if (button.getAttribute('aria-expanded') === 'true' && rect.top > top + 80) {
+        // Auch bei einem Klick am unteren Rand bleibt der Detailkopf erreichbar.
+        wrapper.scrollTop += rect.top - top - 80;
+      } else if (rect.bottom > bottom) wrapper.scrollTop += rect.bottom - bottom;
+    }
+
+    _analyseStatus(text) {
+      const status = this._$('analyse-status');
+      if (status) status.textContent = text;
+    }
+
     // ── Event-Binding ────────────────────────────────────────────────────
 
     _bindEvents() {
@@ -3668,14 +3878,66 @@
       });
 
 
+      this._$('spediteure-gesamt-suche')?.addEventListener('input', e => {
+        this._spediteureGesamtSuche = e.target.value; this._renderSpediteureGesamt(this._tesZeitraum());
+      }, opts);
+      this._$('spediteure-gesamt')?.addEventListener('click', e => {
+        const sort = e.target.closest('[data-fg-sort]');
+        if (sort) {
+          const feld = sort.dataset.fgSort;
+          this._spediteureGesamtRichtung = (this._spediteureGesamtSort ?? 'verspaetet') === feld
+            ? -(this._spediteureGesamtRichtung ?? -1) : ['label','transportLabel'].includes(feld) ? 1 : -1;
+          this._spediteureGesamtSort = feld; this._renderSpediteure();
+          this._$('spediteure-gesamt')?.querySelector(`[data-fg-sort="${feld}"]`)?.focus({preventScroll:true});
+          return;
+        }
+        const close = e.target.closest('[data-fb-detail-close]');
+        if (close) {
+          const key=this._spediteurDetailKey; this._spediteurDetailKey=null; this._renderSpediteure();
+          this._analyseStatus('Pünktlichkeitsanalyse geschlossen.');
+          if (key != null) this._analyseZeileFokussieren(this._$('spediteure-gesamt'), `[data-fb-detail="${encodeURIComponent(key)}"]`);
+          return;
+        }
+        const drill=e.target.closest('[data-fb-detail]'); if (!drill) return;
+        const key=decodeURIComponent(drill.dataset.fbDetail);
+        this._spediteurDetailKey=this._spediteurDetailKey === key ? null : key;
+        this._renderSpediteure();
+        this._analyseStatus(this._spediteurDetailKey ? 'Pünktlichkeitsanalyse geöffnet.' : 'Pünktlichkeitsanalyse geschlossen.');
+        this._analyseZeileFokussieren(this._$('spediteure-gesamt'), `[data-fb-detail="${encodeURIComponent(key)}"]`);
+      }, opts);
+      this._shadow.querySelectorAll('[data-lb-mode]').forEach(button => button.addEventListener('click', () => {
+        this._lieferantenModus = button.dataset.lbMode;
+        this._shadow.querySelectorAll('[data-lb-mode]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.lbMode === this._lieferantenModus)));
+        this._renderLieferanten();
+      }, opts));
+      this._shadow.querySelectorAll('[data-fg-mode]').forEach(button => button.addEventListener('click', () => {
+        this._spediteureModus = button.dataset.fgMode;
+        this._shadow.querySelectorAll('[data-fg-mode]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.fgMode === this._spediteureModus)));
+        this._renderSpediteure();
+      }, opts));
       this._$('lieferanten-suche')?.addEventListener('input', e => {
         this._lieferantenSuche = e.target.value; this._renderLieferanten();
+      }, opts);
+      this._$('lieferanten-mengen-suche')?.addEventListener('input', e => {
+        this._lieferantenMengenSuche = e.target.value;
+        this._renderLieferantenMengen(this._tesZeitraum());
+      }, opts);
+      this._$('lieferanten-mengen')?.addEventListener('click', e => {
+        const button = e.target.closest('[data-lm-sort]');
+        if (!button) return;
+        const feld = button.dataset.lmSort;
+        this._lieferantenMengenRichtung = (this._lieferantenMengenSort ?? 'anzahlTe') === feld
+          ? -(this._lieferantenMengenRichtung ?? -1)
+          : ['anzahlTe','anzahlPositionen','differenzmenge'].includes(feld) ? -1 : 1;
+        this._lieferantenMengenSort = feld;
+        this._renderLieferantenMengen(this._tesZeitraum());
+        this._$('lieferanten-mengen')?.querySelector(`[data-lm-sort="${feld}"]`)?.focus({preventScroll:true});
       }, opts);
       this._$('lieferanten-vergleich')?.addEventListener('click', e => {
         const sort = e.target.closest('[data-lb-sort]');
         if (sort) {
           const feld = sort.dataset.lbSort;
-          this._lieferantenRichtung = this._lieferantenSort === feld ? -(this._lieferantenRichtung ?? 1) : 1;
+          this._lieferantenRichtung = (this._lieferantenSort ?? 'mengentreu') === feld ? -(this._lieferantenRichtung ?? 1) : 1;
           this._lieferantenSort = feld; this._renderLieferanten();
           this._$('lieferanten-vergleich')?.querySelector(`[data-lb-sort="${feld}"]`)?.focus({preventScroll:true});
           return;
@@ -3685,7 +3947,8 @@
           const key = this._lieferantDetailKey;
           this._lieferantDetailKey = null;
           this._renderLieferanten();
-          if (key != null) this._$('lieferanten-vergleich')?.querySelector(`[data-lb-detail="${encodeURIComponent(key)}"]`)?.focus({preventScroll:true});
+          this._analyseStatus('Mengentreueanalyse geschlossen.');
+          if (key != null) this._analyseZeileFokussieren(this._$('lieferanten-vergleich'), `[data-lb-detail="${encodeURIComponent(key)}"]`);
           return;
         }
         const drill = e.target.closest('[data-lb-detail]');
@@ -3693,35 +3956,8 @@
         const key = decodeURIComponent(drill.dataset.lbDetail);
         this._lieferantDetailKey = this._lieferantDetailKey === key ? null : key;
         this._renderLieferanten();
-        this._$('lieferanten-vergleich')?.querySelector(`[data-lb-detail="${encodeURIComponent(key)}"]`)?.focus({preventScroll:true});
-      }, opts);
-
-      this._$('spediteure-suche')?.addEventListener('input', e => {
-        this._spediteureSuche = e.target.value; this._renderSpediteure();
-      }, opts);
-      this._$('spediteure-vergleich')?.addEventListener('click', e => {
-        const sort = e.target.closest('[data-fb-sort]');
-        if (sort) {
-          const feld = sort.dataset.fbSort;
-          this._spediteureRichtung = this._spediteureSort === feld ? -(this._spediteureRichtung ?? 1) : 1;
-          this._spediteureSort = feld; this._renderSpediteure();
-          this._$('spediteure-vergleich')?.querySelector(`[data-fb-sort="${feld}"]`)?.focus({preventScroll:true});
-          return;
-        }
-        const schliessen = e.target.closest('[data-fb-detail-close]');
-        if (schliessen) {
-          const key = this._spediteurDetailKey;
-          this._spediteurDetailKey = null;
-          this._renderSpediteure();
-          if (key != null) this._$('spediteure-vergleich')?.querySelector(`[data-fb-detail="${encodeURIComponent(key)}"]`)?.focus({preventScroll:true});
-          return;
-        }
-        const drill = e.target.closest('[data-fb-detail]');
-        if (!drill) return;
-        const key = decodeURIComponent(drill.dataset.fbDetail);
-        this._spediteurDetailKey = this._spediteurDetailKey === key ? null : key;
-        this._renderSpediteure();
-        this._$('spediteure-vergleich')?.querySelector(`[data-fb-detail="${encodeURIComponent(key)}"]`)?.focus({preventScroll:true});
+        this._analyseStatus(this._lieferantDetailKey ? 'Mengentreueanalyse geöffnet.' : 'Mengentreueanalyse geschlossen.');
+        this._analyseZeileFokussieren(this._$('lieferanten-vergleich'), `[data-lb-detail="${encodeURIComponent(key)}"]`);
       }, opts);
 
       // Theme
@@ -3930,14 +4166,8 @@
         if (this._bereich.von < min) min = tagStart(this._bereich.von);
         if (bisTag > max) max = bisTag;
       }
-      // Obergrenze gegen Ausreißer in den Stammdaten
-      const MAX_TAGE = 730;
-      let tage = Math.round((max - min) / TAG_MS);
-      if (tage > MAX_TAGE) {
-        min  = new Date(max.getTime() - MAX_TAGE * TAG_MS);
-        tage = MAX_TAGE;
-      }
-      return { von: min, bis: max, tage: Math.max(1, tage) };
+      const tage=Math.round((max-min)/TAG_MS);
+      return {von:min,bis:max,tage:Math.max(1,tage)};
     }
 
     // Index (Tag) ↔ Datum
@@ -4057,7 +4287,7 @@
         switch (this._kFilter) {
           case 'otif-nein':        return te.otif === false;
           case 'unpuenktlich':     return te.puenktlich === false;
-          case 'mengenabweichung': return te.abweichendeMenge != null && te.abweichendeMenge !== 0;
+          case 'mengenabweichung': return te.mengenGruppen?.some(g=>g.abweichungVollstaendig && g.abweichung!==0) || te.abweichendeMenge != null && te.abweichendeMenge !== 0;
           case 'nb':               return te.otif == null || te.durchlaufzeitMin == null;
           default:                 return true;
         }
@@ -4088,6 +4318,26 @@
           const av = a[f] == null ? null : (a[f] ? 1 : 0);
           const bv = b[f] == null ? null : (b[f] ? 1 : 0);
           return cmp(av, bv, r);
+        }
+        if (f === 'abweichendeMengeAbs') {
+          // Unterschiedliche Einheiten nicht zu einem Sortierbetrag addieren.
+          // Erst Einheitengruppe, dann Beträge innerhalb derselben Einheitengruppe.
+          const gruppen = te => {
+            const gs=te.mengenGruppen;
+            if (gs?.length) return gs.some(g=>!g.abweichungVollstaendig) ? null
+              : [...gs].sort((x,y)=>x.einheit.localeCompare(y.einheit,'de'));
+            return Number.isFinite(te.abweichendeMengeAbs)
+              ? [{einheit:'',abweichung:te.abweichendeMengeAbs}] : null;
+          };
+          const ag=gruppen(a),bg=gruppen(b);
+          if (ag==null || bg==null) return cmp(ag==null ? null : 0,bg==null ? null : 0,r);
+          const sign=cmp(JSON.stringify(ag.map(g=>g.einheit)),JSON.stringify(bg.map(g=>g.einheit)),r);
+          if (sign) return sign;
+          for(let i=0;i<ag.length;i++) {
+            const result=cmp(Math.abs(ag[i].abweichung),Math.abs(bg[i].abweichung),r);
+            if(result) return result;
+          }
+          return cmp(a.te,b.te,1);
         }
         if (f === 'ankerDatum') {
           return cmp(a.ankerDatum ? a.ankerDatum.getTime() : null,
@@ -4127,7 +4377,7 @@
 
     _bewertungsSummenHTML(summen, abweichungsLabel, hinweis) {
       return `<div class="lb-summary" aria-label="Zusammenfassung">
-        <div class="lb-summary-card"><span class="lb-summary-label">TEs insgesamt</span><strong class="lb-summary-value">${summen.bewertbar}</strong><span class="lb-summary-note">eindeutig zugeordnet und bewertbar${summen.nb ? ` · ${summen.nb} nicht bewertbar` : ''}</span></div>
+        <div class="lb-summary-card"><span class="lb-summary-label">TEs insgesamt</span><strong class="lb-summary-value">${summen.bewertbar+summen.nb}</strong><span class="lb-summary-note">${summen.bewertbar} bewertbar${summen.nb ? ` · ${summen.nb} nicht bewertbar` : ''}</span></div>
         <div class="lb-summary-card is-alert"><span class="lb-summary-label">${esc(abweichungsLabel)}</span><strong class="lb-summary-value">${summen.nichtErfuellt}</strong><span class="lb-summary-note">${esc(hinweis)}</span></div>
       </div>`;
     }
@@ -4143,55 +4393,44 @@
       if (!punkteDaten.length) return `<section class="lb-trend"><div class="lb-analysis-title">${titel}</div>
         <div class="fb-detail-empty">Im ausgewählten Zeitraum gibt es ${gesamt ? istSpediteur ? 'für die eindeutig zugeordneten Frachtführer/Spediteure' : 'für die eindeutig zugeordneten Lieferanten' : `für diesen ${gruppe}`} keine tagesbezogen bewertbare ${quote}.</div></section>`;
 
-      const W = 1000, H = 280, L = 72, R = 24, T = 26, B = 54;
+      const W = 1000, H = 304, L = 78, R = 78, T = 50, B = 54;
       const plotW = W - L - R, plotH = H - T - B;
       const minimum = Math.min(...punkteDaten.map(p => p.wert));
       let yMin = Math.max(0, Math.floor((minimum - 5) / 5) * 5);
       if (yMin >= 100) yMin = 95;
-      const ySpan = Math.max(5, 100 - yMin);
-      const ersterTag = trend[0].datum.getTime(), letzterTag = trend[trend.length-1].datum.getTime();
+      const ySchritt = Math.min(25, runderAchsenSchritt((100-yMin)/4));
+      yMin = Math.max(0, 100 - Math.ceil((100-yMin)/ySchritt)*ySchritt);
+      const ySpan = 100 - yMin;
+      const ersterTag = punkteDaten[0].datum.getTime(), letzterTag = punkteDaten[punkteDaten.length-1].datum.getTime();
       const x = datum => ersterTag === letzterTag ? L + plotW / 2
         : L + (datum.getTime() - ersterTag) * plotW / (letzterTag - ersterTag);
       const y = wert => T + (100 - wert) / ySpan * plotH;
       const punkte = punkteDaten.map(p => ({...p, x:x(p.datum), y:y(p.wert)}));
-      const linien = []; let linienpunkte = [], vorherigerTag = null;
-      for (const tag of trend) {
-        if (!Number.isFinite(tag.wert) || (vorherigerTag != null && tag.datum.getTime() - vorherigerTag > 86400000)) {
-          if (linienpunkte.length) linien.push(linienpunkte);
-          linienpunkte = [];
-        }
-        if (Number.isFinite(tag.wert)) {
-          linienpunkte.push(`${x(tag.datum).toFixed(1)},${y(tag.wert).toFixed(1)}`);
-          vorherigerTag = tag.datum.getTime();
-        } else vorherigerTag = null;
-      }
-      if (linienpunkte.length) linien.push(linienpunkte);
-      const yRaster = Array.from({length:5},(_,i) => {
-        const wert = 100 - ySpan * i / 4, py = T + plotH * i / 4;
+      const linienpunkte = punkte.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`);
+      const yRaster = Array.from({length:Math.round(ySpan/ySchritt)+1},(_,i) => {
+        const wert = 100 - ySchritt*i, py = y(wert);
         return `<line class="lb-chart-grid" x1="${L}" y1="${py.toFixed(1)}" x2="${W-R}" y2="${py.toFixed(1)}"></line>
           <text class="lb-chart-label" x="${L-9}" y="${(py+4).toFixed(1)}" text-anchor="end">${esc(fmtProzent(wert, wert % 1 ? 1 : 0))}</text>`;
       }).join('');
-      const labelAnzahl = Math.min(6, punkte.length);
-      const labelIndizes = new Set(Array.from({length:labelAnzahl},(_,i) => labelAnzahl === 1 ? 0 : Math.round(i * (punkte.length - 1) / (labelAnzahl - 1))));
-      const xLabels = punkte.map((p,i) => labelIndizes.has(i)
-        ? `<text class="lb-chart-label" x="${p.x.toFixed(1)}" y="${H-22}" text-anchor="${punkte.length === 1 ? 'middle' : i === 0 ? 'start' : i === punkte.length-1 ? 'end' : 'middle'}">${esc(fmtDate(p.datum))}</text>` : '').join('');
+      const xLabels = trendDatumsAchse(punkte, H-B, H-22, T, L, W-R);
       const wertIndizes = punkte.length <= 10
         ? new Set(punkte.map((_,i)=>i))
         : new Set([0, punkte.length-1, punkte.reduce((minI,p,i,a) => p.wert < a[minI].wert ? i : minI, 0)]);
       const kreise = punkte.map((p,i) => `<circle class="lb-chart-point" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="4">
           <title>${esc(`${fmtDate(p.datum)}: ${fmtProzent(p.wert)} · ${p.ok}/${p.bewertbar} TEs ${erfuellung}${p.nb ? ` · ${p.nb} n. b.` : ''}`)}</title></circle>
-        ${wertIndizes.has(i) ? `<text class="lb-chart-value" x="${p.x.toFixed(1)}" y="${(p.y < 42 ? p.y + 19 : p.y - 10).toFixed(1)}" text-anchor="middle">${esc(fmtProzent(p.wert))}</text>` : ''}`).join('');
+        ${wertIndizes.has(i) ? `<text class="lb-chart-value" x="${(p.x+(i===0?8:i===punkte.length-1?-8:0)).toFixed(1)}" y="${(p.y < T+16 ? p.y + 19 : p.y - 10).toFixed(1)}" text-anchor="${i===0?'start':i===punkte.length-1?'end':'middle'}">${esc(fmtProzent(p.wert))}</text>` : ''}`).join('');
       const nbGesamt = trend.reduce((s,t) => s + t.nb, 0);
       return `<section class="lb-trend" aria-label="Verlauf der ${quote} von ${esc(name)}">
         <div class="lb-analysis-title">${titel}</div>
-        <div class="lb-chart-scroll"><svg class="lb-trend-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Täglicher Verlauf der ${quote}">
+        <p class="lb-trend-caption">${punkteDaten.length} Tageswerte · ${trend.reduce((sum,t) => sum + t.bewertbar, 0)} bewertbare TEs${nbGesamt ? ` · ${nbGesamt} nicht bewertbar` : ''}</p>
+        <div class="lb-chart-scroll" tabindex="0" role="region" aria-label="Diagramm ${quote} von ${esc(name)} horizontal scrollen"><svg class="lb-trend-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Täglicher Verlauf der ${quote}">
           <title>${esc(`Täglicher Verlauf der ${quote} von ${name}`)}</title>
           ${yRaster}<line class="lb-chart-axis" x1="${L}" y1="${T}" x2="${L}" y2="${H-B}"></line>
           <line class="lb-chart-axis" x1="${L}" y1="${H-B}" x2="${W-R}" y2="${H-B}"></line>
           <text class="lb-chart-label" transform="translate(18 ${T+plotH/2}) rotate(-90)" text-anchor="middle">${quote} %</text>
-          ${linien.map(p => `<polyline class="lb-chart-line" points="${p.join(' ')}"></polyline>`).join('')}${kreise}${xLabels}
+          ${xLabels}<polyline class="lb-chart-line" points="${linienpunkte.join(' ')}"></polyline>${kreise}
         </svg></div>
-        <div class="lb-context">Tagesquote = ${basis} ${gesamt ? istSpediteur ? 'aller eindeutig zugeordneten Frachtführer/Spediteure im ausgewählten Zeitraum' : 'aller eindeutig zugeordneten Lieferanten im ausgewählten Zeitraum' : `des ausgewählten ${gruppe}`}. Tage ohne bewertbare ${istSpediteur ? 'Plan-/Ankunftszeitstempel' : 'Mengen'} werden nicht als Datenpunkt gezeichnet.${nbGesamt ? ` ${nbGesamt} TE${nbGesamt === 1 ? '' : 's'} sind im Verlauf nicht bewertbar.` : ''}</div>
+        <details class="lb-chart-info"><summary>Berechnung und Darstellung</summary><div class="lb-context">Tagesquote = ${basis} ${gesamt ? istSpediteur ? 'aller eindeutig zugeordneten Frachtführer/Spediteure im ausgewählten Zeitraum' : 'aller eindeutig zugeordneten Lieferanten im ausgewählten Zeitraum' : `des ausgewählten ${gruppe}`}. Die Linie verbindet die vorhandenen Tageswerte; Tage ohne bewertbare ${istSpediteur ? 'Plan-/Ankunftszeitstempel' : 'Mengen'} haben keinen Datenpunkt. Tagesbeschriftungen stehen unter den zugehörigen Punkten. Ab mehr als 120 Tagen zeigt die Achse Monatsmarken. Das Jahr steht über seinem Abschnitt; jeder Punkt zeigt das vollständige Datum.${nbGesamt ? ` ${nbGesamt} TE${nbGesamt === 1 ? '' : 's'} sind im Verlauf nicht bewertbar.` : ''}</div></details>
       </section>`;
     }
 
@@ -4213,24 +4452,24 @@
       const produktZeilen = abweichungen.map(a => `<tr>
         <td>${esc(a.teExt ?? a.te ?? '–')}</td><td>${esc(a.anlieferung ?? '–')}</td>
         <td class="fb-product"><strong>${esc(a.produktNr ?? '–')}</strong><small>${esc(a.produktName ?? '–')}</small></td>
-        <td>${a.abweichung > 0 ? '+' : ''}${fmtNum(a.abweichung)}${a.einheit ? ` ${esc(a.einheit)}` : ''}</td>
+        <td>${esc(fmtDelta(a.abweichung))}${a.einheit ? ` ${esc(a.einheit)}` : ''}</td>
         <td>${esc(fmtDateTimeVoll(a.geplantStart))}</td>
       </tr>`).join('');
-      return `<section id="lieferant-detail" class="fb-detail" aria-label="Mengentreueanalyse von ${esc(gruppe.label)}">
+      return `<section id="lieferant-detail" class="fb-detail" data-partner-key="${esc(gruppe.key)}" aria-label="Mengentreueanalyse von ${esc(gruppe.label)}">
         <div class="fb-detail-head"><div><div class="fb-detail-title">${esc(gruppe.label)} · Mengentreueanalyse</div>
           <div class="lb-context">${betroffeneTes} TE${betroffeneTes === 1 ? '' : 's'} mit Mengenabweichung · ${analyseZeilen.length} TE-/Einheitenzeile${analyseZeilen.length === 1 ? '' : 'n'} · ${esc(bereichLabel(this._bereich))}</div></div>
           <button class="fb-detail-close" data-lb-detail-close aria-label="Detailanalyse schließen">Schließen</button></div>
         <section class="lb-analysis-block"><div class="lb-analysis-title">TEs mit Mengenabweichung</div>
-          ${analyseZeilen.length ? `<div class="lb-scroll"><table class="lb-table lb-analysis-table"><thead><tr>
-            <th>Datum</th><th>Interne TE-Nummer</th><th>Externe TE-Nummer</th><th>Lieferant</th><th>Transportmittel</th>
-            <th>Anzahl Positionen inkorrekt Mengentreue</th><th>Anzahl TE Überlieferung</th><th>Anzahl TE Unterlieferung</th><th>Summe Differenzmenge</th><th>Einheit</th>
+          ${analyseZeilen.length ? `<div class="lb-scroll" tabindex="0" role="region" aria-label="TEs mit Mengenabweichung scrollen"><table class="lb-table lb-analysis-table"><thead><tr>
+            <th scope="col">Datum</th><th scope="col">Interne TE-Nummer</th><th scope="col">Externe TE-Nummer</th><th scope="col">Lieferant</th><th scope="col">Transportmittel</th>
+            <th scope="col">Anzahl Positionen inkorrekt Mengentreue</th><th scope="col">Anzahl TE Überlieferung</th><th scope="col">Anzahl TE Unterlieferung</th><th scope="col">Summe Differenzmenge</th><th scope="col">Einheit</th>
           </tr></thead><tbody>${analyseHTML}</tbody></table></div>`
           : '<div class="fb-detail-empty">Für diesen Lieferanten gibt es im ausgewählten Zeitraum keine TE mit Mengenabweichung.</div>'}
         </section>
         ${this._lieferantTrendHTML(trend, gruppe.label)}
         <details class="lb-product-details"><summary>Produkt- und Anlieferungsdetails (${abweichungen.length})</summary>
-          ${abweichungen.length ? `<div class="lb-scroll"><table class="lb-table fb-detail-table"><thead><tr>
-            <th>TE</th><th>Anlieferung</th><th>Produkt</th><th>Abweichung</th><th>Geplanter Start ab</th>
+          ${abweichungen.length ? `<div class="lb-scroll" tabindex="0" role="region" aria-label="Produkt- und Anlieferungsabweichungen scrollen"><table class="lb-table fb-detail-table"><thead><tr>
+            <th scope="col">TE</th><th scope="col">Anlieferung</th><th scope="col">Produkt</th><th scope="col">Abweichung</th><th scope="col">Geplanter Start ab</th>
           </tr></thead><tbody>${produktZeilen}</tbody></table></div>`
           : '<div class="fb-detail-empty">Keine abweichenden Produktpositionen vorhanden.</div>'}
         </details>
@@ -4238,29 +4477,74 @@
       </section>`;
     }
 
+    _renderLieferantenMengen(tes) {
+      const host = this._$('lieferanten-mengen');
+      if (!host) return;
+      const uiScroll = this._analyseUiVorRender(host);
+      const daten = lieferantenMengenabweichungen(tes);
+      const suche = (this._lieferantenMengenSuche ?? '').trim().toLocaleLowerCase('de');
+      const spalten = [['lieferantLabel','Warensender / Lieferant'],['transportmittelLabel','Transportmittel'],
+        ['anzahlTe','Anzahl TE mit Differenz'],['anzahlPositionen','Anzahl Positionen mit Differenz'],
+        ['differenzmenge','Summe gesamt Differenzmenge'],['einheitLabel','Einheit'],['hwgLabel','HWG']];
+      const feld = spalten.some(([f]) => f === this._lieferantenMengenSort) ? this._lieferantenMengenSort : 'anzahlTe';
+      const richtung = this._lieferantenMengenRichtung ?? -1;
+      const gruppen = daten.gruppen.filter(g => !suche ||
+        `${g.lieferantLabel} ${g.lieferantNr ?? ''} ${g.transportmittelLabel} ${g.einheitLabel} ${g.hwgLabel}`.toLocaleLowerCase('de').includes(suche));
+      gruppen.sort((a,b) => {
+        const x = a[feld], y = b[feld];
+        if (x == null && y != null) return 1;
+        if (y == null && x != null) return -1;
+        const delta = typeof x === 'string' ? x.localeCompare(y,'de') : x-y;
+        return delta*richtung || b.anzahlPositionen-a.anzahlPositionen
+          || a.lieferantLabel.localeCompare(b.lieferantLabel,'de') || a.key.localeCompare(b.key,'de');
+      });
+      host.innerHTML = `<p class="lb-context">${daten.anzahlLieferanten} Warensender · ${daten.anzahlTesGesamt} zugeordnete TEs · ${daten.anzahlTes} verschiedene TEs mit Positionsabweichung · ${daten.anzahlPositionen} abweichende Produktzeilen · ${esc(bereichLabel(this._bereich))}${suche ? ` · ${gruppen.length} von ${daten.gruppen.length} Gruppen angezeigt` : ''}</p>
+        ${daten.ohneLieferant || daten.nichtBewertbar || daten.ohneProduktdaten ? `<p class="lb-context">Datenlücken: ${daten.ohneLieferant} Produktzeilen ohne Lieferantenzuordnung · ${daten.nichtBewertbar} Produktzeilen ohne bewertbare Mengenabweichung · ${daten.ohneProduktdaten} TE-/Lieferantenzuordnungen ohne Produktdaten. Warensender mit fehlenden Mengendaten bleiben sichtbar.</p>` : ''}
+        ${gruppen.length ? `<div class="lb-scroll" tabindex="0" role="region" aria-label="Warensender und Mengenabweichungen scrollen"><table class="lb-table lb-mengen-table"><thead><tr>
+          ${spalten.map(([f,label]) => `<th scope="col" aria-sort="${feld === f ? richtung === 1 ? 'ascending' : 'descending' : 'none'}"><button type="button" data-lm-sort="${f}">${label} ${feld === f ? richtung === 1 ? '↑' : '↓' : '↕'}</button></th>`).join('')}
+        </tr></thead><tbody>${gruppen.map(g => `<tr>
+          <td>${esc(g.lieferantLabel)}<small>${g.lieferantNr ? 'Nr. ' + esc(g.lieferantNr) : 'Zuordnung über Bezeichnung'}</small></td>
+          <td>${esc(g.transportmittelLabel)}</td><td class="lb-num">${fmtNum(g.anzahlTe)}${g.anzahlTesMitDatenluecke ? `<small>${g.anzahlTesMitDatenluecke} TEs mit Datenlücken</small>` : ''}</td><td class="lb-num">${fmtNum(g.anzahlPositionen)}</td>
+          <td class="lb-num${g.anzahlPositionen ? ' lb-diff' : ''}">${g.differenzmenge == null ? 'n. b.' : esc(fmtDelta(g.differenzmenge))}${g.nichtBewertbar || g.ohneProduktdaten ? `<small>${g.differenzmenge != null ? 'Teilsumme · ' : ''}Mengendaten unvollständig</small>` : g.differenzmenge === 0 ? `<small>${g.anzahlPositionen ? 'Gegenläufige Abweichungen' : 'Keine Positionsabweichung'}</small>` : ''}</td>
+          <td>${esc(g.einheitLabel)}</td><td>${esc(g.hwgLabel)}</td>
+        </tr>`).join('')}</tbody></table></div>` : `<div class="fb-detail-empty">${suche ? 'Keine Warensender für diese Suche.' : 'Keine zuordenbaren Warensender im ausgewählten Zeitraum.'}</div>`}
+        <details class="pz-info"><summary>Berechnung und Einordnung</summary>
+          <p>Eine Zeile je Lieferant, Transportmittel, Mengeneinheit und Hauptwarengruppe (HWG). Die Tabelle enthält alle zuordenbaren Warensender des ausgewählten Zeitraums ohne Begrenzung auf fünf oder zehn Einträge. Warensender ohne Positionsabweichung erscheinen mit 0; fehlende Mengen ergeben „n. b.“ oder eine ausdrücklich gekennzeichnete Teilsumme.</p>
+          <p>TE-Zahl mit Differenz = verschiedene interne TE-Nummern mit mindestens einer endlichen Positionsabweichung ungleich 0 innerhalb der Gruppe. Positionenzahl = eingelesene Produktzeilen mit Differenz; eine eindeutige Positionsnummer liegt im Datenvertrag nicht vor. Alle Abweichungen zählen, auch innerhalb der Mengentoleranz. Differenzmenge = Summe der vorzeichenbehafteten Abweichungen (Ist − Soll), daher können Über- und Unterlieferungen zusammen 0 ergeben. Einheiten werden getrennt summiert. Eine TE kann in mehreren Gruppen erscheinen; die TE-Spalte ist über Gruppen hinweg nicht addierbar.</p>
+          <p>Lieferant und Transportmittel werden je Produktzeile zugeordnet; damit sind auch TEs mit mehreren eindeutig zugeordneten Lieferanten in dieser Positionsauswertung enthalten. Fehlender Lieferant wird separat gezählt, fehlendes Transportmittel, Einheit oder HWG werden sichtbar ausgewiesen. HWG = Hauptwarengruppe. Bewertungsmodus, Suche in der Bewertungstabelle und TE-Listenfilter begrenzen diese Tabelle nicht.</p>
+        </details>`;
+      this._analyseUiNachRender(host, uiScroll);
+    }
+
     _renderLieferanten() {
       const host = this._$('lieferanten-vergleich'); if (!host) return;
+      const uiScroll = this._analyseUiVorRender(host);
       const tes = this._tesZeitraum(), daten = aggregiereLieferanten(tes);
+      this._renderLieferantenMengen(tes);
       const trendHost = this._$('lieferanten-trend');
       if (trendHost) {
+        const trendUi = this._analyseUiVorRender(trendHost);
         const zugeordneteTes = daten.gruppen.flatMap(g => g.tes);
         trendHost.innerHTML = this._bewertungTrendHTML(
           lieferantMengentreueTrend({tes:zugeordneteTes}),
           'allen eindeutig zugeordneten Lieferanten', 'mengentreu', true);
+        this._analyseUiNachRender(trendHost, trendUi);
       }
       const suchtext = (this._lieferantenSuche ?? '').trim().toLocaleLowerCase('de');
       const feld = ['name', 'anzahl', 'mengentreu'].includes(this._lieferantenSort) ? this._lieferantenSort : 'mengentreu', richtung = this._lieferantenRichtung ?? 1;
       const wert = (g, f) => f === 'name' ? g.label : f === 'anzahl' ? g.tes.length
         : g.basis[f].wert;
       const rangliste = schlechtesteLieferanten(daten.gruppen);
+      const modus = this._lieferantenModus === 'schlechteste' ? 'schlechteste' : 'alle';
+      const grundmenge = modus === 'schlechteste' ? rangliste : daten.gruppen;
       const ohneMengentreue = daten.gruppen.filter(g => g.basis.mengentreu.wert == null).length;
       const summen = bewertungsSummen(daten.gruppen, 'mengentreu');
-      const gruppen = rangliste.filter(g => !suchtext || `${g.label} ${g.nr ?? ''}`.toLocaleLowerCase('de').includes(suchtext))
+      const gruppen = grundmenge.filter(g => !suchtext || `${g.label} ${g.nr ?? ''}`.toLocaleLowerCase('de').includes(suchtext))
         .sort((a,b) => {
           const x = wert(a,feld), y = wert(b,feld);
           if (x == null || y == null) { if (x == null && y != null) return 1; if (y == null && x != null) return -1; }
           const delta = typeof x === 'string' ? x.localeCompare(y,'de') : (x ?? 0) - (y ?? 0);
-          return delta * richtung || a.rang - b.rang || a.label.localeCompare(b.label,'de') || a.key.localeCompare(b.key,'de');
+          return delta * richtung || (a.rang ?? 9999)-(b.rang ?? 9999) || a.label.localeCompare(b.label,'de') || a.key.localeCompare(b.key,'de');
         });
       const fmt = v => v == null ? 'n. b.' : new Intl.NumberFormat('de-DE',{maximumFractionDigits:1}).format(v);
       const quoteCell = (g,f) => { const q = g.basis[f]; return `<td><strong>${fmt(q.wert)}${q.wert == null ? '' : ' %'}</strong>
@@ -4268,19 +4552,20 @@
         <small>${q.ok} erfüllt / ${q.bewertbar} bewertbar · ${q.nb} n. b.</small></td>`; };
       const cols = [['name','Lieferant'],['anzahl','TEs'],['mengentreu','Mengentreue']];
       let detailGruppe = this._lieferantDetailKey == null ? null
-        : daten.gruppen.find(g => g.key === this._lieferantDetailKey && g.basis.mengentreu.wert != null) ?? null;
+        : daten.gruppen.find(g => g.key === this._lieferantDetailKey) ?? null;
       if (detailGruppe && !gruppen.some(g => g.key === detailGruppe.key)) detailGruppe = null;
       if (!detailGruppe) this._lieferantDetailKey = null;
-      host.innerHTML = `<p class="lb-context">${rangliste.length} von ${daten.gruppen.length - ohneMengentreue} mengenbewertbaren Lieferanten · niedrigste Mengentreuequoten im ausgewählten Zeitraum${suchtext ? ` · ${gruppen.length} Treffer in der Rangliste` : ''}</p>
-        ${ohneMengentreue ? `<p class="lb-context">${ohneMengentreue} Lieferanten ohne bewertbare Mengendaten sind nicht in der Rangliste enthalten.</p>` : ''}
+      host.innerHTML = `<p class="lb-context">${daten.gruppen.length} eindeutig zugeordnete Lieferanten · ${modus === 'schlechteste' ? `${rangliste.length} nach niedrigster Mengentreue ausgewählt` : 'alle Lieferanten im Zeitraum'}${suchtext ? ` · ${gruppen.length} Treffer` : ''} · ${esc(bereichLabel(this._bereich))}</p>
+        ${ohneMengentreue ? `<p class="lb-context">${ohneMengentreue} Lieferanten ohne bewertbare Mengendaten ${modus === 'schlechteste' ? 'sind von der Zehnerauswahl ausgeschlossen.' : 'sind als „n. b.“ sichtbar.'}</p>` : ''}
         ${daten.fehlend || daten.mehrdeutig ? `<p class="lb-context">Aus der Bewertung ausgeschlossen: ${daten.fehlend} TEs ohne Lieferant · ${daten.mehrdeutig} TEs mit mehreren oder unklaren Lieferantenzuordnungen.</p>` : ''}
         ${this._bewertungsSummenHTML(summen, 'TEs mit Mengenabweichung', `nicht mengentreu bei ${this._cfg?.mengenToleranzPct ?? 0} % Toleranz`)}
-        ${gruppen.length ? `<div class="lb-scroll"><table class="lb-table"><thead><tr>${cols.map(([f,l]) => `<th aria-sort="${feld === f ? richtung === 1 ? 'ascending' : 'descending' : 'none'}"><button data-lb-sort="${f}">${l} ${feld === f ? richtung === 1 ? '↑' : '↓' : '↕'}</button></th>`).join('')}</tr></thead><tbody>
-        ${gruppen.map(g => { const offen = this._lieferantDetailKey === g.key; const token = encodeURIComponent(g.key); return `<tr><th scope="row"><button class="fb-name-btn" data-lb-detail="${esc(token)}" aria-expanded="${offen}" aria-controls="lieferant-detail">${g.rang}. ${esc(g.label)}<span class="fb-chevron" aria-hidden="true">${offen ? '▾' : '›'}</span><small>${g.nr ? 'Nr. ' + esc(g.nr) : 'Zuordnung nur über Bezeichnung'} · Details öffnen</small></button></th><td><strong>${g.tes.length}</strong></td>${quoteCell(g,'mengentreu')}</tr>${offen ? `<tr class="lb-inline-detail-row"><td colspan="3">${this._lieferantDetailHTML(g)}</td></tr>` : ''}`; }).join('')}
-        </tbody></table></div>` : `<p class="lb-context">${tes.length ? suchtext ? 'Keine Lieferanten für diese Auswahl in der Rangliste.' : 'Keine Lieferanten mit bewertbaren Mengendaten.' : 'Keine Transporteinheiten im ausgewählten Zeitraum.'}</p>`}
-        <details class="pz-info"><summary>Berechnung und Einordnung</summary><p>Auswahl: maximal 10 Lieferanten mit der niedrigsten Mengentreuequote. Bei gleicher Quote werden Lieferanten mit mehr mengenbewertbaren TEs zuerst gewählt, anschließend nach Name und Schlüssel. Rangnummern bleiben beim Sortieren erhalten. Suche und Spaltensortierung gelten innerhalb dieser Rangliste; bei weniger als 10 bewertbaren Lieferanten werden alle angezeigt.</p><p>Jede eindeutig zugeordnete TE zählt einmal. Lieferantennummern haben Vorrang; fehlt die Nummer, wird über die Bezeichnung gruppiert. Unterschiedliche Nummern bleiben auch bei gleichem Namen getrennt. Neue Lieferanten werden bei jeder Zeitraum- oder Datenänderung berücksichtigt.</p>
+        ${gruppen.length ? `<div class="lb-scroll" tabindex="0" role="region" aria-label="Lieferantenbewertung scrollen"><table class="lb-table"><thead><tr>${cols.map(([f,l]) => `<th scope="col" aria-sort="${feld === f ? richtung === 1 ? 'ascending' : 'descending' : 'none'}"><button data-lb-sort="${f}">${l} ${feld === f ? richtung === 1 ? '↑' : '↓' : '↕'}</button></th>`).join('')}</tr></thead><tbody>
+        ${gruppen.map(g => { const offen = this._lieferantDetailKey === g.key; const token = encodeURIComponent(g.key); return `<tr><th scope="row"><button class="fb-name-btn" data-lb-detail="${esc(token)}" aria-expanded="${offen}" aria-controls="lieferant-detail">${g.rang ? `${g.rang}. ` : ''}${esc(g.label)}<span class="fb-chevron" aria-hidden="true">${offen ? '▾' : '›'}</span><small>${g.nr ? 'Nr. ' + esc(g.nr) : 'Zuordnung nur über Bezeichnung'} · Details öffnen</small></button></th><td><strong>${g.tes.length}</strong></td>${quoteCell(g,'mengentreu')}</tr>${offen ? `<tr class="lb-inline-detail-row"><td colspan="3">${this._lieferantDetailHTML(g)}</td></tr>` : ''}`; }).join('')}
+        </tbody></table></div>` : `<p class="lb-context">${tes.length ? suchtext ? 'Keine Lieferanten für diese Auswahl.' : modus === 'schlechteste' ? 'Keine Lieferanten mit bewertbaren Mengendaten.' : 'Keine zugeordneten Lieferanten.' : 'Keine Transporteinheiten im ausgewählten Zeitraum.'}</p>`}
+        <details class="pz-info"><summary>Berechnung und Einordnung</summary><p>„Alle“ zeigt sämtliche eindeutig zugeordneten Lieferanten, auch ohne bewertbare Mengendaten. „10 schlechteste“ zeigt die maximal zehn niedrigsten bewertbaren Mengentreuequoten. Gleichstände: mehr bewertbare TEs, dann Name und Schlüssel. Suche und Spaltensortierung wirken innerhalb der gewählten Ansicht. Eine offene Analyse schließt sich, wenn der Lieferant durch Ansicht, Suche oder Zeitraum nicht mehr sichtbar ist.</p><p>Jede eindeutig zugeordnete TE zählt einmal. Lieferantennummern haben Vorrang; fehlt die Nummer, wird über die Bezeichnung gruppiert. Unterschiedliche Nummern bleiben auch bei gleichem Namen getrennt. Neue Lieferanten werden bei jeder Zeitraum- oder Datenänderung berücksichtigt.</p>
         <p>Quoten = erfüllte TEs / bewertbare TEs. Nicht bewertbare TEs werden separat ausgewiesen. Mengentoleranz: ${this._cfg?.mengenToleranzPct ?? 0} %. Rote Balken zeigen die Quote von 0 bis 100 %, ohne zusätzliche Zielwerte oder Gesamtnote.</p>
         <p>Lieferanten werden anhand der Mengentreue bewertet. Pünktlichkeit gehört zur Bewertung des Frachtführers/Spediteurs. OTIF beschreibt die kombinierte Liefererfüllung und wird nicht als Lieferantenrangfolge verwendet. Durchlaufzeiten werden im Reiter Durchlaufzeiten ausgewertet. Zeitraumzuordnung und Mengentreueregeln entsprechen der Gesamtübersicht; TE-Listenfilter begrenzen diese Bewertung nicht.</p></details>`;
+      this._analyseUiNachRender(host, uiScroll);
     }
 
     _spediteurDetailHTML(gruppe) {
@@ -4292,66 +4577,67 @@
         <td>${esc(fmtDate(a.geplantStart))}</td><td>${esc(a.te ?? '–')}</td><td>${esc(a.teExt ?? '–')}</td>
         <td>${esc(fmtDateTimeVoll(a.geplantStart))}</td>
         <td>${esc(fmtDateTimeVoll(a.ankunft))}</td>
-        <td>+${fmtNum(a.abweichungMin)} min</td>
+        <td>+${fmtAbweichungMin(a.abweichungMin)}</td>
       </tr>`).join('');
-      return `<section id="spediteur-detail" class="fb-detail" aria-label="Pünktlichkeitsanalyse von ${esc(gruppe.label)}">
-        <div class="fb-detail-head"><div><div class="fb-detail-title">${esc(gruppe.label)} · Pünktlichkeitsanalyse</div>
+      return `<section id="spediteur-detail" class="fb-detail" data-partner-key="${esc(gruppe.key)}" aria-label="Pünktlichkeitsanalyse von ${esc(gruppe.label)}">
+        <div class="fb-detail-head"><div><div class="fb-detail-title">${esc(gruppe.label)}${gruppe.transportLabel ? ` · ${esc(gruppe.transportLabel)}` : ''} · Pünktlichkeitsanalyse</div>
           <div class="lb-context">${gruppe.basis.puenktlich.bewertbar} TEs zeitlich bewertbar · ${abweichungen.length} verspätet · ${esc(bereichLabel(this._bereich))}</div></div>
           <button class="fb-detail-close" data-fb-detail-close aria-label="Detailanalyse schließen">Schließen</button></div>
         <section class="lb-analysis-block"><div class="lb-analysis-title">TEs mit Pünktlichkeitsabweichung</div>
-          ${abweichungen.length ? `<div class="lb-scroll"><table class="lb-table fb-detail-table"><thead><tr>
-            <th>Datum</th><th>Interne TE-Nummer</th><th>Externe TE-Nummer</th><th>Geplanter Start ab</th><th>Ankunft am Kontrollpunkt</th><th>Abweichung</th>
+          ${abweichungen.length ? `<div class="lb-scroll" tabindex="0" role="region" aria-label="Verspätete TEs des Frachtführers scrollen"><table class="lb-table fb-detail-table"><thead><tr>
+            <th scope="col">Datum</th><th scope="col">Interne TE-Nummer</th><th scope="col">Externe TE-Nummer</th><th scope="col">Geplanter Start ab</th><th scope="col">Ankunft am Kontrollpunkt</th><th scope="col">Abweichung</th>
           </tr></thead><tbody>${zeilen}</tbody></table></div>`
           : `<div class="fb-detail-empty">Für diesen Frachtführer/Spediteur gibt es im ausgewählten Zeitraum keine TE, deren Ankunft später als geplanter Start plus ${toleranz} Minuten liegt.</div>`}
         </section>
-        ${this._spediteurTrendHTML(trend, gruppe.label)}
-        <div class="lb-context">Die Tabelle zeigt ausschließlich TEs mit bewertbaren Plan- und Ankunftsstempeln, die später als Planstart plus ${toleranz} Minuten angekommen sind. Angezeigte Abweichung = Ankunft minus geplanter Start ohne Abzug der Toleranz. Datum = geplanter Start. Die Tagesquote im Diagramm zählt alle pünktlichen und unpünktlichen, zeitlich bewertbaren TEs des Frachtführers/Spediteurs; die Zeitraumzuordnung folgt dem gemeinsamen Widget-Zeitraum.</div>
+        ${this._spediteurTrendHTML(trend, `${gruppe.label}${gruppe.transportLabel ? ` · ${gruppe.transportLabel}` : ''}`)}
+        <div class="lb-context">Die Tabelle zeigt ausschließlich TEs mit bewertbaren Plan- und Ankunftsstempeln, die später als Planstart plus ${toleranz} Minuten angekommen sind. Angezeigte Abweichung = Ankunft minus geplanter Start ohne Abzug der Toleranz. Datum = geplanter Start. Die Tagesquote im Diagramm zählt alle zeitlich bewertbaren TEs dieser Frachtführer-/Transportmittelzeile; die Zeitraumzuordnung folgt dem gemeinsamen Widget-Zeitraum.</div>
       </section>`;
     }
 
+    _renderSpediteureGesamt(tes) {
+      const host = this._$('spediteure-gesamt'); if (!host) return;
+      const uiScroll = this._analyseUiVorRender(host);
+      const daten = spediteurePuenktlichkeitGesamt(tes, this._cfg?.toleranzMin ?? 30);
+      const modus = this._spediteureModus === 'schlechteste' ? 'schlechteste' : 'alle';
+      const topKeys = new Set(schlechtesteSpediteure(aggregiereSpediteure(tes).gruppen).map(g => g.key));
+      const suche = (this._spediteureGesamtSuche ?? '').trim().toLocaleLowerCase('de');
+      const cols = [['label','Frachtführer/Spediteur'],['transportLabel','Transportmittel'],['anzahl','TEs gesamt'],['puenktlich','Pünktliche TEs'],['verspaetet','Verspätete TEs'],['nb','Nicht bewertbar'],['quote','Pünktlichkeit'],['summe','Summe Verspätung (min)'],['mittel','Ø Verspätung (min)']];
+      const feld = cols.some(([f]) => f === this._spediteureGesamtSort) ? this._spediteureGesamtSort : 'verspaetet';
+      const richtung = this._spediteureGesamtRichtung ?? -1;
+      const gruppen = daten.gruppen.filter(g => (modus === 'alle' || topKeys.has(g.carrierKey)) && (!suche || `${g.label} ${g.nr ?? ''} ${g.transportLabel}`.toLocaleLowerCase('de').includes(suche)));
+      gruppen.sort((a,b) => {
+        const x=a[feld], y=b[feld]; if (x == null && y != null) return 1; if (y == null && x != null) return -1;
+        return (typeof x === 'string' ? x.localeCompare(y,'de') : (x ?? 0)-(y ?? 0))*richtung || a.key.localeCompare(b.key,'de');
+      });
+      if (!gruppen.some(g => g.key === this._spediteurDetailKey)) this._spediteurDetailKey = null;
+      host.innerHTML = `<p class="lb-context">${daten.anzahlSpediteure} Frachtführer/Spediteure · ${daten.anzahlTes} zugeordnete TEs · ${daten.verspaetet} verspätete TEs · ${modus === 'schlechteste' ? `die ${topKeys.size} niedrigsten bewertbaren Pünktlichkeitsquoten` : 'alle Frachtführer'} · ${esc(bereichLabel(this._bereich))}${suche ? ` · ${gruppen.length} von ${daten.gruppen.length} Zeilen angezeigt` : ''}</p>
+        ${daten.fehlend || daten.mehrdeutig ? `<p class="lb-context">Nicht zugeordnet: ${daten.fehlend} TEs ohne Frachtführer · ${daten.mehrdeutig} TEs mit mehrdeutiger Frachtführerzuordnung.</p>` : ''}
+        ${gruppen.length ? `<div class="lb-scroll" tabindex="0" role="region" aria-label="Frachtführerbewertung nach Transportmittel scrollen"><table class="lb-table lb-mengen-table"><thead><tr>${cols.map(([f,l]) => `<th scope="col" aria-sort="${feld === f ? richtung === 1 ? 'ascending' : 'descending' : 'none'}"><button type="button" data-fg-sort="${f}">${l} ${feld === f ? richtung === 1 ? '↑' : '↓' : '↕'}</button></th>`).join('')}</tr></thead><tbody>${gruppen.map(g => `<tr>
+          <th scope="row"><button type="button" class="fb-name-btn" data-fb-detail="${esc(encodeURIComponent(g.key))}" aria-expanded="${this._spediteurDetailKey === g.key}" aria-controls="spediteur-detail">${esc(g.label)}<span class="fb-chevron" aria-hidden="true">${this._spediteurDetailKey === g.key ? '▾' : '›'}</span><small>${g.nr ? 'Schlüssel ' + esc(g.nr) : 'Zuordnung über Bezeichnung'} · Details öffnen</small></button></th><td>${esc(g.transportLabel)}</td>
+          <td class="lb-num">${g.anzahl}</td><td class="lb-num">${g.puenktlich}</td><td class="lb-num${g.verspaetet ? ' lb-diff' : ''}">${g.verspaetet}</td><td class="lb-num">${g.nb}</td>
+          <td class="lb-num">${g.quote == null ? 'n. b.' : fmtProzent(g.quote)}<div class="lb-track" aria-hidden="true"><span style="width:${g.quote ?? 0}%"></span></div></td>
+          <td class="lb-num">${g.summe == null ? 'n. b.' : fmtMenge(g.summe)}</td><td class="lb-num">${g.mittel == null ? '–' : fmtMenge(g.mittel)}</td>
+        </tr>${this._spediteurDetailKey === g.key ? `<tr class="lb-inline-detail-row"><td colspan="9">${this._spediteurDetailHTML(g)}</td></tr>` : ''}`).join('')}</tbody></table></div>` : `<div class="fb-detail-empty">${suche ? 'Keine Frachtführer für diese Suche.' : modus === 'schlechteste' ? 'Keine Frachtführer mit bewertbarer Pünktlichkeit.' : 'Keine eindeutig zugeordneten Frachtführer im ausgewählten Zeitraum.'}</div>`}
+        <details class="pz-info"><summary>Berechnung und Einordnung</summary>
+          <p>Alle eindeutig zugeordneten Frachtführer/Spediteure des ausgewählten Zeitraums, eine Zeile je Frachtführer und Transportmittel. Jede interne TE zählt einmal. „Alle“ zeigt sämtliche Frachtführer einschließlich nicht bewertbarer Gruppen. „10 schlechteste“ wählt höchstens zehn Frachtführer nach ihrer gesamten bewertbaren Pünktlichkeitsquote, bei Gleichstand nach mehr bewertbaren TEs, Name und Schlüssel. Je Frachtführer können mehrere Transportmittelzeilen sichtbar sein; die Quote in der Zeile gilt nur für dieses Transportmittel. Die TE-Listenfilter begrenzen diese Tabelle nicht.</p>
+          <p>Pünktlichkeit = pünktliche / zeitlich bewertbare TEs × 100. Verspätet = Ankunft am Kontrollpunkt nach geplantem Start plus ${this._cfg?.toleranzMin ?? 30} Minuten Toleranz. Frühe Ankünfte gelten entsprechend der bestehenden Widgetregel als pünktlich. Fehlende oder ungültige Zeitstempel ergeben „nicht bewertbar“ und bleiben sichtbar.</p>
+          <p>Verspätung = Ankunft − geplanter Start. Summe und Durchschnitt beziehen sich ausschließlich auf verspätete TEs und enthalten die volle Verspätung, ohne Abzug der Toleranz. Ohne verspätete TEs beträgt die Summe 0 und der Durchschnitt ist „–“; ohne bewertbare TEs ist die Summe „n. b.“. Zeitraumzuordnung entspricht der Gesamtübersicht.</p>
+        </details>`;
+      this._analyseUiNachRender(host, uiScroll);
+    }
+
     _renderSpediteure() {
-      const host = this._$('spediteure-vergleich'); if (!host) return;
       const tes = this._tesZeitraum(), daten = aggregiereSpediteure(tes);
+      this._renderSpediteureGesamt(tes);
       const trendHost = this._$('spediteure-trend');
       if (trendHost) {
+        const trendUi = this._analyseUiVorRender(trendHost);
         const zugeordneteTes = daten.gruppen.flatMap(g => g.tes);
         trendHost.innerHTML = this._bewertungTrendHTML(
           spediteurPuenktlichkeitTrend({tes:zugeordneteTes}),
           'allen eindeutig zugeordneten Frachtführern/Spediteuren', 'puenktlich', true);
+        this._analyseUiNachRender(trendHost, trendUi);
       }
-      const suchtext = (this._spediteureSuche ?? '').trim().toLocaleLowerCase('de');
-      const feld = ['name', 'anzahl', 'puenktlich'].includes(this._spediteureSort) ? this._spediteureSort : 'puenktlich', richtung = this._spediteureRichtung ?? 1;
-      const wert = (g, f) => f === 'name' ? g.label : f === 'anzahl' ? g.tes.length
-        : g.basis[f].wert;
-      const rangliste = schlechtesteSpediteure(daten.gruppen);
-      const ohnePuenktlichkeit = daten.gruppen.filter(g => g.basis.puenktlich.wert == null).length;
-      const summen = bewertungsSummen(daten.gruppen, 'puenktlich');
-      const gruppen = rangliste.filter(g => !suchtext || `${g.label} ${g.nr ?? ''}`.toLocaleLowerCase('de').includes(suchtext))
-        .sort((a,b) => {
-          const x = wert(a,feld), y = wert(b,feld);
-          if (x == null || y == null) { if (x == null && y != null) return 1; if (y == null && x != null) return -1; }
-          const delta = typeof x === 'string' ? x.localeCompare(y,'de') : (x ?? 0) - (y ?? 0);
-          return delta * richtung || a.rang - b.rang || a.label.localeCompare(b.label,'de') || a.key.localeCompare(b.key,'de');
-        });
-      const fmt = v => v == null ? 'n. b.' : new Intl.NumberFormat('de-DE',{maximumFractionDigits:1}).format(v);
-      const quoteCell = (g,f) => { const q = g.basis[f]; return `<td><strong>${fmt(q.wert)}${q.wert == null ? '' : ' %'}</strong>
-        <div class="lb-track" aria-hidden="true"><span style="width:${q.wert ?? 0}%"></span></div>
-        <small>${q.ok} pünktlich / ${q.bewertbar} bewertbar · ${q.nb} n. b.</small></td>`; };
-      const cols = [['name','Frachtführer/Spediteur'],['anzahl','TEs'],['puenktlich','Pünktlichkeit']];
-      let detailGruppe = this._spediteurDetailKey == null ? null
-        : daten.gruppen.find(g => g.key === this._spediteurDetailKey && g.basis.puenktlich.wert != null) ?? null;
-      if (detailGruppe && !gruppen.some(g => g.key === detailGruppe.key)) detailGruppe = null;
-      if (!detailGruppe) this._spediteurDetailKey = null;
-      host.innerHTML = `<p class="lb-context">${rangliste.length} von ${daten.gruppen.length - ohnePuenktlichkeit} Frachtführern/Spediteuren mit bewertbarer Pünktlichkeit · niedrigste Pünktlichkeitsquoten im ausgewählten Zeitraum${suchtext ? ` · ${gruppen.length} Treffer in der Rangliste` : ''}</p>
-        ${ohnePuenktlichkeit ? `<p class="lb-context">${ohnePuenktlichkeit} Frachtführer/Spediteure ohne bewertbare Plan-/Ankunftszeitstempel sind nicht in der Rangliste enthalten.</p>` : ''}
-        ${daten.fehlend || daten.mehrdeutig ? `<p class="lb-context">Aus der Bewertung ausgeschlossen: ${daten.fehlend} TEs ohne Frachtführer/Spediteur · ${daten.mehrdeutig} TEs mit mehreren oder unklaren Frachtführerzuordnungen.</p>` : ''}
-        ${this._bewertungsSummenHTML(summen, 'Unpünktliche TEs', `Ankunft später als Planstart + ${this._cfg?.toleranzMin ?? 30} min`)}
-        ${gruppen.length ? `<div class="lb-scroll"><table class="lb-table"><thead><tr>${cols.map(([f,l]) => `<th aria-sort="${feld === f ? richtung === 1 ? 'ascending' : 'descending' : 'none'}"><button data-fb-sort="${f}">${l} ${feld === f ? richtung === 1 ? '↑' : '↓' : '↕'}</button></th>`).join('')}</tr></thead><tbody>
-        ${gruppen.map(g => { const offen = this._spediteurDetailKey === g.key; const token = encodeURIComponent(g.key); return `<tr><th scope="row"><button class="fb-name-btn" data-fb-detail="${esc(token)}" aria-expanded="${offen}" aria-controls="spediteur-detail">${g.rang}. ${esc(g.label)}<span class="fb-chevron" aria-hidden="true">${offen ? '▾' : '›'}</span><small>${g.nr ? 'Schlüssel ' + esc(g.nr) : 'Zuordnung nur über Bezeichnung'} · Details öffnen</small></button></th><td><strong>${g.tes.length}</strong></td>${quoteCell(g,'puenktlich')}</tr>${offen ? `<tr class="lb-inline-detail-row"><td colspan="3">${this._spediteurDetailHTML(g)}</td></tr>` : ''}`; }).join('')}
-        </tbody></table></div>` : `<p class="lb-context">${tes.length ? suchtext ? 'Keine Frachtführer/Spediteure für diese Auswahl in der Rangliste.' : 'Keine Frachtführer/Spediteure mit bewertbaren Plan-/Ankunftszeitstempeln.' : 'Keine Transporteinheiten im ausgewählten Zeitraum.'}</p>`}
-        <details class="pz-info"><summary>Berechnung und Einordnung</summary><p>Auswahl: maximal 10 Frachtführer/Spediteure mit der niedrigsten Pünktlichkeitsquote. Bei gleicher Quote entscheidet die größere Zahl der TEs mit bewertbarer Pünktlichkeit, anschließend Name und Schlüssel. Rangnummern bleiben beim Sortieren erhalten. Suche und Spaltensortierung gelten innerhalb dieser Rangliste; bei weniger als 10 bewertbaren Frachtführern/Spediteuren werden alle angezeigt.</p><p>Jede eindeutig zugeordnete TE zählt einmal. Gruppierung über das vorhandene Frachtführermerkmal, unabhängig vom Lieferanten oder Transportmittel. Schlüssel haben Vorrang; unterschiedliche Schlüssel bleiben auch bei gleichem Namen getrennt. Neue Frachtführer/Spediteure werden bei jeder Zeitraum- oder Datenänderung berücksichtigt.</p>
-        <p>Pünktlichkeitsquote = pünktliche TEs / zeitlich bewertbare TEs. Nicht bewertbare TEs werden separat ausgewiesen. Pünktlichkeitstoleranz: ${this._cfg?.toleranzMin ?? 30} Minuten. Eine Ankunft bis zum geplanten Start zuzüglich Toleranz gilt als pünktlich; frühere Ankünfte ebenfalls. Rote Balken zeigen die Quote von 0 bis 100 %, ohne zusätzliche Zielwerte oder Gesamtnote.</p>
-        <p>Frachtführer/Spediteure werden anhand der Pünktlichkeit bewertet. Mengentreue gehört zur Lieferantenbewertung. Fehlen die erforderlichen Zeitstempel, ist die TE nicht bewertbar. Zeitraumzuordnung und Pünktlichkeitsregeln entsprechen der Gesamtübersicht; TE-Listenfilter begrenzen diese Bewertung nicht.</p></details>`;
     }
 
     _updateKopf() {
@@ -4390,6 +4676,7 @@
     _renderDurchlaufTrend(tes) {
       const host = this._$('durchlauf-trend');
       if (!host) return;
+      const uiScroll = this._analyseUiVorRender(host);
       const id = this._durchlaufTrendArt === 'operativ' ? 'operativ' : 'gesamt';
       const modus = this._prozessModus === 'median' ? 'median' : 'mittel';
       const statistik = modus === 'median' ? 'Median' : 'Durchschnitt';
@@ -4397,61 +4684,65 @@
       const knoepfe = `<div class="pz-switch" aria-label="Durchlaufzeitart wählen">
         <button type="button" data-dlz-trend="gesamt" aria-pressed="${id === 'gesamt'}">Gesamt</button>
         <button type="button" data-dlz-trend="operativ" aria-pressed="${id === 'operativ'}">Operativ</button></div>`;
-      const titel = `<div class="dlz-trend-head"><div class="lb-analysis-title">Verlauf Durchlaufzeit in Minuten · ${statistik}</div>${knoepfe}</div>`;
+      const statistikKnoepfe = `<div class="pz-switch" role="group" aria-label="Statistik für alle Prozesszeiten wählen">
+        <button type="button" data-dlz-statistik="mittel" aria-pressed="${modus === 'mittel'}">Durchschnitt</button>
+        <button type="button" data-dlz-statistik="median" aria-pressed="${modus === 'median'}">Median</button></div>`;
+      const titel = `<div class="dlz-trend-head"><div class="lb-analysis-title">Verlauf Durchlaufzeit in Minuten · ${statistik}</div><div class="dlz-trend-controls"><div class="dlz-trend-control"><span>Statistik</span>${statistikKnoepfe}</div><div class="dlz-trend-control"><span>Dauer</span>${knoepfe}</div></div></div>`;
       const text = id === 'gesamt' ? 'Ankunft → vollständige Fertigstellung' : 'Entladestart → vollständige Fertigstellung';
       if (!punkteDaten.length) {
         host.innerHTML = `<section class="lb-trend dlz-trend">${titel}<div class="fb-detail-empty">Im ausgewählten Zeitraum gibt es keine bewertbaren ${id === 'gesamt' ? 'Gesamt-' : 'operativen '}Durchlaufzeiten.</div></section>`;
       } else {
-        const W = 1000, H = 280, L = 78, R = 28, T = 26, B = 54;
+        const W = 1000, H = 304, L = 78, R = 78, T = 50, B = 54;
         const breite = W-L-R, hoehe = H-T-B, max = Math.max(...punkteDaten.map(d => d[modus]));
-        const schritt = max <= 20 ? 5 : Math.pow(10,Math.floor(Math.log10(max || 1)));
+        const schritt = runderAchsenSchritt(max/4);
         const ymax = Math.max(schritt, Math.ceil(max/schritt)*schritt);
-        const erster = daten[0].datum.getTime(), letzter = daten[daten.length-1].datum.getTime();
+        const erster = punkteDaten[0].datum.getTime(), letzter = punkteDaten[punkteDaten.length-1].datum.getTime();
         const x = datum => erster === letzter ? L+breite/2 : L+(datum.getTime()-erster)*breite/(letzter-erster);
         const y = wert => T+(1-wert/ymax)*hoehe;
         const fmt = n => n.toLocaleString('de-DE',{maximumFractionDigits:1});
         const punkte = punkteDaten.map(d => ({...d,x:x(d.datum),y:y(d[modus])}));
-        const linien = []; let segment = [], vorher = null;
-        for (const d of daten) {
-          if (!Number.isFinite(d[modus]) || (vorher != null && d.datum.getTime()-vorher > 86400000)) {
-            if (segment.length) linien.push(segment);
-            segment = [];
-          }
-          if (Number.isFinite(d[modus])) {
-            segment.push(`${x(d.datum).toFixed(1)},${y(d[modus]).toFixed(1)}`);
-            vorher = d.datum.getTime();
-          } else vorher = null;
-        }
-        if (segment.length) linien.push(segment);
-        const raster = Array.from({length:5},(_,i) => {
-          const wert = ymax*(4-i)/4, py = T+hoehe*i/4;
+        const linienpunkte = punkte.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`);
+        const raster = Array.from({length:Math.round(ymax/schritt)+1},(_,i) => {
+          const wert = ymax-schritt*i, py = y(wert);
           return `<line class="lb-chart-grid" x1="${L}" y1="${py}" x2="${W-R}" y2="${py}"></line>
             <text class="lb-chart-label" x="${L-9}" y="${py+4}" text-anchor="end">${fmt(wert)}</text>`;
         }).join('');
-        const labels = Math.min(6,punkte.length);
-        const index = new Set(Array.from({length:labels},(_,i) => labels===1 ? 0 : Math.round(i*(punkte.length-1)/(labels-1))));
-        const dates = punkte.map((p,i) => index.has(i)
-          ? `<text class="lb-chart-label" x="${p.x.toFixed(1)}" y="${H-22}" text-anchor="${punkte.length === 1 ? 'middle' : i === 0 ? 'start' : i === punkte.length-1 ? 'end' : 'middle'}">${fmtDate(p.datum)}</text>` : '').join('');
+        const dates = trendDatumsAchse(punkte, H-B, H-22, T, L, W-R);
         const werte = punkte.length <= 8 ? new Set(punkte.map((_,i)=>i))
           : new Set([0,punkte.length-1,punkte.reduce((best,p,i,a)=>p[modus]>a[best][modus]?i:best,0)]);
         const kreise = punkte.map((p,i) => `<circle class="lb-chart-point" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="4">
             <title>${fmtDate(p.datum)}: ${fmtProzessMin(p[modus])} ${statistik} · ${p.n} TEs auswertbar · ${p.fehlend} fehlend · ${p.ungueltig} ungültig</title></circle>
-            ${werte.has(i) ? `<text class="lb-chart-value" x="${p.x.toFixed(1)}" y="${(p.y<42?p.y+19:p.y-10).toFixed(1)}" text-anchor="middle">${fmt(p[modus])}</text>` : ''}`).join('');
+            ${werte.has(i) ? `<text class="lb-chart-value" x="${(p.x+(i===0?8:i===punkte.length-1?-8:0)).toFixed(1)}" y="${(p.y<T+16?p.y+19:p.y-10).toFixed(1)}" text-anchor="${i===0?'start':i===punkte.length-1?'end':'middle'}">${fmt(p[modus])}</text>` : ''}`).join('');
         const fehlend = daten.reduce((sum,d)=>sum+d.fehlend,0), ungueltig = daten.reduce((sum,d)=>sum+d.ungueltig,0);
         host.innerHTML = `<section class="lb-trend dlz-trend" aria-label="Täglicher Verlauf der ${id === 'gesamt' ? 'Gesamt-' : 'operativen '}Durchlaufzeit">
-          ${titel}<div class="lb-chart-scroll"><svg class="lb-trend-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${statistik} der ${id === 'gesamt' ? 'Gesamt-' : 'operativen '}Durchlaufzeit je Tag in Minuten">
+          ${titel}<p class="lb-trend-caption">${text} · ${punkteDaten.length} Tageswerte · ${punkteDaten.reduce((sum,d)=>sum+d.n,0)} auswertbare TEs${fehlend ? ` · ${fehlend} ohne vollständiges Zeitpaar` : ''}${ungueltig ? ` · ${ungueltig} mit ungültiger Zeitfolge` : ''}</p><div class="lb-chart-scroll" tabindex="0" role="region" aria-label="Diagramm ${statistik} der ${id === 'gesamt' ? 'Gesamt-' : 'operativen '}Durchlaufzeit horizontal scrollen"><svg class="lb-trend-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${statistik} der ${id === 'gesamt' ? 'Gesamt-' : 'operativen '}Durchlaufzeit je Tag in Minuten">
             <title>${statistik} der Durchlaufzeit je Tag in Minuten</title>${raster}
             <line class="lb-chart-axis" x1="${L}" y1="${T}" x2="${L}" y2="${H-B}"></line>
             <line class="lb-chart-axis" x1="${L}" y1="${H-B}" x2="${W-R}" y2="${H-B}"></line>
             <text class="lb-chart-label" transform="translate(18 ${T+hoehe/2}) rotate(-90)" text-anchor="middle">Minuten</text>
-            ${linien.map(s=>`<polyline class="lb-chart-line" points="${s.join(' ')}"></polyline>`).join('')}${kreise}${dates}
-          </svg></div><div class="lb-context">${text} · Tageswert: ${statistik} der bewertbaren TEs nach Zeitraumanker. ${fehlend} TEs ohne vollständiges Zeitpaar · ${ungueltig} mit ungültiger Zeitfolge. Tage ohne bewertbare TEs unterbrechen die Linie. Listenfilter gelten nur für die TE-Liste.</div>
+            ${dates}<polyline class="lb-chart-line" points="${linienpunkte.join(' ')}"></polyline>${kreise}
+          </svg></div><details class="lb-chart-info"><summary>Berechnung und Darstellung</summary><div class="lb-context">${text} · Tageswert: ${statistik} der bewertbaren TEs nach Zeitraumanker. ${fehlend} TEs ohne vollständiges Zeitpaar · ${ungueltig} mit ungültiger Zeitfolge. Die Linie verbindet vorhandene Tageswerte; Tage ohne bewertbare TEs haben keinen Datenpunkt. Tagesbeschriftungen stehen unter den zugehörigen Punkten; ab mehr als 120 Tagen werden Monate beschriftet. Jahresangaben stehen über den Abschnitten, vollständige Daten am Punkt. Der Statistikwechsel gilt auch für Prozesszeiten und Transportmittelvergleich. Die Durchlaufzeitkarte im Vorperiodenvergleich zeigt weiterhin den Durchschnitt. Listenfilter gelten nur für die TE-Liste.</div></details>
         </section>`;
       }
+      this._analyseUiNachRender(host, uiScroll);
       host.onclick = e => {
-        const button = e.target.closest('[data-dlz-trend]');
+        const button = e.target.closest('[data-dlz-trend], [data-dlz-statistik]');
         if (!button || !host.contains(button)) return;
+        if (button.dataset.dlzStatistik) {
+          const metric = button.dataset.dlzStatistik;
+          if (!['mittel','median'].includes(metric)) return;
+          this._prozessModus = metric;
+          const prozessHost = this._$('prozesszeiten');
+          const scroll = prozessHost?.querySelector('.pz-matrix-scroll')?.scrollLeft ?? 0;
+          this._renderProzesszeiten();
+          this._analyseStatus(`${metric === 'median' ? 'Median' : 'Durchschnitt'} für Prozesszeiten ausgewählt.`);
+          const wrapper = prozessHost?.querySelector('.pz-matrix-scroll');
+          if (wrapper) wrapper.scrollLeft = scroll;
+          host.querySelector(`[data-dlz-statistik="${metric}"]`)?.focus({preventScroll:true});
+          return;
+        }
         this._durchlaufTrendArt = button.dataset.dlzTrend;
+        this._analyseStatus(`${this._durchlaufTrendArt === 'operativ' ? 'Operative' : 'Gesamt-'}Durchlaufzeit ausgewählt.`);
         this._renderDurchlaufTrend(this._tesZeitraum());
         host.querySelector(`[data-dlz-trend="${this._durchlaufTrendArt}"]`)?.focus({preventScroll:true});
       };
@@ -4519,7 +4810,7 @@
       ${this._transportzeitenHTML(tes, modus)}
       ${this._teZeitstrahlHTML(tes)}
       <details class="pz-info"><summary>Detailtabelle und Berechnungsgrundlage</summary>
-        <div class="pz-scroll"><table class="pz-table"><thead><tr><th>Prozess</th><th>Ø</th><th>Median</th><th>Min.</th><th>Max.</th><th>Auswertbar</th><th>Fehlend</th><th>Ungültig</th></tr></thead><tbody>
+        <div class="pz-scroll"><table class="pz-table"><thead><tr><th scope="col">Prozess</th><th scope="col">Ø</th><th scope="col">Median</th><th scope="col">Min.</th><th scope="col">Max.</th><th scope="col">Auswertbar</th><th scope="col">Fehlend</th><th scope="col">Ungültig</th></tr></thead><tbody>
           ${daten.map(d=>`<tr><td>${esc(d.label)}</td><td>${fmtProzessMin(d.mittel)}</td><td>${fmtProzessMin(d.median)}</td><td>${fmtProzessMin(d.min)}</td><td>${fmtProzessMin(d.max)}</td><td>${d.n} / ${tes.length}</td><td>${d.fehlend}</td><td>${d.ungueltig}</td></tr>`).join('')}
         </tbody></table></div>
         Jede TE zählt je Schritt einmal. Fehlende Zeitstempel und negative Zeitdifferenzen werden ausgeschlossen; 0 Minuten sind gültig.
@@ -4553,6 +4844,7 @@
           selector = `[data-pz-cell="${cell}"]`;
         }
         this._renderProzesszeiten();
+        if (metric) this._analyseStatus(`${metric === 'median' ? 'Median' : 'Durchschnitt'} für Prozesszeiten ausgewählt.`);
         const wrapper = host.querySelector('.pz-matrix-scroll');
         if (wrapper) wrapper.scrollLeft = scroll;
         host.querySelector(selector)?.focus({preventScroll:true});
@@ -4640,6 +4932,7 @@
         <div class="u-leer">Für ${datumsLabel(daten.datum)} gibt es keine vollständig bewertbare Gesamtdurchlaufzeit.</div>
         <div class="tz-summary">${daten.kandidaten} TEs zugeordnet · ${daten.fehlend} mit fehlenden Zeitstempeln · ${daten.ungueltig} mit ungültiger Zeitfolge</div></section>`;
 
+      if (daten.zuLang) return `<section class="tz-widget"><div class="pz-head"><div class="pz-title">TE-Zeitstrahl · Prozessverlauf</div>${auswahl}</div><p class="lb-context">Die Zeitstempel erstrecken sich über mehr als 90 Tage. Der Stundentakt wird für diese Tagesauswahl nicht gezeichnet. Durchlaufzeiten und Einzelanalysen bleiben verfügbar; bitte die Zeitstempel dieser TEs prüfen.</p><div class="lb-scroll" tabindex="0" role="region" aria-label="TE-Zeitstempel scrollen"><table class="lb-table"><thead><tr><th scope="col">TE</th><th scope="col">Ankunft</th><th scope="col">Fertigstellung</th><th scope="col">Durchlaufzeit</th></tr></thead><tbody>${daten.zeilen.map(z=>`<tr><td><button data-tz-te="${esc(encodeURIComponent(z.te.te))}">TE ${esc(z.te.te)} · Details</button></td><td>${fmtDateTimeVoll(new Date(z.startMs))}</td><td>${fmtDateTimeVoll(new Date(z.endeMs))}</td><td>${fmtProzessMin(z.dauerMin)}</td></tr>`).join('')}</tbody></table></div></section>`;
       const span = Math.max(1, daten.endeMs - daten.startMs);
       const pct = ms => Math.max(0, Math.min(100, (ms - daten.startMs) / span * 100));
       const startTag = datumSchluessel(new Date(daten.startMs));
@@ -4654,7 +4947,7 @@
       const stunden = Math.max(1, (daten.endeMs - daten.startMs) / 3600000);
       const stundenBreitePct = 100 / stunden;
       const schichtPos = daten.schichtSichtbar ? pct(daten.schichtMs) : null;
-      const schichtLinie = schichtPos == null ? '' : `<i class="tz-shiftline" style="left:${schichtPos.toFixed(3)}%" title="Schichtwechsel 14:30" aria-hidden="true"></i>`;
+      const schichtLinie=(daten.schichtMarkers??[]).map(ms=>`<i class="tz-shiftline" style="left:${pct(ms).toFixed(3)}%" title="Schichtwechsel ${fmtDateTimeVoll(new Date(ms))}" aria-hidden="true"></i>`).join('');
       const zeilen = daten.zeilen.map(z => {
         const totalLeft = pct(z.startMs), totalWidth = Math.max(0, pct(z.endeMs) - totalLeft);
         const segmente = z.segmente.map(seg => {
@@ -4681,14 +4974,14 @@
           <div class="tz-canvas" style="width:${daten.breitePx + 250}px">
             <div class="tz-axis"><div class="tz-axis-label">${datumsLabel(daten.datum)}</div><div class="tz-axis-track">
               ${ticks.map(t=>`<i class="tz-tick${t.tageswechsel ? ' tz-day-change' : ''}${t.letzter ? ' tz-last' : ''}" style="left:${t.pos.toFixed(3)}%"><span>${t.datumKurz ? `<b>${esc(t.datumKurz)}</b><em>${esc(t.label)}</em>` : esc(t.label)}</span></i>`).join('')}
-              ${schichtPos == null ? '' : `<i class="tz-shift-axis" style="left:${schichtPos.toFixed(3)}%"><span>Schichtwechsel 14:30</span></i>`}
+              ${(daten.schichtMarkers??[]).map(ms=>`<i class="tz-shift-axis" style="left:${pct(ms).toFixed(3)}%"><span>Schichtwechsel 14:30</span></i>`).join('')}
             </div></div>${zeilen}
           </div></div>
         <div class="tz-legend">${TE_ZEITSTRAHL_PHASES.map((def,i)=>`<span class="tz-legend-item"><i class="tz-swatch tz-phase-${i}"></i>${esc(def.label)}</span>`).join('')}
           <span class="tz-legend-item"><i class="tz-shift-swatch"></i>Schichtwechsel 14:30</span></div>
         <div class="tz-summary">${daten.alleZeilen} von ${daten.kandidaten} TEs mit gültiger Gesamtdurchlaufzeit · ${daten.fehlend} mit fehlenden Zeitstempeln · ${daten.ungueltig} mit ungültiger Zeitfolge${daten.weitere ? ` · weitere ${daten.weitere} TEs aus Darstellungsgründen nicht eingeblendet` : ''}. Zeile anklicken, um die TE-Details zu öffnen.</div>
         <details class="pz-info"><summary>Darstellung und Datenregeln</summary>
-          Jede Zeile zeigt die Gesamtdurchlaufzeit von Ankunft bis zur vollständigen Fertigstellung aller Positionen. Die Zeitachse verwendet durchgehend einen festen Stundentakt; bei Tageswechseln wird zusätzlich das Datum angezeigt. Mehrtägige Achsen sind horizontal scrollbar. Die fünf farbigen Abschnitte entsprechen den vorhandenen Prozessdefinitionen; bei einem fehlenden oder ungültigen Phasenpaar bleibt der betreffende Abschnitt frei. Die hervorgehobene Linie bei 14:30 markiert den Schichtwechsel, sofern dieser innerhalb der dargestellten Achse liegt. Die Tageszuordnung folgt der Zeitraumlogik des Widgets: geplanter Start, ersatzweise Ankunft, ersatzweise vollständige Fertigstellung. Bestandsarten bleiben unberücksichtigt. Pro Tag werden höchstens ${TE_ZEITSTRAHL_MAX_ZEILEN} vollständige TEs dargestellt; die Auswertung darüber bleibt unverändert.</details>
+          Jede Zeile zeigt die Gesamtdurchlaufzeit von Ankunft bis zur vollständigen Fertigstellung aller Positionen. Die Zeitachse verwendet durchgehend einen festen Stundentakt; bei Tageswechseln wird zusätzlich das Datum angezeigt. Mehrtägige Achsen sind horizontal scrollbar. Die fünf farbigen Abschnitte entsprechen den vorhandenen Prozessdefinitionen; bei einem fehlenden oder ungültigen Phasenpaar bleibt der betreffende Abschnitt frei. Die hervorgehobenen Linien bei 14:30 markieren den Schichtwechsel an jedem Tag innerhalb der dargestellten Achse. Phasen außerhalb der eigenen TE-Gesamtdurchlaufzeit werden nicht gezeichnet. Die Tageszuordnung folgt der Zeitraumlogik des Widgets: geplanter Start, ersatzweise Ankunft, ersatzweise vollständige Fertigstellung. Bestandsarten bleiben unberücksichtigt. Pro Tag werden höchstens ${TE_ZEITSTRAHL_MAX_ZEILEN} vollständige TEs dargestellt; die Auswertung darüber bleibt unverändert.</details>
       </section>`;
     }
 
@@ -4796,8 +5089,8 @@
       }
       if (defId === 'abwMenge') {
         return {
-          text:   a.wert == null ? '–' : fmtNum(a.wert),
-          klasse: a.wert == null ? 'q-nb' : (a.betroffen === 0 ? 'q-gut' : 'q-mittel'),
+          text:   a.einheiten?.length>1 ? a.einheiten.map(e=>`${fmtMenge(e.wert)} ${esc(e.einheit||'ohne Einheit')}`).join(' · ') : a.wert == null ? '–' : fmtMenge(a.wert) + (a.einheiten?.[0]?.einheit ? ' ' + esc(a.einheiten[0].einheit) : ''),
+          klasse: !a.bewertbar ? 'q-nb' : (a.betroffen === 0 ? 'q-gut' : 'q-mittel'),
           wert:   a.wert,
         };
       }
@@ -4874,13 +5167,13 @@
           : 'Keine vollständigen Durchlaufzeiten im Zeitraum';
         vglTxt  = fmtDauerAbs(v.wert);
       } else if (def.id === 'abwMenge') {
-        besserWennHoeher = false;
-        wertTxt = a.wert == null ? '–' : fmtNum(a.wert);
-        klasse  = a.wert == null ? 'q-nb' : (a.betroffen === 0 ? 'q-gut' : 'q-mittel');
-        subTxt  = a.bewertbar
-          ? `Σ Beträge · ${a.betroffen} von ${a.bewertbar} TEs mit Abweichung · netto ${fmtDelta(a.netto)}`
-          : 'Keine Soll-/Ist-Mengen im Zeitraum';
-        vglTxt  = v.wert == null ? '–' : fmtNum(v.wert);
+        besserWennHoeher=false;
+        const mengenText=a=>a.einheiten?.length>1 ? a.einheiten.map(e=>`${fmtMenge(e.wert)} ${e.einheit||'ohne Einheit'}`).join(' · ') : a.wert==null ? '–' : `${fmtMenge(a.wert)}${a.einheiten?.[0]?.einheit ? ` ${a.einheiten[0].einheit}` : ''}`;
+        wertTxt=`<span class="kpi-menge-list">${esc(mengenText(a))}</span>`;
+        klasse=!a.bewertbar ? 'q-nb' : a.betroffen===0 ? 'q-gut' : 'q-mittel';
+        const net=a.einheiten?.map(e=>`${fmtDelta(e.netto)} ${e.einheit||'ohne Einheit'}`).join(' · ') ?? fmtDelta(a.netto);
+        subTxt=a.bewertbar ? `Σ Beträge je Einheit · ${a.betroffen} von ${a.bewertbar} TEs mit Abweichung${a.nb ? ` · ${a.nb} nicht bewertbar` : ''} · netto ${net}` : 'Keine vollständigen Mengenabweichungen im Zeitraum';
+        vglTxt=esc(mengenText(v));
       } else {
         // Quoten-Kennzahlen (OTIF / Pünktlichkeit / Mengentreue)
         klasse  = quoteKlasse(a.wert);
@@ -4894,14 +5187,14 @@
 
       // Trend nur wenn beide Werte vorhanden sind
       let trendHTML = '<span class="kpi-trend gleich">–</span>';
-      if (aWert != null && vWert != null) {
+      if (aWert != null && vWert != null && (def.id !== 'abwMenge' || (a.einheiten?.[0]?.einheit ?? '')===(v.einheiten?.[0]?.einheit ?? ''))) {
         const delta = aWert - vWert;
         const rund  = Math.round(delta * 10) / 10;
         const cls   = rund === 0 ? 'gleich' : ((rund > 0) === besserWennHoeher ? 'auf' : 'ab');
         const pfeil = rund === 0 ? '±' : (rund > 0 ? '▲' : '▼');
         const betrag = def.id === 'durchlaufzeit'
           ? fmtDauerAbs(Math.abs(rund))
-          : (def.id === 'abwMenge' ? fmtNum(Math.abs(rund)) : fmtProzent(Math.abs(rund)));
+          : (def.id === 'abwMenge' ? fmtMenge(Math.abs(rund)) : `${Math.abs(rund).toLocaleString('de-DE',{maximumFractionDigits:1})} pp`);
         trendHTML = `<span class="kpi-trend ${cls}">${pfeil} ${betrag}</span>`;
       }
 
@@ -4965,7 +5258,7 @@
         const aktiv = this._sortFeld === s.feld;
         const pfeil = aktiv ? `<span class="sort-pfeil">${this._sortRichtung === 1 ? '▲' : '▼'}</span>` : '';
         return `<th class="${s.cls}${aktiv ? ' sortiert' : ''}" data-sort="${s.feld}"
-                    title="Nach ${esc(s.label)} sortieren">${esc(s.label)}${pfeil}</th>`;
+                    aria-sort="${aktiv ? (this._sortRichtung === 1 ? 'ascending' : 'descending') : 'none'}"><button type="button" title="${s.feld === 'abweichendeMengeAbs' ? 'Nach Einheitengruppe, dann nach Abweichungsbetrag sortieren' : 'Nach ' + esc(s.label) + ' sortieren'}">${esc(s.label)}${pfeil}</button></th>`;
       }).join('') + `<th class="mid" data-sort-none="1">Detail</th>`;
 
       const zeilen = sichtbar.map(te => this._teZeileHTML(te)).join('');
@@ -5017,11 +5310,11 @@
       // Pünktlichkeit zusätzlich mit der konkreten Abweichung in Minuten
       const abwMin = te.puenktlichkeitAbwMin;
       const puenktZusatz = (te.puenktlich === false && abwMin != null)
-        ? `<span class="tt-abw-min">+${abwMin} min</span>` : '';
+        ? `<span class="tt-abw-min">+${fmtAbweichungMin(abwMin)}</span>` : '';
 
       // Abweichende Menge: Vorzeichen erhalten, 0 dezent darstellen
       const abw = te.abweichendeMenge;
-      const abwHTML = abw == null
+      const abwHTML = te.mengenGruppen?.length>1 ? te.mengenGruppen.map(g=>`<span class="k-delta ${g.abweichung===0 ? 'null' : 'pos'}">${g.abweichungVollstaendig ? fmtDelta(g.abweichung) : 'n. b.'} ${esc(g.einheit||'ohne Einheit')}</span>`).join('<br>') : abw == null
         ? '<span class="tt-muted">n. b.</span>'
         : `<span class="k-delta ${abw === 0 ? 'null' : 'pos'}">${fmtDelta(abw)}</span>`;
 
@@ -5078,17 +5371,13 @@
     // Baut das komplette HTML für den Detail-View einer TE
     _detailHTML(te) {
       const status = te.status;
-      const isVerspaetet = te.planabweichung === true;
+      const isVerspaetet = te.planabweichung === true || te.puenktlich === false;
 
       // ── Kopf-Delta ──
       let deltaHTML = '';
-      if (te.abweichungGrund === 'überfällig') {
-        deltaHTML = `<span class="dh-delta pos">Überfällig ${fmtDauer(te.ueberfaelligMin)}</span>`;
-      } else if (te.abweichungGrund === 'verzögert') {
-        deltaHTML = `<span class="dh-delta pos">Verspätet ${fmtDauer(te.verzoegerungMin)}</span>`;
-      } else if (te.tsAnkunft) {
-        deltaHTML = `<span class="dh-delta neg">Pünktlich</span>`;
-      }
+      if (te.puenktlich === false) deltaHTML=`<span class="dh-delta pos">Verspätet +${fmtAbweichungMin(te.puenktlichkeitAbwMin)}</span>`;
+      else if (te.puenktlich === true) deltaHTML='<span class="dh-delta neg">Pünktlich</span>';
+      else deltaHTML='<span class="dh-delta">Pünktlichkeit n. b.</span>';
 
       // ── Warnleiste (dieselben Warnungen wie auf der Kachel) ──
       const warnHTML = te.warnungen.length
@@ -5107,7 +5396,8 @@
       const kopfFakten = [
         ['Interne TE',      esc(te.te)],
         ['Externe TE',      esc(te.teExt ?? '–')],
-        ['Ankunft',         (te.tsAngedockt ? fmtDateTime(te.tsAngedockt) : '–') + andockHint],
+        ['Ankunft am Kontrollpunkt', te.tsAnkunft ? fmtDateTimeVoll(te.tsAnkunft) : '–'],
+        ['Am Tor angedockt', (te.tsAngedockt ? fmtDateTimeVoll(te.tsAngedockt) : '–') + andockHint],
         ['Direktfahrt',     jaNein(te.direktfahrt)],
         ['Shuttle',         jaNein(te.shuttle)],
         ['Vorpalettierung', esc(te.vorpalettierung ?? '–')],
@@ -5139,7 +5429,7 @@
       ).join('');
 
       // ── Zeitvergleiche (die neun geforderten Paare) ──
-      const tatEnde = te.tsEntladenTat ?? te.tsEntladenEnde;
+      const tatEnde = te.tsEntladenTat;
       const vergleiche = [
         ['Geplanter Start → Geplantes Ende', te.geplantStart,   te.geplantEnde,     false],
         ['Ist-Start → Ist-Ende',             te.istStart,       te.istEnde,         false],
@@ -5147,26 +5437,28 @@
         ['Angedockt → Entladen gestartet',   te.tsAngedockt,    te.tsEntladenStart, null],
         ['Entladen gestartet → beendet',     te.tsEntladenStart, te.tsEntladenEnde, false],
         ['Entladen beendet → Tats. Ende',    te.tsEntladenEnde, tatEnde,            false],
+        ['Vereinnahmung: Tats. Ende → WE gebucht', tatEnde, te.tsWeBuchung, false],
         ['WE gebucht → Fertigstellung',      te.tsWeBuchung,    te.tsEinlagerung,   false],
         ['Ankunft → Fertigstellung',         te.tsAnkunft,      te.tsEinlagerung,   false],
         ['Angedockt → Fertigstellung',       te.tsAngedockt,    te.tsEinlagerung,   false],
       ];
       // Maximale Dauer für die proportionale Balkenbreite
       const maxDauer = Math.max(1, ...vergleiche
-        .map(([, von, bis]) => { const m = diffMin(von, bis); return (von && bis && m != null) ? Math.abs(m) : 0; }));
+        .map(([, von, bis]) => { const m = diffMin(von, bis); return (von && bis && m != null && m>=0) ? m : 0; }));
 
       const vglHTML = vergleiche.map(([label, von, bis, warn]) => {
         const min = diffMin(von, bis);
-        const hat = von && bis && min != null;
+        const ungueltig = min != null && min<0;
+        const hat = von && bis && Number.isFinite(min) && !ungueltig;
         // Schwellwert-Automatik nur wo nicht explizit gesetzt
         const kritisch = warn === true
           || (warn == null && hat && min > VERZOEGERUNG_SCHWELLE_MIN);
-        const wertTxt = hat ? fmtDauer(min) : '–';
+        const wertTxt = ungueltig ? 'n. b. (Zeitfolge)' : hat ? fmtDauer(min) : '–';
         const zeitTxt = (von && bis)
-          ? `${fmtTime(von)} → ${fmtTime(bis)}`
-          : (von ? `${fmtTime(von)} → …` : '…');
+          ? `${fmtDateTimeVoll(von)} → ${fmtDateTimeVoll(bis)}`
+          : (von ? `${fmtDateTimeVoll(von)} → …` : '…');
         // Proportionaler Balken: zeigt die Dauer relativ zur längsten Phase.
-        const breite = hat ? Math.max(3, (Math.abs(min) / maxDauer) * 100) : 0;
+        const breite = hat ? (min / maxDauer) * 100 : 0;
         const balken = hat
           ? `<div class="vgl-bar"><div class="vgl-bar-fill ${kritisch ? 'bad' : 'ok'}" style="width:${breite.toFixed(0)}%"></div></div>`
           : `<div class="vgl-bar"></div>`;
@@ -5231,8 +5523,8 @@
         { ts: te.tsAnkunft,       label: 'Ankunft',       kurz: 'AN',  optional: false },
         { ts: te.tsAngedockt,     label: 'Angedockt',     kurz: 'AD',  optional: false },
         { ts: te.tsEntladenStart, label: 'Entladen ab',   kurz: 'E▶', optional: false },
-        { ts: te.tsEntladenEnde ?? te.tsEntladenTat,
-                                  label: 'Entladen bis',  kurz: 'E■', optional: false },
+        { ts: te.tsEntladenEnde, label: 'Entladen beendet', kurz: 'E■', optional: false },
+        { ts: te.tsEntladenTat, label: 'Tats. Entladeende', kurz: 'TE', optional: false },
         { ts: te.tsWeBuchung,     label: 'WE gebucht',    kurz: 'WE',  optional: false },
         { ts: te.tsEinlagerung,   label: 'Fertigstellung',kurz: 'FS',  optional: false },
         { ts: te.tsAbfahrt,       label: 'Abfahrt',       kurz: 'AB',  optional: true  },
@@ -5263,23 +5555,9 @@
       const spanMs  = endMs - startMs || 1;
       const pctRaw = (d) => ((d.getTime() - startMs) / spanMs * 100);
 
-      // ── Kollisions-Vermeidung ──
-      // Rohe Positionen berechnen, dann Punkte die zu nah sind auseinanderziehen.
-      const MIN_ABSTAND = 13; // Prozent Mindestabstand zwischen Punkten
-      let positionen = punkte.map(p => ({ ...p, pos: pctRaw(p.ts) }));
-      positionen.sort((a, b) => a.pos - b.pos);
-      for (let i = 1; i < positionen.length; i++) {
-        const delta = positionen[i].pos - positionen[i - 1].pos;
-        if (delta < MIN_ABSTAND) {
-          positionen[i].pos = positionen[i - 1].pos + MIN_ABSTAND;
-        }
-      }
-      // Falls rechts rausgelaufen: alles zurückskalieren
-      const maxPos = positionen[positionen.length - 1].pos;
-      if (maxPos > 96) {
-        const faktor = 96 / maxPos;
-        positionen.forEach(p => p.pos = p.pos * faktor);
-      }
+      // Zeitpunkte bleiben maßstabstreu. Die Ereignisliste darunter vermeidet
+      // überlappende Beschriftungen, ohne Soll-/Ist-Positionen zu verschieben.
+      const positionen=punkte.map(p=>({...p,pos:pctRaw(p.ts)})).sort((a,b)=>a.pos-b.pos);
 
       // ── Soll-Band (Plan) — graues gestricheltes Band oberhalb der Achse,
       //    mit senkrechten Verbindungslinien nach unten zur Ist-Achse, damit
@@ -5330,32 +5608,11 @@
         istLinieHTML = `<div class="zs-ist-linie" style="left:${first.toFixed(2)}%;width:${(last - first).toFixed(2)}%;background:${farbe}"></div>`;
       }
 
-      // Punkte + Labels (abwechselnd oben/unten gegen Überlappung)
-      const punkteHTML = positionen.map((p, i) => {
-        const oben = i % 2 === 0;
-        const dotCls = p.optional
-          ? 'zs-dot optional'
-          : (isVerspaetet ? 'zs-dot late' : 'zs-dot done');
-        return `
-          <div class="zs-point ${oben ? 'oben' : 'unten'}" style="left:${p.pos.toFixed(2)}%">
-            <div class="${dotCls}" title="${esc(p.label)}: ${fmtDateTime(p.ts)}"></div>
-            <div class="zs-label">
-              <div class="zs-label-name">${esc(p.label)}${p.optional ? ' <span class="zs-opt">(opt.)</span>' : ''}</div>
-              <div class="zs-label-time">${fmtTime(p.ts)}</div>
-            </div>
-          </div>`;
-      }).join('');
-
-      return `
-        <div class="zs-wrap">
-          <div class="zs-track">
-            <div class="zs-baseline"></div>
-            ${sollHTML}
-            ${istLinieHTML}
-            ${punkteHTML}
-          </div>
-        </div>`;
+      const punkteHTML=positionen.map(p=>`<div class="zs-point" style="left:${p.pos.toFixed(2)}%"><div class="zs-dot ${p.optional ? 'optional' : isVerspaetet ? 'late' : 'done'}" title="${esc(p.label)}: ${fmtDateTimeVoll(p.ts)}"></div></div>`).join('');
+      const ereignisse=positionen.map(p=>`<div class="zs-event"><strong>${esc(p.label)}${p.optional ? ' (optional)' : ''}</strong><span>${fmtDateTimeVoll(p.ts)}</span></div>`).join('');
+      return `<div class="zs-wrap"><div class="zs-track"><div class="zs-baseline"></div>${sollHTML}${istLinieHTML}${punkteHTML}</div></div><div class="zs-event-list">${ereignisse}</div><div class="pz-note">Zeitpunkte auf gemeinsamer, maßstabstreuer Achse. Die Ereignisliste zeigt die vollständigen Datums- und Zeitangaben.</div>`;
     }
+
 
     // Baut die Produkt-Tabelle
     _produktTabelleHTML(te) {
@@ -5378,8 +5635,8 @@
           ? `<span class="pt-warn">${p.bestand == null ? '–' : '0'}</span>`
           : esc(String(p.bestand));
         const pa1 = Number.isFinite(p.pa1) && p.pa1 > 0 ? p.pa1 : null;
-        const palettenBerechnet = Number.isFinite(p.mengeIst) && p.mengeIst >= 0 && pa1 != null
-          ? Math.ceil(p.mengeIst / pa1) : null;
+        const konflikt=te.produktZusammenfassung?.produkte.some(g=>g.nr===String(p.nr) && g.einheit===(p.einheit||'') && (g.packmittel?.key??g.packmittel?.text??null)===(p.packmittel?.key??p.packmittel?.text??null) && g.pa1Konflikt);
+        const palettenBerechnet=konflikt ? null : palettenAufrunden(p.mengeIst,pa1);
 
         return `
           <tr>
@@ -5387,8 +5644,8 @@
               <div class="pt-prod-nr">${esc(p.nr)}</div>
               <div class="pt-prod-name">${esc(p.name)}</div>
             </td>
-            <td class="pt-num">${esc(String(p.menge ?? 0))} ${esc(p.einheit ?? '')}</td>
-            <td class="pt-num">${pa1 == null ? '<span class="pt-muted">–</span>' : esc(fmtMenge(pa1))}</td>
+            <td class="pt-num">${p.mengeIst == null ? '<span class="pt-muted">n. b.</span>' : esc(fmtMenge(p.mengeIst))} ${esc(p.einheit ?? '')}</td>
+            <td class="pt-num">${pa1 == null ? '<span class="pt-muted">–</span>' : esc(fmtMenge(pa1))+(konflikt ? ' (Konflikt)' : '')}</td>
             <td class="pt-num">${palettenBerechnet == null ? '<span class="pt-muted">n. b.</span>' : palettenBerechnet}</td>
             <td>${val(p.halle)}</td>
             <td>${kt(p.hwg)}</td>
@@ -5400,7 +5657,7 @@
             <td class="pt-center">${flag(p.sperrgut, true)}</td>
             <td class="pt-center">${val(p.qpGruppe)}</td>
             <td>${krit}</td>
-            <td class="pt-time-cell">${p.tsEinlagerung ? fmtTime(p.tsEinlagerung) : '<span class="pt-muted">offen</span>'}</td>
+            <td class="pt-time-cell">${p.tsEinlagerung ? fmtDateTimeVoll(p.tsEinlagerung) : '<span class="pt-muted">offen</span>'}</td>
           </tr>`;
       }).join('');
 
@@ -5413,23 +5670,23 @@
                 <th class="pt-num">Menge</th>
                 <th class="pt-num">PA1</th>
                 <th class="pt-num">Pal. berechnet</th>
-                <th>Halle</th>
-                <th>HWG</th>
-                <th>Packmittel</th>
-                <th>Einl.-KZ</th>
-                <th>Bestand</th>
+                <th scope="col">Halle</th>
+                <th scope="col">HWG</th>
+                <th scope="col">Packmittel</th>
+                <th scope="col">Einl.-KZ</th>
+                <th scope="col">Bestand</th>
                 <th class="pt-center">Foto</th>
                 <th class="pt-center">Bänder</th>
                 <th class="pt-center">Sperrgut</th>
                 <th class="pt-center">QP</th>
-                <th>Kritisch</th>
-                <th>Fertigst.</th>
+                <th scope="col">Kritisch</th>
+                <th scope="col">Fertigst.</th>
               </tr>
             </thead>
             <tbody>${zeilen}</tbody>
           </table>
         </div>
-        <div class="pz-note">Paletten je Tabellenzeile: Menge ÷ PA1, aufgerundet. Die TE-Gesamtsumme fasst zunächst identische Produkt-, Einheiten-, Packmittel- und PA1-Gruppen zusammen und rundet erst danach auf. Fehlendes oder ungültiges PA1 bleibt nicht bewertbar.</div>`;
+        <div class="pz-note">Paletten je Tabellenzeile: Menge ÷ PA1, aufgerundet. Die TE-Gesamtsumme fasst zunächst identische Produkt-, Einheiten-, Packmittel- und PA1-Gruppen zusammen und rundet erst danach auf. Fehlendes, ungültiges oder widersprüchliches PA1 bleibt nicht bewertbar.</div>`;
     }
 
     // ── Gesamt-Render ─────────────────────────────────────────────────────
@@ -5439,6 +5696,8 @@
       this._hideLoading();
 
       if (this._teMap.size === 0) {
+        this._activeTE=null;this._lieferantDetailKey=null;this._spediteurDetailKey=null;
+        this._switchView('uebersicht');
         this._showEmpty('Keine Transporteinheiten vorhanden');
         return;
       }
@@ -5513,6 +5772,12 @@
       if (!dataBinding) {
         this._log('myDataSource: dataBinding ist null/undefined — SAC hat (noch) keine Bindung übergeben', 'warn');
         this._showLoading();
+        return;
+      }
+
+      if (['error','failed','failure'].includes(String(state).toLowerCase())) {
+        this._watchdogStop();
+        this._showEmpty(`Daten konnten nicht geladen werden${fehlertext ? ': '+fehlertext : '.'}`);
         return;
       }
 
@@ -5753,7 +6018,7 @@
 
     // Öffnet die Detailsicht für eine TE-Nummer (auch aus SAC-Skripten heraus).
     showDetail(teNr) {
-      const key = String(teNr ?? '').replace(/^0+/, '');
+      const key = ohneNullen(String(teNr ?? ''));
       if (!this._teMap.has(key)) {
         console.warn(`[WE-Analyse] showDetail: TE ${teNr} nicht in den Daten`);
         return;
@@ -5774,6 +6039,65 @@
         || b.basis.mengentreu.bewertbar - a.basis.mengentreu.bewertbar
         || a.label.localeCompare(b.label,'de') || a.key.localeCompare(b.key,'de'))
       .slice(0,10).map((g,i) => ({...g, rang:i+1}));
+  }
+
+  // Positionsauswertung unabhängig von der TE-Mengentreue und Top-10-Auswahl.
+  // Eine TE darf mehreren Lieferanten/Einheiten/HWG zugeordnet sein, zählt
+  // innerhalb jeder Gruppe aber nur einmal. Die Anzahl der Positionen meint
+  // BW-Produktzeilen; ohne Positions-ID ist keine weitere Entdopplung möglich.
+  function lieferantenMengenabweichungen(tes) {
+    const gruppen = new Map(), teSet = new Set(), alleTeSet = new Set(), lieferantSet = new Set();
+    let ohneLieferant = 0, nichtBewertbar = 0, anzahlPositionen = 0, ohneProduktdaten = 0;
+    const merkmal = (kt, leer) => {
+      const key = isNull(kt?.key) ? null : String(kt.key).trim();
+      const text = isNull(kt?.text) ? null : String(kt.text).trim();
+      return {key:key ?? (text ? `text:${text}` : null), label:keyTextStr({key,text}) ?? leer};
+    };
+    const gruppeFuer = (supplier, te, p = {}) => {
+        const transport = merkmal(p.transportmittelBewertung ?? {key:te.transportmittel,text:te.transportmittelName}, 'Nicht zugeordnet');
+        const hwg = merkmal(p.hwg, 'Nicht gepflegt');
+        const einheit = isNull(p.einheit) ? null : String(p.einheit).trim();
+        const key = JSON.stringify([supplier.key,transport.key,einheit,hwg.key]);
+        if (!gruppen.has(key)) gruppen.set(key, {
+          key, lieferantKey:supplier.key, lieferantNr:supplier.nr, lieferantLabel:supplier.label,
+          transportmittelKey:transport.key, transportmittelLabel:transport.label,
+          einheit, einheitLabel:einheit ?? 'Nicht angegeben', hwgKey:hwg.key, hwgLabel:hwg.label,
+          teSet:new Set(), alleTeSet:new Set(), lueckenTeSet:new Set(), anzahlPositionen:0, differenzmenge:0,
+          bewertbarePositionen:0, nichtBewertbar:0, ohneProduktdaten:0,
+        });
+        const g = gruppen.get(key);
+        g.alleTeSet.add(te.te); alleTeSet.add(te.te); lieferantSet.add(supplier.key);
+        return g;
+    };
+    for (const te of tes ?? []) {
+      const zugeordneteLieferanten = new Set();
+      for (const p of te.produkte ?? []) {
+        const bewertbar = Number.isFinite(p.mengeAbweichung);
+        if (!bewertbar) nichtBewertbar++;
+        const supplier = p.lieferantBewertung ?? (te.lieferantenBewertung?.length === 1 ? te.lieferantenBewertung[0] : null);
+        if (!supplier?.key) { ohneLieferant++; continue; }
+        zugeordneteLieferanten.add(supplier.key);
+        const g = gruppeFuer(supplier, te, p);
+        if (!bewertbar) { g.nichtBewertbar++; g.lueckenTeSet.add(te.te); continue; }
+        g.bewertbarePositionen++;
+        g.differenzmenge += p.mengeAbweichung;
+        if (p.mengeAbweichung === 0) continue;
+        g.teSet.add(te.te);
+        g.anzahlPositionen++;
+        teSet.add(te.te); anzahlPositionen++;
+      }
+      // Warensender ohne auswertbare Produktzeile ebenfalls sichtbar halten.
+      for (const supplier of te.lieferantenBewertung ?? []) {
+        if (!supplier.key || zugeordneteLieferanten.has(supplier.key)) continue;
+        const g = gruppeFuer(supplier, te);
+        g.ohneProduktdaten++; g.lueckenTeSet.add(te.te); ohneProduktdaten++;
+      }
+    }
+    return {gruppen:[...gruppen.values()].map(({teSet,alleTeSet,lueckenTeSet,...g}) => ({...g,
+      anzahlTe:teSet.size, anzahlTesGesamt:alleTeSet.size, anzahlTesMitDatenluecke:lueckenTeSet.size,
+      differenzmenge:g.bewertbarePositionen ? g.differenzmenge : null})),
+      anzahlTes:teSet.size, anzahlTesGesamt:alleTeSet.size, anzahlLieferanten:lieferantSet.size,
+      anzahlPositionen, ohneLieferant, nichtBewertbar, ohneProduktdaten};
   }
 
   // Lieferantenvergleich: eine eindeutig zugeordnete TE zählt einmal.
@@ -5892,6 +6216,28 @@
         || b.basis.puenktlich.bewertbar - a.basis.puenktlich.bewertbar
         || a.label.localeCompare(b.label,'de') || a.key.localeCompare(b.key,'de'))
       .slice(0,10).map((g,i) => ({...g, rang:i+1}));
+  }
+
+  function spediteurePuenktlichkeitGesamt(tes, toleranzMin = 30) {
+    const daten = aggregiereSpediteure(tes), gruppen = [];
+    for (const carrier of daten.gruppen) {
+      const transports = new Map();
+      for (const te of carrier.tes) {
+        const key = isNull(te.transportmittel) ? (isNull(te.transportmittelName) ? null : `text:${te.transportmittelName}`) : String(te.transportmittel);
+        if (!transports.has(key)) transports.set(key, {key:JSON.stringify([carrier.key,key]),carrierKey:carrier.key,label:carrier.label,nr:carrier.nr,
+          transportLabel:keyTextStr({key:te.transportmittel,text:te.transportmittelName}) ?? 'Nicht zugeordnet',tes:[]});
+        const g = transports.get(key); if (!g.tes.some(t => t.te === te.te)) g.tes.push(te);
+      }
+      for (const g of transports.values()) {
+        const q = aggregiereBasis(g.tes).puenktlich;
+        const late = spediteurAbweichungen(g,toleranzMin);
+        const summe = q.bewertbar ? late.reduce((n,a) => n+a.abweichungMin,0) : null;
+        gruppen.push({...g,basis:aggregiereBasis(g.tes),anzahl:g.tes.length,puenktlich:q.ok,verspaetet:q.bewertbar-q.ok,nb:q.nb,quote:q.wert,
+          summe,mittel:late.length ? summe/late.length : null});
+      }
+    }
+    return {gruppen,anzahlSpediteure:daten.gruppen.length,anzahlTes:gruppen.reduce((n,g)=>n+g.anzahl,0),
+      verspaetet:gruppen.reduce((n,g)=>n+g.verspaetet,0),fehlend:daten.fehlend,mehrdeutig:daten.mehrdeutig};
   }
 
   // Frachtführervergleich: eine eindeutig zugeordnete TE zählt einmal.
