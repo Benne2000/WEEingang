@@ -1,6 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
 //  SAP Custom Widget – Wareneingang Analyse (WE-Analyse)
-//  JavaScript-Arbeitsstand 2.1.40 – stabile Partnerdetails und Diagrammbedienung
+//  JavaScript-Arbeitsstand 2.1.44 – positionsbezogene Mengentreue und separate Nullpositionen
 //
 //  Umbau des Live-Trackers zur nachträglichen Auswertung.
 //
@@ -693,7 +693,7 @@
       if (best != null && best !== '' && best !== '#') te._bestellSet.add(String(best));
 
       const prodNr = ohneNullen(readDim(row, 'dimension_produkt_nr', 'MATNR'));
-      if (prodNr) {
+      if (prodNr || !isNull(lief) || readVal(row, 'value_menge', 'MENGE') != null || readVal(row, 'value_menge_soll', 'MENGE_SOLL') != null || readVal(row, 'value_menge_abweichung', 'MENGE_ABW') != null) {
         // Ist-Menge (geliefert) und Soll-Menge (bestellt/avisiert).
         const mengeIst  = readVal(row, 'value_menge', 'MENGE');
         const mengeSoll = readVal(row, 'value_menge_soll', 'MENGE_SOLL');
@@ -933,14 +933,81 @@
     te.anlieferpaletten = te.produktZusammenfassung.paletten;
   }
 
+  // Ohne angebundene Positionsnummer: Produkt je Anlieferung und Einheit als
+  // Positionsersatz. Wiederholte Quellzeilen bleiben als Mengen erhalten;
+  // ihre gegenläufigen Abweichungen dürfen eine Verletzung nicht verdecken.
+  function mengenPositionsSchluessel(te, p) {
+    const anlieferung = p.liefernummer ?? (te.anlieferungen?.length === 1 ? te.anlieferungen[0] : null);
+    return JSON.stringify([te.te, anlieferung ?? null, p.nr ?? null, p.einheit ?? '']);
+  }
+
+  function istNullposition(p) { return p?.mengeIst === 0; }
+
+  function positionsAbweichung(p) {
+    const wert = Number.isFinite(p?.mengeAbweichung) ? p.mengeAbweichung
+      : Number.isFinite(p?.mengeIst) && Number.isFinite(p?.mengeSoll) ? p.mengeIst-p.mengeSoll : null;
+    if (wert == null) return null;
+    const skala = Math.max(Math.abs(Number.isFinite(p.mengeIst) ? p.mengeIst : 0), Math.abs(Number.isFinite(p.mengeSoll) ? p.mengeSoll : 0), Math.abs(wert));
+    return Math.abs(wert) <= Number.EPSILON*skala*8 ? 0 : wert;
+  }
+
+  function positionMengentreu(p, cfg = CFG_DEFAULT) {
+    if (istNullposition(p)) return null;
+    const abw = positionsAbweichung(p);
+    if (abw == null) return null;
+    if (Number.isFinite(p.mengeSoll) && p.mengeSoll !== 0) {
+      return Math.abs(abw)/Math.abs(p.mengeSoll)*100 <= cfg.mengenToleranzPct;
+    }
+    return abw === 0;
+  }
+
+  function mengenPositionen(te, cfg = CFG_DEFAULT) {
+    const normal = new Map(), nullen = new Map();
+    for (const p of te.produkte ?? []) {
+      const nullposition = istNullposition(p), map = nullposition ? nullen : normal;
+      const key = mengenPositionsSchluessel(te, p);
+      if (!map.has(key)) map.set(key, {
+        key, te:te.te, teExt:te.teExt, datum:te.ankerDatum,
+        geplantStart:te.geplantStart, anlieferung:p.liefernummer ?? (te.anlieferungen?.length === 1 ? te.anlieferungen[0] : null),
+        nr:p.nr, name:p.name, einheit:p.einheit ?? '', nullposition,
+        lieferant:p.lieferantBewertung?.label ?? te.lieferantName ?? keyTextStr(te.lieferant),
+        ist:0,soll:0,abweichung:0,abweichungAbs:0,
+        istVollstaendig:true,sollVollstaendig:true,abweichungVollstaendig:true,
+        bewertungen:[],abweichungen:[],quellzeilen:0,
+      });
+      const g=map.get(key), abw=positionsAbweichung(p);
+      g.quellzeilen++;
+      if (Number.isFinite(p.mengeIst)) g.ist += p.mengeIst; else g.istVollstaendig=false;
+      if (Number.isFinite(p.mengeSoll)) g.soll += p.mengeSoll; else g.sollVollstaendig=false;
+      if (abw == null) g.abweichungVollstaendig=false;
+      else { g.abweichung+=abw; g.abweichungAbs+=Math.abs(abw); if(abw!==0) g.abweichungen.push(abw); }
+      if (!nullposition) g.bewertungen.push(positionMengentreu(p,cfg));
+    }
+    const fertig = map => [...map.values()].map(g => {
+      const skala=Math.max(Math.abs(g.ist),Math.abs(g.soll),g.abweichungAbs);
+      if (Math.abs(g.abweichung)<=Number.EPSILON*skala*8) g.abweichung=0;
+      return {...g, mengentreu:g.nullposition ? null : g.bewertungen.some(v=>v===false) ? false
+        : g.bewertungen.some(v=>v==null) ? null : true};
+    });
+    return {positionen:fertig(normal),nullpositionen:fertig(nullen)};
+  }
+
+  function nullpositionenListe(tes) {
+    return (tes ?? []).flatMap(te => te.nullpositionen ?? mengenPositionen(te).nullpositionen)
+      .sort((a,b)=>(b.datum?.getTime?.() ?? -Infinity)-(a.datum?.getTime?.() ?? -Infinity)
+        || String(a.te).localeCompare(String(b.te),'de',{numeric:true})
+        || String(a.anlieferung ?? '').localeCompare(String(b.anlieferung ?? ''),'de',{numeric:true})
+        || String(a.nr ?? '').localeCompare(String(b.nr ?? ''),'de',{numeric:true}));
+  }
+
   // ── Auswertungs-Kennzahlen je TE ─────────────────────────────────────────
   //
   //  Pünktlichkeit  – Ankunft am Kontrollpunkt gegen das geplante Zeitfenster.
   //                   Zu früh zählt als pünktlich (Abweichung = 0).
   //                   Nicht bewertbar ohne geplanten Start oder ohne Ankunft.
-  //  Mengentreue    – Summe Ist-Menge gegen Summe Soll-Menge über alle
-  //                   Positionen. Nicht bewertbar ohne Soll-Menge.
-  //  Abweichende Menge – Ist − Soll (vorzeichenbehaftet) je TE.
+  //  Mengentreue    – jede reguläre Position muss die Mengentoleranz erfüllen.
+  //                   Ist=0 separat ausgeschlossen; keine Nettokompensation.
+  //  Abweichende Menge – Summe der Positionsbeträge; Netto separat je Einheit.
   //  Durchlaufzeit  – Ankunft → Fertigstellung in Minuten.
   //  OTIF           – pünktlich UND mengentreu. Nicht bewertbar sobald eine
   //                   der beiden Teilkennzahlen nicht bewertbar ist.
@@ -963,34 +1030,37 @@
     }
 
     // ── Mengentreue / Abweichende Menge ──
+    const posDaten=mengenPositionen(te,cfg);
+    te.mengenPositionen=posDaten.positionen;
+    te.nullpositionen=posDaten.nullpositionen;
     const mengenGruppen = new Map();
-    for (const p of te.produkte) {
+    for (const p of te.mengenPositionen) {
       const einheit=isNull(p.einheit) ? '' : String(p.einheit).trim();
-      if (!mengenGruppen.has(einheit)) mengenGruppen.set(einheit,{einheit,ist:0,soll:0,abweichung:0,abweichungSkala:0,istVollstaendig:true,sollVollstaendig:true,abweichungVollstaendig:true});
-      const g=mengenGruppen.get(einheit);
-      for (const [quelle,ziel,voll] of [['mengeIst','ist','istVollstaendig'],['mengeSoll','soll','sollVollstaendig'],['mengeAbweichung','abweichung','abweichungVollstaendig']]) {
-        if (Number.isFinite(p[quelle])) {
-          g[ziel]+=p[quelle];
-          if (quelle==='mengeAbweichung') g.abweichungSkala+=Math.abs(p[quelle]);
-        } else g[voll]=false;
+      if (!mengenGruppen.has(einheit)) mengenGruppen.set(einheit,{
+        einheit,ist:0,soll:0,abweichung:0,abweichungAbs:0,positionen:[],
+        istVollstaendig:true,sollVollstaendig:true,abweichungVollstaendig:true
+      });
+      const g=mengenGruppen.get(einheit);g.positionen.push(p);
+      for (const [wert,voll] of [['ist','istVollstaendig'],['soll','sollVollstaendig'],['abweichung','abweichungVollstaendig']]) {
+        g[wert]+=p[wert];g[voll]=g[voll] && p[voll];
       }
+      g.abweichungAbs+=p.abweichungAbs;
     }
     te.mengenGruppen=[...mengenGruppen.values()].map(g=>{
-      // Nur Rundungsreste nahe der Maschinenpräzision neutralisieren.
-      // Keine feste Dezimalgrenze: echte kleine Mengenabweichungen bleiben erhalten.
-      const epsilon=Number.EPSILON*Math.max(Math.abs(g.ist),Math.abs(g.soll),g.abweichungSkala)*8;
-      if (g.abweichungVollstaendig && Math.abs(g.abweichung)<=epsilon) g.abweichung=0;
+      const epsilon=Number.EPSILON*Math.max(Math.abs(g.ist),Math.abs(g.soll),g.abweichungAbs)*8;
+      if (Math.abs(g.abweichung)<=epsilon) g.abweichung=0;
       const pct=g.abweichungVollstaendig && g.sollVollstaendig && g.soll!==0 ? g.abweichung/g.soll*100 : null;
-      return {...g,pct,mengentreu:!g.abweichungVollstaendig ? null : pct!=null ? Math.abs(pct)<=cfg.mengenToleranzPct : g.abweichung===0};
+      return {...g,pct,mengentreu:g.positionen.some(p=>p.mengentreu===false) ? false
+        : g.positionen.some(p=>p.mengentreu==null) ? null : true};
     });
     const einzel=te.mengenGruppen.length===1 ? te.mengenGruppen[0] : null;
     te.mengeIst=einzel?.istVollstaendig ? einzel.ist : null;
     te.mengeSoll=einzel?.sollVollstaendig ? einzel.soll : null;
     te.abweichendeMenge=einzel?.abweichungVollstaendig ? einzel.abweichung : null;
-    te.abweichendeMengeAbs=te.abweichendeMenge==null ? null : Math.abs(te.abweichendeMenge);
+    te.abweichendeMengeAbs=einzel?.abweichungVollstaendig ? einzel.abweichungAbs : null;
     te.mengenAbwPct=einzel?.pct ?? (einzel?.abweichungVollstaendig && einzel.abweichung===0 ? 0 : null);
     te.mengentreu=te.mengenGruppen.some(g=>g.mengentreu===false) ? false
-      : !te.mengenGruppen.length || te.mengenGruppen.some(g=>g.mengentreu==null) ? null : true;
+      : !te.mengenPositionen.length || te.mengenGruppen.some(g=>g.mengentreu==null) ? null : true;
 
     // ── Durchlaufzeit: Ankunft → Fertigstellung ──
     te.durchlaufzeitMin = (te.tsAnkunft && te.tsEinlagerung)
@@ -1082,15 +1152,17 @@
     }
 
     // 7) Mengenabweichung — neue Kennzahl, auch im Detail sichtbar machen.
-    if (te.mengenGruppen?.some(g=>g.abweichungVollstaendig && g.abweichung!==0) || te.abweichendeMenge != null && te.abweichendeMenge !== 0) {
+    if (te.mengenPositionen?.some(p=>p.abweichungAbs>0) || te.abweichendeMenge != null && te.abweichendeMenge !== 0) {
       w.push({
         typ: 'menge', icon: '⚖', farbe: 'warn',
         label: 'Mengenabweichung',
-        tooltip: `Abweichende Menge: ${te.mengenGruppen?.length ? te.mengenGruppen.filter(g=>g.abweichungVollstaendig).map(g=>`${fmtDelta(g.abweichung)} ${g.einheit||'ohne Einheit'}`).join(' · ') : fmtDelta(te.abweichendeMenge)}`
+        tooltip: `Positionsabweichungen (Beträge; Netto separat): ${te.mengenGruppen?.length ? te.mengenGruppen.filter(g=>g.abweichungVollstaendig).map(g=>`${fmtMenge(g.abweichungAbs)} ${g.einheit||'ohne Einheit'} (netto ${fmtDelta(g.abweichung)})`).join(' · ') : fmtDelta(te.abweichendeMenge)}`
                + (te.mengeSoll != null ? ` (Soll ${fmtMenge(te.mengeSoll)} / Ist ${te.mengeIst == null ? 'n. b.' : fmtMenge(te.mengeIst)})` : ''),
       });
     }
 
+    if (te.nullpositionen?.length) w.push({typ:'nullpositionen',icon:'ⓘ',farbe:'info',label:'Nullpositionen ausgeschlossen',
+      tooltip:`${te.nullpositionen.length} Position(en) mit Ist=0; aus Mengentreue und Mengenabweichungswertung ausgeschlossen. Originaldaten bleiben in den Details sichtbar.`});
     return w;
   }
 
@@ -1205,6 +1277,49 @@
     };
   }
 
+  // Anlieferungs-OTIF: Belegnummer einmal über alle geladenen beteiligten TEs.
+  // Jede reguläre Positionsabweichung zählt, unabhängig von der TE-Toleranz.
+  function anlieferungsOtif(tes, alleTes=tes) {
+    const nummern=te=>[...new Set([...(te.anlieferungen ?? []),...(te.produkte ?? []).map(p=>p.liefernummer)].filter(n=>!isNull(n)).map(String))];
+    const auswahl=new Set((tes ?? []).flatMap(nummern)),auswahlTes=new Set((tes ?? []).map(te=>te.te));
+    const relevant=(alleTes ?? []).filter(te=>auswahlTes.has(te.te)||nummern(te).some(n=>auswahl.has(n)));
+    const gruppen=new Map();let fehlendeBelegPositionen=0,tesOhneBeleg=0,fehlendeProdukte=0,nichtZuordenbareNullpositionen=0;
+    const gruppe=(nr,te)=>{
+      if(!auswahl.has(nr))return null;
+      if(!gruppen.has(nr))gruppen.set(nr,{beleg:nr,tes:new Map(),bewertungen:[],positionen:new Set(),nullpositionen:new Set(),quellzeilen:0,zuordnungUnklar:false});
+      const g=gruppen.get(nr);g.tes.set(te.te,te);return g;
+    };
+    for(const te of relevant) {
+      const belege=nummern(te);for(const nr of belege)gruppe(nr,te);
+      if(!belege.length)tesOhneBeleg++;
+      for(const p of te.produkte ?? []) {
+        const nr=!isNull(p.liefernummer)?String(p.liefernummer):belege.length===1?belege[0]:null;
+        if(nr==null){
+          if(istNullposition(p)){nichtZuordenbareNullpositionen++;continue;}
+          fehlendeBelegPositionen++;
+          for(const kandidat of belege){const g=gruppe(kandidat,te);if(g)g.zuordnungUnklar=true;}
+          continue;
+        }
+        const g=gruppe(nr,te);if(!g)continue;
+        const key=JSON.stringify([p.nr ?? null,p.einheit ?? '']);g.quellzeilen++;
+        if(isNull(p.nr))fehlendeProdukte++;
+        if(istNullposition(p)){g.nullpositionen.add(key);continue;}
+        g.positionen.add(key);const abw=positionsAbweichung(p);g.bewertungen.push(abw==null?null:abw===0);
+      }
+    }
+    const belege=[...gruppen.values()].map(g=>{
+      const teListe=[...g.tes.values()],ausgeschlossen=g.quellzeilen>0&&!g.bewertungen.length&&!g.zuordnungUnklar;
+      const mengenOk=g.bewertungen.some(v=>v===false)?false:g.zuordnungUnklar||!g.bewertungen.length||g.bewertungen.some(v=>v==null)?null:true;
+      const puenktlich=teListe.some(te=>te.puenktlich===false)?false:teListe.some(te=>te.puenktlich==null)?null:true;
+      const otif=ausgeschlossen?null:mengenOk===false||puenktlich===false?false:mengenOk==null||puenktlich==null?null:true;
+      return {beleg:g.beleg,tes:teListe,positionen:g.positionen.size,nullpositionen:g.nullpositionen.size,
+        ausgeschlossen,mengentreu:mengenOk,puenktlich,otif,zuordnungUnklar:g.zuordnungUnklar};
+    }).sort((a,b)=>a.beleg.localeCompare(b.beleg,'de',{numeric:true}));
+    const regulaer=belege.filter(g=>!g.ausgeschlossen);
+    return {belege,anzahl:belege.length,regulaer:regulaer.length,ausgeschlossen:belege.length-regulaer.length,
+      quote:quote(regulaer,'otif'),fehlendeBelegPositionen,tesOhneBeleg,fehlendeProdukte,nichtZuordenbareNullpositionen};
+  }
+
   // Aggregiert einen Satz TEs zu allen fünf Kennzahlen. Das identische Gerüst
   // wird sowohl für die Gesamtsumme als auch je Ladestelle verwendet, damit
   // die Hover-Aufschlüsselung exakt dieselbe Rechnung nutzt wie die Karte.
@@ -1218,16 +1333,20 @@
       const gruppen=te.mengenGruppen ?? (Number.isFinite(te.abweichendeMenge) ? [{einheit:'',abweichung:te.abweichendeMenge,abweichungVollstaendig:true}] : []);
       if (!gruppen.length || gruppen.some(g=>!g.abweichungVollstaendig)) continue;
       mengeBewertbar++;
-      if (gruppen.some(g=>g.abweichung!==0)) betroffen++;
+      if (gruppen.some(g=>(g.abweichungAbs ?? Math.abs(g.abweichung))>0)) betroffen++;
       for (const g of gruppen) {
         if (!einheiten.has(g.einheit)) einheiten.set(g.einheit,{einheit:g.einheit,wert:0,netto:0});
-        const e=einheiten.get(g.einheit);e.wert+=Math.abs(g.abweichung);e.netto+=g.abweichung;
-        summeAbs+=Math.abs(g.abweichung);netto+=g.abweichung;
+        const betrag=g.abweichungAbs ?? Math.abs(g.abweichung);
+        const e=einheiten.get(g.einheit);e.wert+=betrag;e.netto+=g.abweichung;
+        summeAbs+=betrag;netto+=g.abweichung;
       }
     }
 
     return {
       anzahl:     tes.length,
+      nullpositionen:{anzahl:tes.reduce((n,te)=>n+(te.nullpositionen?.length ?? 0),0),
+        tes:tes.filter(te=>te.nullpositionen?.length).length,
+        nurNullTes:tes.filter(te=>te.nullpositionen?.length && !te.mengenPositionen?.length).length},
       otif:       quote(tes, 'otif'),
       puenktlich: quote(tes, 'puenktlich'),
       mengentreu: quote(tes, 'mengentreu'),
@@ -3557,6 +3676,14 @@
           <div class="u-abschnitt">
             <div class="u-titel" id="kpi-titel">Kennzahlen</div>
             <div class="kpi-cards" id="kpi-cards"></div>
+            <details class="ls-verteilung" id="otif-te-toggle">
+              <summary>OTIF je TE <span class="ls-verteilung-geschlossen">anzeigen</span><span class="ls-verteilung-offen">ausblenden</span></summary>
+              <div class="kpi-cards" id="otif-te" style="grid-template-columns:minmax(0,420px)"></div>
+            </details>
+            <details class="ls-verteilung otif-anlieferungen" id="otif-anlieferungen-toggle">
+              <summary>Anlieferungsdetails <span class="ls-verteilung-geschlossen">anzeigen</span><span class="ls-verteilung-offen">ausblenden</span></summary>
+              <div id="otif-anlieferungen"></div>
+            </details>
             <details class="ls-verteilung">
               <summary>TEs nach Ladestelle <span class="ls-verteilung-geschlossen">anzeigen</span><span class="ls-verteilung-offen">ausblenden</span></summary>
               <div id="ladestellen-verteilung" aria-live="polite"></div>
@@ -3585,7 +3712,7 @@
               <span class="f-label">Kennzahl</span>
               <div class="f-chips" id="f-kennzahl-chips">
                 <button class="f-chip active" data-kfilter="alle">Alle</button>
-                <button class="f-chip" data-kfilter="otif-nein">OTIF verletzt</button>
+                <button class="f-chip" data-kfilter="otif-nein">OTIF je TE verletzt</button>
                 <button class="f-chip" data-kfilter="unpuenktlich">Unpünktlich</button>
                 <button class="f-chip" data-kfilter="mengenabweichung">Mengenabweichung</button>
                 <button class="f-chip" data-kfilter="nb">Nicht bewertbar</button>
@@ -3631,6 +3758,7 @@
 
           <section id="panel-lieferanten" class="analyse-panel" role="tabpanel" aria-labelledby="tab-lieferanten" tabindex="0" hidden>
             <div id="lieferanten-trend"></div>
+            <div id="nullpositionen-uebersicht"></div>
             <div class="u-abschnitt">
               <div class="u-titel">Warensender im ausgewählten Zeitraum · Mengenabweichungen</div>
               <div class="lb-toolbar"><label for="lieferanten-mengen-suche">Warensender durchsuchen</label><input id="lieferanten-mengen-suche" type="search" placeholder="Lieferant, Transportmittel, Einheit oder HWG" autocomplete="off"></div>
@@ -3815,7 +3943,7 @@
       this._analyseOffeneErklaerungen ??= new Map();
       host.querySelectorAll('details').forEach((detail, i) => {
         const partner = detail.closest('.fb-detail')?.dataset.partnerKey ?? 'gesamt';
-        const key = `${host.id}|${partner}|${detail.className}|${i}`;
+        const key = `${host.id}|${partner}|${detail.dataset?.analysisKey ?? `${detail.className}|${i}`}`;
         this._analyseOffeneErklaerungen.set(key, detail.open);
       });
       return Array.from(host.querySelectorAll('.lb-scroll, .lb-chart-scroll'), el => ({
@@ -3827,7 +3955,7 @@
       if (!host?.querySelectorAll) return;
       host.querySelectorAll('details').forEach((detail, i) => {
         const partner = detail.closest('.fb-detail')?.dataset.partnerKey ?? 'gesamt';
-        const key = `${host.id}|${partner}|${detail.className}|${i}`;
+        const key = `${host.id}|${partner}|${detail.dataset?.analysisKey ?? `${detail.className}|${i}`}`;
         if (this._analyseOffeneErklaerungen?.has(key)) detail.open = this._analyseOffeneErklaerungen.get(key);
       });
       host.querySelectorAll('.lb-scroll, .lb-chart-scroll').forEach(el => {
@@ -4258,7 +4386,7 @@
 
     // ── Datenzugriff / Filter ─────────────────────────────────────────────
 
-    _alleTes() { return [...this._teMap.values()]; }
+    _alleTes() { return [...(this._teMap?.values() ?? this._tesZeitraum())]; }
 
     // TEs des aktiven Zeitraums (ohne Listenfilter — Basis der Kennzahlen)
     _tesZeitraum(bereich) {
@@ -4287,7 +4415,7 @@
         switch (this._kFilter) {
           case 'otif-nein':        return te.otif === false;
           case 'unpuenktlich':     return te.puenktlich === false;
-          case 'mengenabweichung': return te.mengenGruppen?.some(g=>g.abweichungVollstaendig && g.abweichung!==0) || te.abweichendeMenge != null && te.abweichendeMenge !== 0;
+          case 'mengenabweichung': return te.mengenPositionen?.some(p=>p.abweichungAbs>0) || te.abweichendeMenge != null && te.abweichendeMenge !== 0;
           case 'nb':               return te.otif == null || te.durchlaufzeitMin == null;
           default:                 return true;
         }
@@ -4334,7 +4462,7 @@
           const sign=cmp(JSON.stringify(ag.map(g=>g.einheit)),JSON.stringify(bg.map(g=>g.einheit)),r);
           if (sign) return sign;
           for(let i=0;i<ag.length;i++) {
-            const result=cmp(Math.abs(ag[i].abweichung),Math.abs(bg[i].abweichung),r);
+            const result=cmp(ag[i].abweichungAbs ?? Math.abs(ag[i].abweichung),bg[i].abweichungAbs ?? Math.abs(bg[i].abweichung),r);
             if(result) return result;
           }
           return cmp(a.te,b.te,1);
@@ -4437,6 +4565,22 @@
     _lieferantTrendHTML(trend, lieferant) { return this._bewertungTrendHTML(trend, lieferant, 'mengentreu'); }
     _spediteurTrendHTML(trend, spediteur) { return this._bewertungTrendHTML(trend, spediteur, 'puenktlich'); }
 
+    _nullpositionenHTML(tes, kontext='Zeitraum') {
+      const zeilen=nullpositionenListe(tes);
+      if (!zeilen.length) return '';
+      const teAnzahl=new Set(zeilen.map(p=>p.te)).size;
+      return `<details class="pz-info nullpositionen-block"><summary>Nullpositionen · ${zeilen.length} Positionen auf ${teAnzahl} TEs · separat ausgeschlossen</summary>
+        <p class="lb-context">Ist-Menge = 0: Diese Positionen beeinflussen weder Mengentreue noch die reguläre Mengenabweichung. OTIF verwendet die verbleibenden Positionen. TEs nur mit Nullpositionen sind für Mengentreue und OTIF nicht bewertbar. Pünktlichkeit und Prozesszeiten bleiben unabhängig davon. Produkt je Anlieferung und Einheit dient als Positionsersatz; eine echte Positionsnummer ist noch nicht angebunden.</p>
+        <div class="lb-scroll" tabindex="0" role="region" aria-label="Nullpositionen ${esc(kontext)} scrollen"><table class="lb-table lb-analysis-table"><thead><tr>
+          <th scope="col">Datum</th><th scope="col">Interne TE</th><th scope="col">Externe TE</th><th scope="col">Anlieferung</th><th scope="col">Produkt / Positionsersatz</th><th scope="col">Lieferant</th><th scope="col">Ist</th><th scope="col">Soll</th><th scope="col">Abweichung (separat)</th><th scope="col">Einheit</th><th scope="col">Geplanter Start ab</th>
+        </tr></thead><tbody>${zeilen.map(p=>`<tr>
+          <td>${esc(fmtDate(p.datum))}</td><td>${esc(p.te ?? '–')}</td><td>${esc(p.teExt ?? '–')}</td><td>${esc(p.anlieferung ?? '–')}</td>
+          <td>${esc(p.nr ?? '–')}<small>${esc(p.name ?? '–')}${p.quellzeilen>1 ? ` · ${p.quellzeilen} Quellzeilen` : ''}</small></td><td>${esc(p.lieferant ?? '–')}</td><td class="lb-num">0</td>
+          <td class="lb-num">${p.sollVollstaendig ? esc(fmtMenge(p.soll)) : 'n. b.'}</td><td class="lb-num">${p.abweichungVollstaendig ? esc(fmtDelta(p.abweichung)) : 'n. b.'}</td><td>${esc(p.einheit || '–')}</td><td>${esc(fmtDateTimeVoll(p.geplantStart))}</td>
+        </tr>`).join('')}</tbody></table></div>
+      </details>`;
+    }
+
     _lieferantDetailHTML(gruppe) {
       if (!gruppe) return '';
       const analyseZeilen = lieferantTeAnalyse(gruppe);
@@ -4447,12 +4591,12 @@
         <td>${esc(fmtDate(a.datum))}</td><td>${esc(a.te ?? '–')}</td><td>${esc(a.teExt ?? '–')}</td>
         <td>${esc(a.lieferant ?? '–')}</td><td>${esc(a.transportmittel ?? '–')}</td>
         <td class="lb-num">${a.inkorrektePositionen}</td><td class="lb-num">${a.ueberlieferung}</td><td class="lb-num">${a.unterlieferung}</td>
-        <td class="lb-num lb-diff">${esc(fmtDelta(a.differenzmenge))}</td><td>${esc(a.einheit ?? '–')}</td>
+        <td class="lb-num lb-diff">${esc(fmtDelta(a.differenzmenge))}${a.teilsumme ? `<small>Teilsumme · Mengendaten unvollständig</small>` : ''}</td><td>${esc(a.einheit ?? '–')}</td>
       </tr>`).join('');
       const produktZeilen = abweichungen.map(a => `<tr>
         <td>${esc(a.teExt ?? a.te ?? '–')}</td><td>${esc(a.anlieferung ?? '–')}</td>
         <td class="fb-product"><strong>${esc(a.produktNr ?? '–')}</strong><small>${esc(a.produktName ?? '–')}</small></td>
-        <td>${esc(fmtDelta(a.abweichung))}${a.einheit ? ` ${esc(a.einheit)}` : ''}</td>
+        <td>${esc(fmtDelta(a.abweichung))}${a.teilsumme ? `<small>Teilsumme · Mengendaten unvollständig</small>` : ''}${a.gegenlaeufig ? `<small>Gegenläufig: ${a.abweichungen.map(v=>esc(fmtDelta(v))).join(' / ')}</small>` : ''}${a.einheit ? ` ${esc(a.einheit)}` : ''}</td>
         <td>${esc(fmtDateTimeVoll(a.geplantStart))}</td>
       </tr>`).join('');
       return `<section id="lieferant-detail" class="fb-detail" data-partner-key="${esc(gruppe.key)}" aria-label="Mengentreueanalyse von ${esc(gruppe.label)}">
@@ -4467,13 +4611,14 @@
           : '<div class="fb-detail-empty">Für diesen Lieferanten gibt es im ausgewählten Zeitraum keine TE mit Mengenabweichung.</div>'}
         </section>
         ${this._lieferantTrendHTML(trend, gruppe.label)}
+        ${this._nullpositionenHTML(gruppe.tes, 'Lieferant ' + gruppe.label)}
         <details class="lb-product-details"><summary>Produkt- und Anlieferungsdetails (${abweichungen.length})</summary>
           ${abweichungen.length ? `<div class="lb-scroll" tabindex="0" role="region" aria-label="Produkt- und Anlieferungsabweichungen scrollen"><table class="lb-table fb-detail-table"><thead><tr>
             <th scope="col">TE</th><th scope="col">Anlieferung</th><th scope="col">Produkt</th><th scope="col">Abweichung</th><th scope="col">Geplanter Start ab</th>
           </tr></thead><tbody>${produktZeilen}</tbody></table></div>`
           : '<div class="fb-detail-empty">Keine abweichenden Produktpositionen vorhanden.</div>'}
         </details>
-        <div class="lb-context">Die obere Tabelle enthält ausschließlich nicht mengentreue TEs. Differenzmengen werden nur innerhalb derselben Mengeneinheit summiert; unterschiedliche Einheiten erhalten getrennte Zeilen. Über- und Unterlieferung werden je TE-/Einheitenzeile als 1 oder 0 ausgewiesen. Datum = Zeitraumanker des Widgets. Die Produkt- und Anlieferungsdetails bleiben separat aufklappbar.</div>
+        <div class="lb-context">Die obere Tabelle enthält ausschließlich nicht mengentreue TEs. Differenzmengen werden nur innerhalb derselben Mengeneinheit summiert; unterschiedliche Einheiten erhalten getrennte Zeilen. Über- und Unterlieferung werden je TE-/Einheitenzeile unabhängig als 1 oder 0 ausgewiesen; bei gegenläufigen Abweichungen können beide 1 sein. Die Differenzsumme ist netto; Mengentreue bewertet jede Position. Nullpositionen bleiben separat ausgeschlossen. Datum = Zeitraumanker des Widgets. Die Produkt- und Anlieferungsdetails bleiben separat aufklappbar.</div>
       </section>`;
     }
 
@@ -4498,19 +4643,19 @@
         return delta*richtung || b.anzahlPositionen-a.anzahlPositionen
           || a.lieferantLabel.localeCompare(b.lieferantLabel,'de') || a.key.localeCompare(b.key,'de');
       });
-      host.innerHTML = `<p class="lb-context">${daten.anzahlLieferanten} Warensender · ${daten.anzahlTesGesamt} zugeordnete TEs · ${daten.anzahlTes} verschiedene TEs mit Positionsabweichung · ${daten.anzahlPositionen} abweichende Produktzeilen · ${esc(bereichLabel(this._bereich))}${suche ? ` · ${gruppen.length} von ${daten.gruppen.length} Gruppen angezeigt` : ''}</p>
+      host.innerHTML = `<p class="lb-context">${daten.anzahlLieferanten} Warensender · ${daten.anzahlTesGesamt} zugeordnete TEs · ${daten.anzahlTes} verschiedene TEs mit Positionsabweichung · ${daten.anzahlPositionen} abweichende Positionen (Produkt je Anlieferung) · ${esc(bereichLabel(this._bereich))}${suche ? ` · ${gruppen.length} von ${daten.gruppen.length} Gruppen angezeigt` : ''}</p>
         ${daten.ohneLieferant || daten.nichtBewertbar || daten.ohneProduktdaten ? `<p class="lb-context">Datenlücken: ${daten.ohneLieferant} Produktzeilen ohne Lieferantenzuordnung · ${daten.nichtBewertbar} Produktzeilen ohne bewertbare Mengenabweichung · ${daten.ohneProduktdaten} TE-/Lieferantenzuordnungen ohne Produktdaten. Warensender mit fehlenden Mengendaten bleiben sichtbar.</p>` : ''}
         ${gruppen.length ? `<div class="lb-scroll" tabindex="0" role="region" aria-label="Warensender und Mengenabweichungen scrollen"><table class="lb-table lb-mengen-table"><thead><tr>
           ${spalten.map(([f,label]) => `<th scope="col" aria-sort="${feld === f ? richtung === 1 ? 'ascending' : 'descending' : 'none'}"><button type="button" data-lm-sort="${f}">${label} ${feld === f ? richtung === 1 ? '↑' : '↓' : '↕'}</button></th>`).join('')}
         </tr></thead><tbody>${gruppen.map(g => `<tr>
           <td>${esc(g.lieferantLabel)}<small>${g.lieferantNr ? 'Nr. ' + esc(g.lieferantNr) : 'Zuordnung über Bezeichnung'}</small></td>
           <td>${esc(g.transportmittelLabel)}</td><td class="lb-num">${fmtNum(g.anzahlTe)}${g.anzahlTesMitDatenluecke ? `<small>${g.anzahlTesMitDatenluecke} TEs mit Datenlücken</small>` : ''}</td><td class="lb-num">${fmtNum(g.anzahlPositionen)}</td>
-          <td class="lb-num${g.anzahlPositionen ? ' lb-diff' : ''}">${g.differenzmenge == null ? 'n. b.' : esc(fmtDelta(g.differenzmenge))}${g.nichtBewertbar || g.ohneProduktdaten ? `<small>${g.differenzmenge != null ? 'Teilsumme · ' : ''}Mengendaten unvollständig</small>` : g.differenzmenge === 0 ? `<small>${g.anzahlPositionen ? 'Gegenläufige Abweichungen' : 'Keine Positionsabweichung'}</small>` : ''}</td>
+          <td class="lb-num${g.anzahlPositionen ? ' lb-diff' : ''}">${g.differenzmenge == null ? (g.nullpositionen && !g.nichtBewertbar && !g.ohneProduktdaten ? 'Ausgeschlossen' : 'n. b.') : esc(fmtDelta(g.differenzmenge))}${g.nullpositionen ? `<small>${g.nullpositionen} Nullpositionen separat ausgeschlossen</small>` : ''}${g.nichtBewertbar || g.ohneProduktdaten ? `<small>${g.differenzmenge != null ? 'Teilsumme · ' : ''}Mengendaten unvollständig</small>` : g.differenzmenge === 0 ? `<small>${g.anzahlPositionen ? 'Gegenläufige Abweichungen' : 'Keine Positionsabweichung'}</small>` : ''}</td>
           <td>${esc(g.einheitLabel)}</td><td>${esc(g.hwgLabel)}</td>
         </tr>`).join('')}</tbody></table></div>` : `<div class="fb-detail-empty">${suche ? 'Keine Warensender für diese Suche.' : 'Keine zuordenbaren Warensender im ausgewählten Zeitraum.'}</div>`}
         <details class="pz-info"><summary>Berechnung und Einordnung</summary>
           <p>Eine Zeile je Lieferant, Transportmittel, Mengeneinheit und Hauptwarengruppe (HWG). Die Tabelle enthält alle zuordenbaren Warensender des ausgewählten Zeitraums ohne Begrenzung auf fünf oder zehn Einträge. Warensender ohne Positionsabweichung erscheinen mit 0; fehlende Mengen ergeben „n. b.“ oder eine ausdrücklich gekennzeichnete Teilsumme.</p>
-          <p>TE-Zahl mit Differenz = verschiedene interne TE-Nummern mit mindestens einer endlichen Positionsabweichung ungleich 0 innerhalb der Gruppe. Positionenzahl = eingelesene Produktzeilen mit Differenz; eine eindeutige Positionsnummer liegt im Datenvertrag nicht vor. Alle Abweichungen zählen, auch innerhalb der Mengentoleranz. Differenzmenge = Summe der vorzeichenbehafteten Abweichungen (Ist − Soll), daher können Über- und Unterlieferungen zusammen 0 ergeben. Einheiten werden getrennt summiert. Eine TE kann in mehreren Gruppen erscheinen; die TE-Spalte ist über Gruppen hinweg nicht addierbar.</p>
+          <p>TE-Zahl mit Differenz = verschiedene interne TE-Nummern mit mindestens einer endlichen Positionsabweichung ungleich 0 innerhalb der Gruppe. Positionenzahl = unterschiedliche Produkte je TE, Anlieferung und Einheit mit Abweichung; Produkt dient als Positionsersatz. Nullpositionen (Ist=0) sind separat ausgeschlossen. Alle Abweichungen zählen, auch innerhalb der Mengentoleranz. Differenzmenge = Nettosumme der vorzeichenbehafteten Abweichungen (Ist − Soll); sie kann 0 sein, obwohl Positionen abweichen. Eine Nettosumme von 0 ersetzt nicht die Positionsbewertung mit der eingestellten Toleranz. Einheiten werden getrennt summiert. Eine TE kann in mehreren Gruppen erscheinen; die TE-Spalte ist über Gruppen hinweg nicht addierbar.</p>
           <p>Lieferant und Transportmittel werden je Produktzeile zugeordnet; damit sind auch TEs mit mehreren eindeutig zugeordneten Lieferanten in dieser Positionsauswertung enthalten. Fehlender Lieferant wird separat gezählt, fehlendes Transportmittel, Einheit oder HWG werden sichtbar ausgewiesen. HWG = Hauptwarengruppe. Bewertungsmodus, Suche in der Bewertungstabelle und TE-Listenfilter begrenzen diese Tabelle nicht.</p>
         </details>`;
       this._analyseUiNachRender(host, uiScroll);
@@ -4521,6 +4666,8 @@
       const uiScroll = this._analyseUiVorRender(host);
       const tes = this._tesZeitraum(), daten = aggregiereLieferanten(tes);
       this._renderLieferantenMengen(tes);
+      const nullHost=this._$('nullpositionen-uebersicht');
+      if(nullHost){const ui=this._analyseUiVorRender(nullHost);nullHost.innerHTML=this._nullpositionenHTML(tes);this._analyseUiNachRender(nullHost,ui);}
       const trendHost = this._$('lieferanten-trend');
       if (trendHost) {
         const trendUi = this._analyseUiVorRender(trendHost);
@@ -4563,7 +4710,7 @@
         ${gruppen.map(g => { const offen = this._lieferantDetailKey === g.key; const token = encodeURIComponent(g.key); return `<tr><th scope="row"><button class="fb-name-btn" data-lb-detail="${esc(token)}" aria-expanded="${offen}" aria-controls="lieferant-detail">${g.rang ? `${g.rang}. ` : ''}${esc(g.label)}<span class="fb-chevron" aria-hidden="true">${offen ? '▾' : '›'}</span><small>${g.nr ? 'Nr. ' + esc(g.nr) : 'Zuordnung nur über Bezeichnung'} · Details öffnen</small></button></th><td><strong>${g.tes.length}</strong></td>${quoteCell(g,'mengentreu')}</tr>${offen ? `<tr class="lb-inline-detail-row"><td colspan="3">${this._lieferantDetailHTML(g)}</td></tr>` : ''}`; }).join('')}
         </tbody></table></div>` : `<p class="lb-context">${tes.length ? suchtext ? 'Keine Lieferanten für diese Auswahl.' : modus === 'schlechteste' ? 'Keine Lieferanten mit bewertbaren Mengendaten.' : 'Keine zugeordneten Lieferanten.' : 'Keine Transporteinheiten im ausgewählten Zeitraum.'}</p>`}
         <details class="pz-info"><summary>Berechnung und Einordnung</summary><p>„Alle“ zeigt sämtliche eindeutig zugeordneten Lieferanten, auch ohne bewertbare Mengendaten. „10 schlechteste“ zeigt die maximal zehn niedrigsten bewertbaren Mengentreuequoten. Gleichstände: mehr bewertbare TEs, dann Name und Schlüssel. Suche und Spaltensortierung wirken innerhalb der gewählten Ansicht. Eine offene Analyse schließt sich, wenn der Lieferant durch Ansicht, Suche oder Zeitraum nicht mehr sichtbar ist.</p><p>Jede eindeutig zugeordnete TE zählt einmal. Lieferantennummern haben Vorrang; fehlt die Nummer, wird über die Bezeichnung gruppiert. Unterschiedliche Nummern bleiben auch bei gleichem Namen getrennt. Neue Lieferanten werden bei jeder Zeitraum- oder Datenänderung berücksichtigt.</p>
-        <p>Quoten = erfüllte TEs / bewertbare TEs. Nicht bewertbare TEs werden separat ausgewiesen. Mengentoleranz: ${this._cfg?.mengenToleranzPct ?? 0} %. Rote Balken zeigen die Quote von 0 bis 100 %, ohne zusätzliche Zielwerte oder Gesamtnote.</p>
+        <p>Quoten = erfüllte TEs / bewertbare TEs. Nicht bewertbare TEs werden separat ausgewiesen. Mengentoleranz je Position: ${this._cfg?.mengenToleranzPct ?? 0} %. Alle regulären Positionen müssen sie erfüllen; Abweichungen gleichen sich nicht aus. Ist=0 wird separat ausgeschlossen. Rote Balken zeigen die Quote von 0 bis 100 %, ohne zusätzliche Zielwerte oder Gesamtnote.</p>
         <p>Lieferanten werden anhand der Mengentreue bewertet. Pünktlichkeit gehört zur Bewertung des Frachtführers/Spediteurs. OTIF beschreibt die kombinierte Liefererfüllung und wird nicht als Lieferantenrangfolge verwendet. Durchlaufzeiten werden im Reiter Durchlaufzeiten ausgewertet. Zeitraumzuordnung und Mengentreueregeln entsprechen der Gesamtübersicht; TE-Listenfilter begrenzen diese Bewertung nicht.</p></details>`;
       this._analyseUiNachRender(host, uiScroll);
     }
@@ -5030,11 +5177,45 @@
       </section>`;
     }
 
+    _anlieferungsKarteHTML(aktiv, vgl, vglName) {
+      const q=aktiv.quote;
+      const sub=`${q.bewertbar?`${q.ok} von ${q.bewertbar} Anlieferungen erfüllt`:'Keine bewertbaren Anlieferungen'} · ${q.nb} nicht bewertbar · ${aktiv.ausgeschlossen} ausgenullt, separat ausgeschlossen`
+        + (aktiv.tesOhneBeleg?` · ${aktiv.tesOhneBeleg} TEs ohne Belegnummer`:'')
+        + (aktiv.fehlendeBelegPositionen?` · ${aktiv.fehlendeBelegPositionen} reguläre Zeilen ohne eindeutigen Beleg`:'')
+        + (aktiv.fehlendeProdukte?` · ${aktiv.fehlendeProdukte} Zeilen ohne Produktnummer`:'')
+        + (aktiv.nichtZuordenbareNullpositionen?` · ${aktiv.nichtZuordenbareNullpositionen} Nullpositionen ohne Beleg separat ausgeschlossen`:'');
+      const html=this._kpiCardHTML({id:'otifAnlieferung',label:'OTIF · Anlieferungen'},
+        {anzahl:aktiv.anzahl,otifAnlieferung:q},{otifAnlieferung:vgl.quote},vglName);
+      return html.replace(/<div class="kpi-card-sub">[\s\S]*?<\/div>/,`<div class="kpi-card-sub">${esc(sub)}</div>`);
+    }
+
+    _renderAnlieferungsOtif() {
+      const host=this._$('otif-anlieferungen');if(!host)return;
+      const aktiv=anlieferungsOtif(this._tesZeitraum(),[...(this._teMap?.values() ?? this._tesZeitraum())]),vp=vorperiode(this._bereich),vgl=anlieferungsOtif(this._tesZeitraum(vp),[...(this._teMap?.values() ?? this._tesZeitraum())]);
+      const ui=this._analyseUiVorRender(host);
+      const status=v=>v===true?'Erfüllt':v===false?'Nicht erfüllt':'Nicht bewertbar';
+      const table=(zeilen,nullListe)=>`<div class="lb-scroll" tabindex="0" role="region" aria-label="${nullListe?'Ausgenullte Anlieferungen':'OTIF-Anlieferungsbelege'} scrollen"><table class="lb-table lb-analysis-table"><thead><tr>
+        <th scope="col">Anlieferung / Belegnummer</th><th scope="col">Interne TE</th><th scope="col">Externe TE</th><th scope="col">Reguläre Positionen</th><th scope="col">Nullpositionen</th><th scope="col">Pünktlichkeit</th><th scope="col">Mengentreue</th><th scope="col">OTIF</th>
+        </tr></thead><tbody>${zeilen.map(g=>`<tr><th scope="row">${esc(g.beleg)}</th><td>${esc(g.tes.map(te=>te.te).join(' · '))}</td><td>${esc(g.tes.map(te=>te.teExt ?? '–').join(' · '))}</td><td>${g.positionen}${g.zuordnungUnklar?'<small>Belegzuordnung unvollständig</small>':''}</td><td>${g.nullpositionen}</td><td>${esc(status(g.puenktlich))}</td><td>${g.ausgeschlossen?'Ausgeschlossen':esc(status(g.mengentreu))}</td><td>${g.ausgeschlossen?'Ausgeschlossen':esc(status(g.otif))}</td></tr>`).join('')}</tbody></table></div>`;
+      const ausgeschlossen=aktiv.belege.filter(g=>g.ausgeschlossen);
+      host.innerHTML=`
+        <p class="lb-context">${aktiv.anzahl} verschiedene Anlieferungen · ${aktiv.quote.bewertbar} bewertbar · ${aktiv.quote.nb} nicht bewertbar · ${aktiv.ausgeschlossen} vollständig ausgenullt und separat ausgeschlossen${aktiv.fehlendeBelegPositionen||aktiv.tesOhneBeleg ? ` · ${aktiv.fehlendeBelegPositionen} Produktzeilen ohne eindeutigen Beleg · ${aktiv.tesOhneBeleg} TEs ohne Belegnummer` : ''}</p>
+        ${ausgeschlossen.length ? `<details class="pz-info" data-analysis-key="delivery-zero"><summary>Ausgenullte Anlieferungen (${ausgeschlossen.length}) · separat ausgeschlossen</summary>${table(ausgeschlossen,true)}</details>`:''}
+        <details class="pz-info" data-analysis-key="delivery-records"><summary>Anlieferungsbelege und Berechnung (${aktiv.regulaer})</summary>
+          <p>OTIF = pünktlich und vollständig je Anlieferungsbeleg. Der Zeitraum wählt Belege aus; alle geladenen beteiligten TEs werden bewertet, auch außerhalb des Zeitraums oder ohne Zeitanker. Jede positive oder negative reguläre Positionsabweichung verhindert OTIF; die Mengentoleranz der TE-Kennzahl gilt hier nicht. Eine verspätete beteiligte TE verhindert OTIF für den Beleg. Pünktlichkeit verwendet Ankunft am Kontrollpunkt gegenüber Planstart und die bestehende Zeittoleranz.</p>
+          <p>Ist=0-Positionen bleiben separat ausgeschlossen. Besteht die gesamte Anlieferung aus Nullpositionen, wird sie weder als erfüllt noch als nicht erfüllt gezählt. Unbekannte Daten ergeben „nicht bewertbar“, sofern kein Mengenfehler und keine Verspätung bereits feststehen. Quote = erfüllte / bewertbare Anlieferungen. Die bisherige OTIF-Kachel bewertet weiterhin TEs.</p>
+          ${aktiv.regulaer ? table(aktiv.belege.filter(g=>!g.ausgeschlossen),false):'<p class="lb-context">Keine regulären Anlieferungen im Zeitraum.</p>'}
+        </details>`;
+      this._analyseUiNachRender(host,ui);
+    }
+
     _renderKpiCards() {
       const host = this._$('kpi-cards');
       const zeitHost = this._$('zeit-kpi-cards');
       const ladestellenHost = this._$('ladestellen-verteilung');
+      const teOtifHost = this._$('otif-te');
       if (!host) return;
+      this._renderAnlieferungsOtif();
 
       const vp    = vorperiode(this._bereich);
       const aktiv = aggregiere(this._tesZeitraum());
@@ -5046,11 +5227,16 @@
         </div>`;
         if (zeitHost) zeitHost.innerHTML = host.innerHTML;
         if (ladestellenHost) ladestellenHost.innerHTML = '';
+        if (teOtifHost) teOtifHost.innerHTML = host.innerHTML;
         return;
       }
 
       const vglName = `Vorperiode: ${bereichLabel(vp)}`;
-      host.innerHTML = KPI_DEFS.filter(def => def.id !== 'durchlaufzeit').map(def => this._kpiCardHTML(def, aktiv, vgl, vglName)).join('');
+      const anlieferungAktiv=anlieferungsOtif(this._tesZeitraum(),[...(this._teMap?.values() ?? this._tesZeitraum())]),anlieferungVgl=anlieferungsOtif(this._tesZeitraum(vp),[...(this._teMap?.values() ?? this._tesZeitraum())]);
+      host.innerHTML = KPI_DEFS.filter(def => def.id !== 'durchlaufzeit').map(def => def.id==='otif'
+        ? this._anlieferungsKarteHTML(anlieferungAktiv,anlieferungVgl,vglName)
+        : this._kpiCardHTML(def, aktiv, vgl, vglName)).join('');
+      if(teOtifHost)teOtifHost.innerHTML=this._kpiCardHTML({id:'otif',label:'OTIF · TE'},aktiv,vgl,vglName);
       if (zeitHost) zeitHost.innerHTML = KPI_DEFS.filter(def => def.id === 'durchlaufzeit').map(def => this._kpiCardHTML(def, aktiv, vgl, vglName)).join('');
       if (ladestellenHost) ladestellenHost.innerHTML = this._ladestellenVerteilungHTML(aktiv);
 
@@ -5140,7 +5326,7 @@
 
       const hinweis = istQuote
         ? 'Erfüllungsquote je Ladestelle'
-        : (def.id === 'abwMenge' ? 'Σ Beträge · Balken = TE-Anteil' : 'Ø je Ladestelle · Balken = TE-Anteil');
+        : (def.id === 'abwMenge' ? 'Σ Positionsbeträge · Balken = TE-Anteil' : 'Ø je Ladestelle · Balken = TE-Anteil');
 
       return `
         <div class="kpi-breakdown" role="tooltip">
@@ -5172,7 +5358,7 @@
         wertTxt=`<span class="kpi-menge-list">${esc(mengenText(a))}</span>`;
         klasse=!a.bewertbar ? 'q-nb' : a.betroffen===0 ? 'q-gut' : 'q-mittel';
         const net=a.einheiten?.map(e=>`${fmtDelta(e.netto)} ${e.einheit||'ohne Einheit'}`).join(' · ') ?? fmtDelta(a.netto);
-        subTxt=a.bewertbar ? `Σ Beträge je Einheit · ${a.betroffen} von ${a.bewertbar} TEs mit Abweichung${a.nb ? ` · ${a.nb} nicht bewertbar` : ''} · netto ${net}` : 'Keine vollständigen Mengenabweichungen im Zeitraum';
+        subTxt=a.bewertbar ? `Σ Positionsbeträge je Einheit · ${a.betroffen} von ${a.bewertbar} TEs mit Abweichung${a.nb ? ` · ${a.nb} nicht bewertbar` : ''} · netto ${net}` : 'Keine vollständigen Mengenabweichungen im Zeitraum';
         vglTxt=esc(mengenText(v));
       } else {
         // Quoten-Kennzahlen (OTIF / Pünktlichkeit / Mengentreue)
@@ -5183,6 +5369,10 @@
           : `Nicht bewertbar · ${a.nb} TEs ohne Datengrundlage`;
         vglTxt  = fmtProzent(v.wert);
         balken  = `<div class="kpi-bar"><div class="kpi-bar-fill ${klasse}" style="width:${(a.wert ?? 0).toFixed(1)}%"></div></div>`;
+      }
+
+      if (['otif','mengentreu','abwMenge'].includes(def.id) && aktiv.nullpositionen?.anzahl) {
+        subTxt += ` · ${aktiv.nullpositionen.anzahl} Nullpositionen separat ausgeschlossen`;
       }
 
       // Trend nur wenn beide Werte vorhanden sind
@@ -5643,6 +5833,7 @@
             <td class="pt-sticky">
               <div class="pt-prod-nr">${esc(p.nr)}</div>
               <div class="pt-prod-name">${esc(p.name)}</div>
+              ${istNullposition(p) ? '<small class="pt-muted">Nullposition · Mengentreue ausgeschlossen</small>' : ''}
             </td>
             <td class="pt-num">${p.mengeIst == null ? '<span class="pt-muted">n. b.</span>' : esc(fmtMenge(p.mengeIst))} ${esc(p.einheit ?? '')}</td>
             <td class="pt-num">${pa1 == null ? '<span class="pt-muted">–</span>' : esc(fmtMenge(pa1))+(konflikt ? ' (Konflikt)' : '')}</td>
@@ -6044,10 +6235,10 @@
   // Positionsauswertung unabhängig von der TE-Mengentreue und Top-10-Auswahl.
   // Eine TE darf mehreren Lieferanten/Einheiten/HWG zugeordnet sein, zählt
   // innerhalb jeder Gruppe aber nur einmal. Die Anzahl der Positionen meint
-  // BW-Produktzeilen; ohne Positions-ID ist keine weitere Entdopplung möglich.
+  // Produkt je Anlieferung und Einheit als Positionsersatz; Nullpositionen separat.
   function lieferantenMengenabweichungen(tes) {
-    const gruppen = new Map(), teSet = new Set(), alleTeSet = new Set(), lieferantSet = new Set();
-    let ohneLieferant = 0, nichtBewertbar = 0, anzahlPositionen = 0, ohneProduktdaten = 0;
+    const gruppen = new Map(), teSet = new Set(), alleTeSet = new Set(), lieferantSet = new Set(), positionsGesamtSet = new Set();
+    let ohneLieferant = 0, nichtBewertbar = 0, ohneProduktdaten = 0;
     const merkmal = (kt, leer) => {
       const key = isNull(kt?.key) ? null : String(kt.key).trim();
       const text = isNull(kt?.text) ? null : String(kt.text).trim();
@@ -6063,7 +6254,7 @@
           transportmittelKey:transport.key, transportmittelLabel:transport.label,
           einheit, einheitLabel:einheit ?? 'Nicht angegeben', hwgKey:hwg.key, hwgLabel:hwg.label,
           teSet:new Set(), alleTeSet:new Set(), lueckenTeSet:new Set(), anzahlPositionen:0, differenzmenge:0,
-          bewertbarePositionen:0, nichtBewertbar:0, ohneProduktdaten:0,
+          bewertbarePositionen:0, nichtBewertbar:0, ohneProduktdaten:0, positionsSet:new Set(), nullPositionsSet:new Set(),
         });
         const g = gruppen.get(key);
         g.alleTeSet.add(te.te); alleTeSet.add(te.te); lieferantSet.add(supplier.key);
@@ -6072,19 +6263,31 @@
     for (const te of tes ?? []) {
       const zugeordneteLieferanten = new Set();
       for (const p of te.produkte ?? []) {
-        const bewertbar = Number.isFinite(p.mengeAbweichung);
+        if (istNullposition(p)) continue;
+        const bewertbar = Number.isFinite(positionsAbweichung(p));
         if (!bewertbar) nichtBewertbar++;
         const supplier = p.lieferantBewertung ?? (te.lieferantenBewertung?.length === 1 ? te.lieferantenBewertung[0] : null);
         if (!supplier?.key) { ohneLieferant++; continue; }
         zugeordneteLieferanten.add(supplier.key);
         const g = gruppeFuer(supplier, te, p);
+        if(isNull(p.nr)){g.ohneProduktdaten++;ohneProduktdaten++;}
         if (!bewertbar) { g.nichtBewertbar++; g.lueckenTeSet.add(te.te); continue; }
         g.bewertbarePositionen++;
-        g.differenzmenge += p.mengeAbweichung;
-        if (p.mengeAbweichung === 0) continue;
+        const abw=positionsAbweichung(p);
+        g.differenzmenge += abw;
+        if (abw === 0) continue;
         g.teSet.add(te.te);
-        g.anzahlPositionen++;
-        teSet.add(te.te); anzahlPositionen++;
+        const posKey=mengenPositionsSchluessel(te,p);
+        if (!g.positionsSet.has(posKey)) {g.positionsSet.add(posKey);g.anzahlPositionen++;}
+        positionsGesamtSet.add(posKey);
+        teSet.add(te.te);
+      }
+      for (const p of te.produkte ?? []) {
+        if (!istNullposition(p)) continue;
+        const supplier=p.lieferantBewertung;
+        if (!supplier?.key) continue;
+        zugeordneteLieferanten.add(supplier.key);
+        const g=gruppeFuer(supplier,te,p);g.nullPositionsSet.add(mengenPositionsSchluessel(te,p));
       }
       // Warensender ohne auswertbare Produktzeile ebenfalls sichtbar halten.
       for (const supplier of te.lieferantenBewertung ?? []) {
@@ -6093,11 +6296,11 @@
         g.ohneProduktdaten++; g.lueckenTeSet.add(te.te); ohneProduktdaten++;
       }
     }
-    return {gruppen:[...gruppen.values()].map(({teSet,alleTeSet,lueckenTeSet,...g}) => ({...g,
+    return {gruppen:[...gruppen.values()].map(({teSet,alleTeSet,lueckenTeSet,positionsSet,nullPositionsSet,...g}) => ({...g, nullpositionen:nullPositionsSet.size,
       anzahlTe:teSet.size, anzahlTesGesamt:alleTeSet.size, anzahlTesMitDatenluecke:lueckenTeSet.size,
       differenzmenge:g.bewertbarePositionen ? g.differenzmenge : null})),
       anzahlTes:teSet.size, anzahlTesGesamt:alleTeSet.size, anzahlLieferanten:lieferantSet.size,
-      anzahlPositionen, ohneLieferant, nichtBewertbar, ohneProduktdaten};
+      anzahlPositionen:positionsGesamtSet.size, ohneLieferant, nichtBewertbar, ohneProduktdaten};
   }
 
   // Lieferantenvergleich: eine eindeutig zugeordnete TE zählt einmal.
@@ -6134,26 +6337,20 @@
   // derselben TE, Anlieferung, Produktnummer und Einheit werden konsolidiert,
   // damit wiederholte BW-Zeilen keine Doppelanzeigen erzeugen.
   function lieferantAbweichungen(gruppe) {
-    const zeilen = [];
-    for (const te of gruppe?.tes ?? []) {
-      if (te.mengentreu !== false) continue;
-      const produkte = new Map();
-      for (const p of te.produkte ?? []) {
-        if (!Number.isFinite(p.mengeAbweichung)) continue;
-        const anlieferung = p.liefernummer ?? (te.anlieferungen?.length === 1 ? te.anlieferungen[0] : null);
-        const key = `${anlieferung ?? ''}\u0000${p.nr ?? ''}\u0000${p.einheit ?? ''}`;
-        if (!produkte.has(key)) produkte.set(key, {
-          te:te.te, teExt:te.teExt, anlieferung, produktNr:p.nr, produktName:p.name,
-          einheit:p.einheit, geplantStart:te.geplantStart, abweichung:0,
-        });
-        produkte.get(key).abweichung += p.mengeAbweichung;
+    const zeilen=[];
+    for(const te of gruppe?.tes ?? []) {
+      if(te.mengentreu!==false) continue;
+      for(const p of te.mengenPositionen ?? mengenPositionen(te).positionen) {
+        if(!p.abweichungAbs) continue;
+        zeilen.push({te:te.te,teExt:te.teExt,anlieferung:p.anlieferung,produktNr:p.nr,produktName:p.name,
+          einheit:p.einheit,geplantStart:te.geplantStart,abweichung:p.abweichung,abweichungAbs:p.abweichungAbs,teilsumme:!p.abweichungVollstaendig,
+          abweichungen:p.abweichungen,gegenlaeufig:p.abweichungen.some(v=>v>0)&&p.abweichungen.some(v=>v<0)});
       }
-      zeilen.push(...[...produkte.values()].filter(p => Number.isFinite(p.abweichung) && p.abweichung !== 0));
     }
-    return zeilen.sort((a,b) => (b.geplantStart?.getTime?.() ?? -Infinity) - (a.geplantStart?.getTime?.() ?? -Infinity)
-      || String(a.te).localeCompare(String(b.te), 'de', {numeric:true})
-      || String(a.anlieferung ?? '').localeCompare(String(b.anlieferung ?? ''), 'de', {numeric:true})
-      || String(a.produktNr ?? '').localeCompare(String(b.produktNr ?? ''), 'de', {numeric:true}));
+    return zeilen.sort((a,b)=>(b.geplantStart?.getTime?.() ?? -Infinity)-(a.geplantStart?.getTime?.() ?? -Infinity)
+      || String(a.te).localeCompare(String(b.te),'de',{numeric:true})
+      || String(a.anlieferung ?? '').localeCompare(String(b.anlieferung ?? ''),'de',{numeric:true})
+      || String(a.produktNr ?? '').localeCompare(String(b.produktNr ?? ''),'de',{numeric:true}));
   }
 
   // Verdichtet die nicht mengentreuen TEs für die tabellarische
@@ -6164,23 +6361,26 @@
     for (const te of gruppe?.tes ?? []) {
       if (te.mengentreu !== false) continue;
       const einheiten = new Map();
-      for (const p of te.produkte ?? []) {
-        if (!Number.isFinite(p.mengeAbweichung) || p.mengeAbweichung === 0) continue;
+      for (const p of te.mengenPositionen ?? mengenPositionen(te).positionen) {
+        if (!p.abweichungAbs) continue;
         const einheit = isNull(p.einheit) ? null : String(p.einheit);
         const key = einheit ?? '';
-        if (!einheiten.has(key)) einheiten.set(key, {einheit, inkorrektePositionen:0, differenzmenge:0});
+        if (!einheiten.has(key)) einheiten.set(key, {einheit, inkorrektePositionen:0, differenzmenge:0, ueberlieferung:0, unterlieferung:0, teilsumme:false});
         const e = einheiten.get(key);
         e.inkorrektePositionen++;
-        e.differenzmenge += p.mengeAbweichung;
+        e.teilsumme ||= !p.abweichungVollstaendig;
+        e.differenzmenge += p.abweichung;
+        if(p.abweichungen.some(v=>v>0))e.ueberlieferung=1;
+        if(p.abweichungen.some(v=>v<0))e.unterlieferung=1;
       }
       for (const e of einheiten.values()) {
         zeilen.push({
           datum:te.ankerDatum, te:te.te, teExt:te.teExt, lieferant:gruppe.label,
           transportmittel:!isNull(te.transportmittelName) ? te.transportmittelName : te.transportmittel,
           inkorrektePositionen:e.inkorrektePositionen,
-          ueberlieferung:e.differenzmenge > 0 ? 1 : 0,
-          unterlieferung:e.differenzmenge < 0 ? 1 : 0,
-          differenzmenge:e.differenzmenge, einheit:e.einheit,
+          ueberlieferung:e.ueberlieferung,
+          unterlieferung:e.unterlieferung,
+          differenzmenge:e.differenzmenge, einheit:e.einheit,teilsumme:e.teilsumme,
         });
       }
     }
