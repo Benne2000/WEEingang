@@ -1,6 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
 //  SAP Custom Widget – Wareneingang Analyse (WE-Analyse)
-//  JavaScript-Arbeitsstand 2.1.44 – positionsbezogene Mengentreue und separate Nullpositionen
+//  JavaScript-Arbeitsstand 2.1.49 – Fokus, Popups und erneutes Einhängen der Widgetinstanz
 //
 //  Umbau des Live-Trackers zur nachträglichen Auswertung.
 //
@@ -1317,7 +1317,7 @@
     }).sort((a,b)=>a.beleg.localeCompare(b.beleg,'de',{numeric:true}));
     const regulaer=belege.filter(g=>!g.ausgeschlossen);
     return {belege,anzahl:belege.length,regulaer:regulaer.length,ausgeschlossen:belege.length-regulaer.length,
-      quote:quote(regulaer,'otif'),fehlendeBelegPositionen,tesOhneBeleg,fehlendeProdukte,nichtZuordenbareNullpositionen};
+      quote:quote(regulaer,'otif'),mengenquote:quote(regulaer,'mengentreu'),fehlendeBelegPositionen,tesOhneBeleg,fehlendeProdukte,nichtZuordenbareNullpositionen};
   }
 
   // Aggregiert einen Satz TEs zu allen fünf Kennzahlen. Das identische Gerüst
@@ -1483,6 +1483,24 @@
     return `${y}-${m}-${d}`;
   }
 
+  // Nur Darstellung: gleichzeitige Phasen behalten ihre absoluten Zeiten.
+  // Berührende positive Intervalle teilen eine Spur; Punktstempel bekommen
+  // bei zeitgleichen Phasen eine eigene Spur, damit keine Markierung verdeckt wird.
+  function teZeitstrahlSpuren(segmente) {
+    const spuren=[],zuordnung=new Map();
+    const kollidiert=(a,b)=>a.startMs===a.endeMs
+      ? b.startMs<=a.startMs&&a.startMs<=b.endeMs
+      : b.startMs===b.endeMs
+      ? a.startMs<=b.startMs&&b.startMs<=a.endeMs
+      : a.startMs<b.endeMs&&b.startMs<a.endeMs;
+    [...segmente].sort((a,b)=>a.startMs-b.startMs||a.endeMs-b.endeMs||a.index-b.index).forEach(seg=>{
+      let spur=spuren.findIndex(zeile=>zeile.every(alt=>!kollidiert(alt,seg)));
+      if(spur<0){spur=spuren.length;spuren.push([]);}
+      spuren[spur].push(seg);zuordnung.set(seg,spur);
+    });
+    return {segmente:segmente.map(seg=>({...seg,spur:zuordnung.get(seg)})),spuren:Math.max(1,spuren.length)};
+  }
+
   function teZeitstrahlDaten(tes, gewuenschtesDatum = null) {
     const tageMap = new Map();
     for (const te of tes) {
@@ -1509,8 +1527,9 @@
           startMs: te[def.von].getTime(), endeMs: te[def.bis].getTime(), min: dauer.min,
         };
       }).filter(seg=>seg && seg.startMs>=te.tsAnkunft.getTime() && seg.endeMs<=te.tsEinlagerung.getTime());
+      const layout=teZeitstrahlSpuren(segmente);
       zeilen.push({ te, startMs: te.tsAnkunft.getTime(), endeMs: te.tsEinlagerung.getTime(),
-        dauerMin: gesamt.min, segmente });
+        dauerMin: gesamt.min, segmente:layout.segmente,spuren:layout.spuren });
     }
     zeilen.sort((a, b) => a.startMs - b.startMs || String(a.te.te).localeCompare(String(b.te.te), 'de'));
     const alleZeilen = zeilen.length;
@@ -2358,13 +2377,28 @@
         gap:                   10px;
       }
 
+      .ansicht-anpassen { margin-top:12px; }
+      .ansicht-anpassen > summary { width:fit-content; margin-left:auto; padding:8px 12px;
+        border:1px solid var(--c-border); border-radius:var(--r-sm); background:var(--c-bg2);
+        color:var(--c-text); cursor:pointer; font-size:12px; font-weight:600; }
+      .ansicht-anpassen > summary:focus-visible { outline:2px solid var(--c-blue); outline-offset:3px; }
+      .ansicht-anzahl { color:var(--c-text2); font-weight:400; margin-left:6px; }
+      .ansicht-optionen { display:grid; grid-template-columns:repeat(2,minmax(0,1fr));
+        gap:8px 18px; padding:14px; margin-top:8px; border:1px solid var(--c-border);
+        border-radius:var(--r-lg); background:var(--c-bg2); }
+      .ansicht-optionen label { display:flex; align-items:center; gap:9px; padding:6px;
+        cursor:pointer; color:var(--c-text); font-size:13px; min-width:0; overflow-wrap:anywhere; }
+      .ansicht-optionen input { flex:0 0 auto; accent-color:var(--c-blue); width:16px; height:16px; }
+      .ansicht-optionen input:focus-visible { outline:2px solid var(--c-blue); outline-offset:3px; }
+      .ansicht-hinweis { grid-column:1/-1; margin:0; color:var(--c-text2); font-size:11px; }
+      .optionale-auswertung:not([open]) { display:none; }
+      @container (max-width:480px) { .ansicht-optionen { grid-template-columns:1fr; } }
+
       .ls-verteilung { margin-top:12px; padding:14px 18px; border:1px solid var(--c-border);
         border-radius:var(--r-lg); background:var(--c-bg2); }
       .ls-verteilung > summary { cursor:pointer; color:var(--c-text); font-size:13px;
         font-weight:700; list-style:revert; }
       .ls-verteilung > summary:focus-visible { outline:2px solid var(--c-blue); outline-offset:4px; }
-      .ls-verteilung[open] .ls-verteilung-geschlossen { display:none; }
-      .ls-verteilung:not([open]) .ls-verteilung-offen { display:none; }
       .ls-verteilung-sub { margin-top:4px; color:var(--c-text2); font-size:11px; }
       .ls-verteilung-inhalt { display:grid; grid-template-columns:180px minmax(0,1fr);
         align-items:center; gap:24px; max-width:790px; margin:12px auto 0; }
@@ -2424,6 +2458,8 @@
 
       /* ── Hover-Aufschlüsselung nach Ladestelle ── */
       .kpi-breakdown {
+        container-type: inline-size;
+        pointer-events: none;
         position:      absolute;
         top:           calc(100% + 6px);
         left:          0;
@@ -2505,6 +2541,14 @@
         text-align:  right;
       }
 
+      @container (max-width:260px) {
+        .kpi-bd-row { grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:4px 8px; }
+        .kpi-bd-badge { grid-column:1; grid-row:1; min-width:0; overflow-wrap:anywhere; }
+        .kpi-bd-wert { grid-column:2; grid-row:1; white-space:normal; overflow-wrap:anywhere; }
+        .kpi-bd-bar { grid-column:1; grid-row:2; min-width:0; }
+        .kpi-bd-meta { grid-column:2; grid-row:2; min-width:0; white-space:normal; overflow-wrap:anywhere; }
+      }
+
       .kpi-bd-fuss {
         font-size:   9px;
         color:       var(--c-text3);
@@ -2519,10 +2563,14 @@
         letter-spacing: 0.1em;
         text-transform: uppercase;
         color:          var(--c-text3);
-        white-space:    nowrap;
-        overflow:       hidden;
-        text-overflow:  ellipsis;
+        white-space:    normal;
+        min-width:      0;
+        overflow-wrap:  anywhere;
       }
+
+      .kpi-data-hints { font-size:9px; color:var(--c-text3); margin-top:4px; }
+      .kpi-data-hints > summary { cursor:pointer; }
+      .kpi-data-hints > p { margin:6px 0 0; line-height:1.5; overflow-wrap:anywhere; }
 
       .kpi-card-wert {
         font-family:  var(--font-mono);
@@ -3404,6 +3452,7 @@
       .tz-row:hover .tz-row-label { background:var(--c-bg3); }
       .tz-row-label strong { font:600 12px var(--font-mono); }
       .tz-row-label small { color:var(--c-text2); font-size:9px; }
+      .tz-row-label .tz-overlap-note { color:var(--c-red-light); font-size:9px; font-weight:600; }
       .tz-row-facts { display:flex; flex-wrap:wrap; gap:3px 8px; color:var(--c-text); font:600 10px var(--font-mono); }
       .tz-row-facts span + span::before { content:'·'; margin-right:8px; color:var(--c-text3); }
       .tz-row-pack { display:block; max-width:100%; overflow:hidden; color:var(--c-text2); font-size:9px; text-overflow:ellipsis; white-space:nowrap; }
@@ -3413,6 +3462,7 @@
       .tz-shiftline { position:absolute; top:-26px; bottom:-26px; z-index:2; width:3px; background:var(--c-red-light); box-shadow:0 0 0 1px var(--c-red-dim); pointer-events:none; }
       .tz-total { position:absolute; top:5px; height:26px; border:1px solid var(--c-red-border); border-radius:5px; background:var(--c-red-dim); overflow:hidden; }
       .tz-segment { position:absolute; top:6px; height:24px; min-width:0; border-right:1px solid rgba(255,255,255,.45); }
+      .tz-segment.tz-zero { z-index:3; width:3px !important; border:1px solid var(--c-text); border-radius:2px; transform:translateX(-50%); }
       .tz-phase-0 { background:#7f1d1d; } .tz-phase-1 { background:#991b1b; }
       .tz-phase-2 { background:#b91c1c; } .tz-phase-3 { background:#dc2626; }
       .tz-phase-4 { background:#ef4444; }
@@ -3676,16 +3726,30 @@
           <div class="u-abschnitt">
             <div class="u-titel" id="kpi-titel">Kennzahlen</div>
             <div class="kpi-cards" id="kpi-cards"></div>
-            <details class="ls-verteilung" id="otif-te-toggle">
-              <summary>OTIF je TE <span class="ls-verteilung-geschlossen">anzeigen</span><span class="ls-verteilung-offen">ausblenden</span></summary>
+            <details class="ansicht-anpassen" id="ansicht-anpassen">
+              <summary>Ansicht anpassen <span class="ansicht-anzahl" id="ansicht-anzahl">· 0 aktiv</span></summary>
+              <div class="ansicht-optionen" role="group" aria-label="Zusätzliche Auswertungen auswählen">
+                <label><input type="checkbox" data-ansicht-panel="otif-te-toggle" aria-controls="otif-te-toggle">OTIF je TE</label>
+                <label><input type="checkbox" data-ansicht-panel="mengentreue-te-toggle" aria-controls="mengentreue-te-toggle">Mengentreue je TE</label>
+                <label><input type="checkbox" data-ansicht-panel="otif-anlieferungen-toggle" aria-controls="otif-anlieferungen-toggle">Anlieferungsdetails</label>
+                <label><input type="checkbox" data-ansicht-panel="ladestellen-toggle" aria-controls="ladestellen-toggle">TEs nach Ladestelle</label>
+                <p class="ansicht-hinweis">Die Auswahl bleibt bei Zeitraum-, Reiter-, Daten- und Themenwechsel erhalten.</p>
+              </div>
+            </details>
+            <details class="ls-verteilung optionale-auswertung" id="otif-te-toggle">
+              <summary>OTIF je TE ausblenden</summary>
               <div class="kpi-cards" id="otif-te" style="grid-template-columns:minmax(0,420px)"></div>
             </details>
-            <details class="ls-verteilung otif-anlieferungen" id="otif-anlieferungen-toggle">
-              <summary>Anlieferungsdetails <span class="ls-verteilung-geschlossen">anzeigen</span><span class="ls-verteilung-offen">ausblenden</span></summary>
+            <details class="ls-verteilung optionale-auswertung" id="mengentreue-te-toggle">
+              <summary>Mengentreue je TE ausblenden</summary>
+              <div class="kpi-cards" id="mengentreue-te" style="grid-template-columns:minmax(0,420px)"></div>
+            </details>
+            <details class="ls-verteilung otif-anlieferungen optionale-auswertung" id="otif-anlieferungen-toggle">
+              <summary>Anlieferungsdetails ausblenden</summary>
               <div id="otif-anlieferungen"></div>
             </details>
-            <details class="ls-verteilung">
-              <summary>TEs nach Ladestelle <span class="ls-verteilung-geschlossen">anzeigen</span><span class="ls-verteilung-offen">ausblenden</span></summary>
+            <details class="ls-verteilung optionale-auswertung" id="ladestellen-toggle">
+              <summary>TEs nach Ladestelle ausblenden</summary>
               <div id="ladestellen-verteilung" aria-live="polite"></div>
             </details>
           </div>
@@ -3851,11 +3915,16 @@
 
     connectedCallback() {
       this._log('connectedCallback — Widget wird ins DOM eingehängt');
+      if (this._ac.signal.aborted) this._ac = new AbortController();
       this._bindEvents();
       this._applyTheme();
       this._syncSlider();
-      this._showLoading();
-      this._watchdogStart();
+      const state = this._dataBinding?.state;
+      const abgeschlossen = state === 'success' || ['error','failed','failure'].includes(String(state).toLowerCase());
+      if (!abgeschlossen) {
+        this._showLoading();
+        this._watchdogStart();
+      }
     }
 
     disconnectedCallback() {
@@ -3989,6 +4058,49 @@
 
     _bindEvents() {
       const opts = { signal: this._ac.signal };
+      const ansichtOptionen = [...this._shadow.querySelectorAll('[data-ansicht-panel]')];
+      const ansichtSynchronisieren = () => {
+        let anzahl = 0;
+        for (const input of ansichtOptionen) {
+          input.checked = !!this._$(input.dataset.ansichtPanel)?.open;
+          if (input.checked) anzahl++;
+        }
+        const status = this._$('ansicht-anzahl');
+        if (status) status.textContent = `· ${anzahl} aktiv`;
+      };
+      for (const input of ansichtOptionen) {
+        const panel = this._$(input.dataset.ansichtPanel);
+        input.addEventListener('change', () => {
+          if (panel) panel.open = input.checked;
+          ansichtSynchronisieren();
+        }, opts);
+        panel?.addEventListener('toggle', () => {
+          ansichtSynchronisieren();
+          if (!panel.open && panel.contains(this._shadow.activeElement)) {
+            this._fokusInUebersicht(this._$('ansicht-anpassen')?.querySelector('summary'));
+          }
+        }, opts);
+      }
+      ansichtSynchronisieren();
+      this._$('ansicht-anpassen')?.addEventListener('keydown', e => {
+        if (e.key !== 'Escape' || !this._$('ansicht-anpassen').open) return;
+        e.preventDefault();
+        e.stopPropagation();
+        this._$('ansicht-anpassen').open = false;
+        this._fokusInUebersicht(this._$('ansicht-anpassen').querySelector('summary'));
+      }, opts);
+      // Stabile Hosts behalten ihre delegierten Handler bei Karten-Neuaufbau.
+      for (const id of ['kpi-cards','zeit-kpi-cards','otif-te','mengentreue-te']) {
+        const host = this._$(id);
+        host?.addEventListener?.('pointerover', e => {
+          const card = e.target.closest('.kpi-card.hat-breakdown');
+          if (card && !card.contains(e.relatedTarget)) this._kpiPopupRichtung(card);
+        }, opts);
+        host?.addEventListener?.('focusin', e => {
+          const card = e.target.closest('.kpi-card.hat-breakdown');
+          if (card) this._kpiPopupRichtung(card);
+        }, opts);
+      }
       this._shadow.querySelectorAll('[data-analyse-tab]').forEach(button => {
         button.addEventListener('click', () => this._setAnalyseTab(button.dataset.analyseTab), opts);
         button.addEventListener('keydown', e => {
@@ -5097,21 +5209,23 @@
       const schichtLinie=(daten.schichtMarkers??[]).map(ms=>`<i class="tz-shiftline" style="left:${pct(ms).toFixed(3)}%" title="Schichtwechsel ${fmtDateTimeVoll(new Date(ms))}" aria-hidden="true"></i>`).join('');
       const zeilen = daten.zeilen.map(z => {
         const totalLeft = pct(z.startMs), totalWidth = Math.max(0, pct(z.endeMs) - totalLeft);
+        const trackHoehe=36+(z.spuren-1)*30,totalHoehe=26+(z.spuren-1)*30;
         const segmente = z.segmente.map(seg => {
           const left = pct(seg.startMs), width = Math.max(0, pct(seg.endeMs) - left);
-          return `<span class="tz-segment tz-phase-${seg.index}" style="left:${left.toFixed(3)}%;width:${width.toFixed(3)}%"
+          return `<span class="tz-segment tz-phase-${seg.index}${seg.min===0?' tz-zero':''}" data-tz-phase="${esc(seg.id)}" data-tz-spur="${seg.spur}" style="left:${left.toFixed(3)}%;width:${width.toFixed(3)}%;top:${6+seg.spur*30}px"
             title="${esc(seg.label)}: ${fmtProzessMin(seg.min)} · ${fmtDateTime(new Date(seg.startMs))}–${fmtDateTime(new Date(seg.endeMs))}" aria-hidden="true"></span>`;
         }).join('');
         const teToken = encodeURIComponent(String(z.te.te));
         const tm = !isNull(z.te.transportmittelName) ? z.te.transportmittelName : z.te.transportmittel;
         const produktInfo = teProduktKachelDaten(z.te);
         const ariaInfo = `${produktInfo.produktText}, ${produktInfo.mengenText}, ${produktInfo.palettenText}. ${produktInfo.details}`;
-        return `<button class="tz-row" data-tz-te="${esc(teToken)}" aria-label="TE ${esc(z.te.te)}: ${fmtDateTime(new Date(z.startMs))} bis ${fmtDateTime(new Date(z.endeMs))}, ${fmtProzessMin(z.dauerMin)}. ${esc(ariaInfo)}. Details öffnen">
+        return `<button class="tz-row" data-tz-te="${esc(teToken)}" aria-label="TE ${esc(z.te.te)}: ${fmtDateTime(new Date(z.startMs))} bis ${fmtDateTime(new Date(z.endeMs))}, ${fmtProzessMin(z.dauerMin)}. ${esc(ariaInfo)}.${z.spuren>1?` ${z.spuren} Prozessspuren mit zeitgleichen Phasen.`:''} Details öffnen">
           <span class="tz-row-label" title="${esc(produktInfo.details)}"><strong>TE ${esc(z.te.te)}</strong>
             <small>${tm == null ? 'Ohne Transportmittel' : esc(tm)} · ${fmtProzessMin(z.dauerMin)}</small>
             <span class="tz-row-facts"><span>${esc(produktInfo.produktText)}</span><span>${esc(produktInfo.mengenText)}</span><span>${esc(produktInfo.palettenText)}</span></span>
-            <span class="tz-row-pack"><b>Packmittel:</b> ${esc(produktInfo.packmittelText)}</span></span>
-          <span class="tz-track" style="--tz-hour-width:${stundenBreitePct.toFixed(6)}%"><span class="tz-total" style="left:${totalLeft.toFixed(3)}%;width:${totalWidth.toFixed(3)}%" aria-hidden="true"></span>${segmente}${schichtLinie}</span>
+            <span class="tz-row-pack"><b>Packmittel:</b> ${esc(produktInfo.packmittelText)}</span>
+            ${z.spuren>1?`<small class="tz-overlap-note">Zeitgleiche Phasen · ${z.spuren} Spuren</small>`:''}</span>
+          <span class="tz-track" style="height:${trackHoehe}px;--tz-hour-width:${stundenBreitePct.toFixed(6)}%"><span class="tz-total" style="left:${totalLeft.toFixed(3)}%;width:${totalWidth.toFixed(3)}%;height:${totalHoehe}px" aria-hidden="true"></span>${segmente}${schichtLinie}</span>
         </button>`;
       }).join('');
       return `<section class="tz-widget" aria-label="TE-Zeitstrahl">
@@ -5128,7 +5242,7 @@
           <span class="tz-legend-item"><i class="tz-shift-swatch"></i>Schichtwechsel 14:30</span></div>
         <div class="tz-summary">${daten.alleZeilen} von ${daten.kandidaten} TEs mit gültiger Gesamtdurchlaufzeit · ${daten.fehlend} mit fehlenden Zeitstempeln · ${daten.ungueltig} mit ungültiger Zeitfolge${daten.weitere ? ` · weitere ${daten.weitere} TEs aus Darstellungsgründen nicht eingeblendet` : ''}. Zeile anklicken, um die TE-Details zu öffnen.</div>
         <details class="pz-info"><summary>Darstellung und Datenregeln</summary>
-          Jede Zeile zeigt die Gesamtdurchlaufzeit von Ankunft bis zur vollständigen Fertigstellung aller Positionen. Die Zeitachse verwendet durchgehend einen festen Stundentakt; bei Tageswechseln wird zusätzlich das Datum angezeigt. Mehrtägige Achsen sind horizontal scrollbar. Die fünf farbigen Abschnitte entsprechen den vorhandenen Prozessdefinitionen; bei einem fehlenden oder ungültigen Phasenpaar bleibt der betreffende Abschnitt frei. Die hervorgehobenen Linien bei 14:30 markieren den Schichtwechsel an jedem Tag innerhalb der dargestellten Achse. Phasen außerhalb der eigenen TE-Gesamtdurchlaufzeit werden nicht gezeichnet. Die Tageszuordnung folgt der Zeitraumlogik des Widgets: geplanter Start, ersatzweise Ankunft, ersatzweise vollständige Fertigstellung. Bestandsarten bleiben unberücksichtigt. Pro Tag werden höchstens ${TE_ZEITSTRAHL_MAX_ZEILEN} vollständige TEs dargestellt; die Auswertung darüber bleibt unverändert.</details>
+          Jede Zeile zeigt die Gesamtdurchlaufzeit von Ankunft bis zur vollständigen Fertigstellung aller Positionen. Die Zeitachse verwendet durchgehend einen festen Stundentakt; bei Tageswechseln wird zusätzlich das Datum angezeigt. Mehrtägige Achsen sind horizontal scrollbar. Jede TE bleibt in einer eigenen Zeile, auch wenn mehrere TEs gleichzeitig durchlaufen. Überlappende Phasen innerhalb derselben TE stehen in zusätzlichen Spuren untereinander; ihre tatsächlichen Start- und Endzeiten werden nicht verschoben. Aufeinanderfolgende Phasen bleiben in einer Spur. 0-Minuten-Phasen erscheinen als schmale Markierungen. Die Gesamtdurchlaufzeit wird weiterhin direkt aus Ankunft und vollständiger Fertigstellung berechnet; die Phasendauern werden wegen möglicher Überlappungen nicht dafür addiert. Die fünf farbigen Abschnitte entsprechen den vorhandenen Prozessdefinitionen; bei einem fehlenden oder ungültigen Phasenpaar bleibt der betreffende Abschnitt frei. Die hervorgehobenen Linien bei 14:30 markieren den Schichtwechsel an jedem Tag innerhalb der dargestellten Achse. Phasen außerhalb der eigenen TE-Gesamtdurchlaufzeit werden nicht gezeichnet. Die Tageszuordnung folgt der Zeitraumlogik des Widgets: geplanter Start, ersatzweise Ankunft, ersatzweise vollständige Fertigstellung. Bestandsarten bleiben unberücksichtigt. Pro Tag werden höchstens ${TE_ZEITSTRAHL_MAX_ZEILEN} vollständige TEs dargestellt; die Auswertung darüber bleibt unverändert.</details>
       </section>`;
     }
 
@@ -5177,21 +5291,25 @@
       </section>`;
     }
 
-    _anlieferungsKarteHTML(aktiv, vgl, vglName) {
-      const q=aktiv.quote;
-      const sub=`${q.bewertbar?`${q.ok} von ${q.bewertbar} Anlieferungen erfüllt`:'Keine bewertbaren Anlieferungen'} · ${q.nb} nicht bewertbar · ${aktiv.ausgeschlossen} ausgenullt, separat ausgeschlossen`
-        + (aktiv.tesOhneBeleg?` · ${aktiv.tesOhneBeleg} TEs ohne Belegnummer`:'')
-        + (aktiv.fehlendeBelegPositionen?` · ${aktiv.fehlendeBelegPositionen} reguläre Zeilen ohne eindeutigen Beleg`:'')
-        + (aktiv.fehlendeProdukte?` · ${aktiv.fehlendeProdukte} Zeilen ohne Produktnummer`:'')
-        + (aktiv.nichtZuordenbareNullpositionen?` · ${aktiv.nichtZuordenbareNullpositionen} Nullpositionen ohne Beleg separat ausgeschlossen`:'');
-      const html=this._kpiCardHTML({id:'otifAnlieferung',label:'OTIF · Anlieferungen'},
-        {anzahl:aktiv.anzahl,otifAnlieferung:q},{otifAnlieferung:vgl.quote},vglName);
-      return html.replace(/<div class="kpi-card-sub">[\s\S]*?<\/div>/,`<div class="kpi-card-sub">${esc(sub)}</div>`);
+    _anlieferungsKarteHTML(aktiv, vgl, vglName, kennzahl='otif') {
+      const istMenge=kennzahl==='mengentreu';
+      const feld=istMenge?'mengenquote':'quote',id=istMenge?'mengentreuAnlieferung':'otifAnlieferung';
+      const q=aktiv[feld];
+      const sub=`${q.bewertbar?`${q.ok} von ${q.bewertbar} ${q.bewertbar===1?'Anlieferung':'Anlieferungen'} erfüllt`:'Keine bewertbaren Anlieferungen'} · ${q.nb} nicht bewertbar · ${aktiv.ausgeschlossen} ausgenullt, separat ausgeschlossen`;
+      const hinweise=[];
+      if(aktiv.tesOhneBeleg)hinweise.push(`${aktiv.tesOhneBeleg} ${aktiv.tesOhneBeleg===1?'TE':'TEs'} ohne Belegnummer`);
+      if(aktiv.fehlendeBelegPositionen)hinweise.push(`${aktiv.fehlendeBelegPositionen} ${aktiv.fehlendeBelegPositionen===1?'reguläre Zeile':'reguläre Zeilen'} ohne eindeutigen Beleg`);
+      if(aktiv.fehlendeProdukte)hinweise.push(`${aktiv.fehlendeProdukte} ${aktiv.fehlendeProdukte===1?'Zeile':'Zeilen'} ohne Produktnummer`);
+      if(aktiv.nichtZuordenbareNullpositionen)hinweise.push(`${aktiv.nichtZuordenbareNullpositionen} ${aktiv.nichtZuordenbareNullpositionen===1?'Nullposition':'Nullpositionen'} ohne Beleg separat ausgeschlossen`);
+      const datenInfo=hinweise.length?`<details class="kpi-data-hints" data-analysis-key="${id}-data-hints"><summary title="${esc(hinweise.join(' · '))}">${hinweise.length} ${hinweise.length===1?'Datenhinweis':'Datenhinweise'}</summary><p>${esc(hinweise.join(' · '))}</p></details>`:'';
+      const html=this._kpiCardHTML({id,label:istMenge?'Mengentreue · Anlieferungen':'OTIF · Anlieferungen'},
+        {anzahl:aktiv.anzahl,[id]:q},{[id]:vgl[feld]},vglName);
+      return html.replace(/<div class="kpi-card-sub">[\s\S]*?<\/div>/,`<div class="kpi-card-sub">${esc(sub)}</div>${datenInfo}`);
     }
 
-    _renderAnlieferungsOtif() {
+    _renderAnlieferungsOtif(aktiv) {
       const host=this._$('otif-anlieferungen');if(!host)return;
-      const aktiv=anlieferungsOtif(this._tesZeitraum(),[...(this._teMap?.values() ?? this._tesZeitraum())]),vp=vorperiode(this._bereich),vgl=anlieferungsOtif(this._tesZeitraum(vp),[...(this._teMap?.values() ?? this._tesZeitraum())]);
+      if(!aktiv){const tes=this._tesZeitraum();aktiv=anlieferungsOtif(tes,[...(this._teMap?.values() ?? tes)]);}
       const ui=this._analyseUiVorRender(host);
       const status=v=>v===true?'Erfüllt':v===false?'Nicht erfüllt':'Nicht bewertbar';
       const table=(zeilen,nullListe)=>`<div class="lb-scroll" tabindex="0" role="region" aria-label="${nullListe?'Ausgenullte Anlieferungen':'OTIF-Anlieferungsbelege'} scrollen"><table class="lb-table lb-analysis-table"><thead><tr>
@@ -5199,11 +5317,11 @@
         </tr></thead><tbody>${zeilen.map(g=>`<tr><th scope="row">${esc(g.beleg)}</th><td>${esc(g.tes.map(te=>te.te).join(' · '))}</td><td>${esc(g.tes.map(te=>te.teExt ?? '–').join(' · '))}</td><td>${g.positionen}${g.zuordnungUnklar?'<small>Belegzuordnung unvollständig</small>':''}</td><td>${g.nullpositionen}</td><td>${esc(status(g.puenktlich))}</td><td>${g.ausgeschlossen?'Ausgeschlossen':esc(status(g.mengentreu))}</td><td>${g.ausgeschlossen?'Ausgeschlossen':esc(status(g.otif))}</td></tr>`).join('')}</tbody></table></div>`;
       const ausgeschlossen=aktiv.belege.filter(g=>g.ausgeschlossen);
       host.innerHTML=`
-        <p class="lb-context">${aktiv.anzahl} verschiedene Anlieferungen · ${aktiv.quote.bewertbar} bewertbar · ${aktiv.quote.nb} nicht bewertbar · ${aktiv.ausgeschlossen} vollständig ausgenullt und separat ausgeschlossen${aktiv.fehlendeBelegPositionen||aktiv.tesOhneBeleg ? ` · ${aktiv.fehlendeBelegPositionen} Produktzeilen ohne eindeutigen Beleg · ${aktiv.tesOhneBeleg} TEs ohne Belegnummer` : ''}</p>
+        <p class="lb-context">${aktiv.anzahl} ${aktiv.anzahl===1?'Anlieferung':'verschiedene Anlieferungen'} · OTIF: ${aktiv.quote.bewertbar} bewertbar / ${aktiv.quote.nb} nicht bewertbar · Mengentreue: ${aktiv.mengenquote.bewertbar} bewertbar / ${aktiv.mengenquote.nb} nicht bewertbar · ${aktiv.ausgeschlossen} vollständig ausgenullt und separat ausgeschlossen${aktiv.fehlendeBelegPositionen?` · ${aktiv.fehlendeBelegPositionen} ${aktiv.fehlendeBelegPositionen===1?'reguläre Zeile':'reguläre Zeilen'} ohne eindeutigen Beleg`:''}${aktiv.tesOhneBeleg?` · ${aktiv.tesOhneBeleg} ${aktiv.tesOhneBeleg===1?'TE':'TEs'} ohne Belegnummer`:''}</p>
         ${ausgeschlossen.length ? `<details class="pz-info" data-analysis-key="delivery-zero"><summary>Ausgenullte Anlieferungen (${ausgeschlossen.length}) · separat ausgeschlossen</summary>${table(ausgeschlossen,true)}</details>`:''}
         <details class="pz-info" data-analysis-key="delivery-records"><summary>Anlieferungsbelege und Berechnung (${aktiv.regulaer})</summary>
           <p>OTIF = pünktlich und vollständig je Anlieferungsbeleg. Der Zeitraum wählt Belege aus; alle geladenen beteiligten TEs werden bewertet, auch außerhalb des Zeitraums oder ohne Zeitanker. Jede positive oder negative reguläre Positionsabweichung verhindert OTIF; die Mengentoleranz der TE-Kennzahl gilt hier nicht. Eine verspätete beteiligte TE verhindert OTIF für den Beleg. Pünktlichkeit verwendet Ankunft am Kontrollpunkt gegenüber Planstart und die bestehende Zeittoleranz.</p>
-          <p>Ist=0-Positionen bleiben separat ausgeschlossen. Besteht die gesamte Anlieferung aus Nullpositionen, wird sie weder als erfüllt noch als nicht erfüllt gezählt. Unbekannte Daten ergeben „nicht bewertbar“, sofern kein Mengenfehler und keine Verspätung bereits feststehen. Quote = erfüllte / bewertbare Anlieferungen. Die bisherige OTIF-Kachel bewertet weiterhin TEs.</p>
+          <p>Ist=0-Positionen bleiben separat ausgeschlossen. Besteht die gesamte Anlieferung aus Nullpositionen, wird sie weder als erfüllt noch als nicht erfüllt gezählt. Unbekannte Daten ergeben „nicht bewertbar“, sofern kein Mengenfehler und keine Verspätung bereits feststehen. Quote = erfüllte / bewertbare Anlieferungen. Mengentreue je Anlieferung bewertet dieselben regulären Positionen, unabhängig von der Pünktlichkeit: mengentreue / mengenmäßig bewertbare Anlieferungen. Fehlende Zeitstempel beeinflussen diese Mengenquote nicht. Bekannte Mengenfehler verhindern Mengentreue, sonst ergeben fehlende oder nicht eindeutig zuordenbare Mengen „nicht bewertbar“. OTIF und Mengentreue je TE sind separat einblendbar.</p>
           ${aktiv.regulaer ? table(aktiv.belege.filter(g=>!g.ausgeschlossen),false):'<p class="lb-context">Keine regulären Anlieferungen im Zeitraum.</p>'}
         </details>`;
       this._analyseUiNachRender(host,ui);
@@ -5214,12 +5332,14 @@
       const zeitHost = this._$('zeit-kpi-cards');
       const ladestellenHost = this._$('ladestellen-verteilung');
       const teOtifHost = this._$('otif-te');
+      const teMengenHost = this._$('mengentreue-te');
       if (!host) return;
-      this._renderAnlieferungsOtif();
-
-      const vp    = vorperiode(this._bereich);
-      const aktiv = aggregiere(this._tesZeitraum());
-      const vgl   = aggregiere(this._tesZeitraum(vp));
+      const ui=this._analyseUiVorRender(host);
+      const vp=vorperiode(this._bereich),tesAktiv=this._tesZeitraum(),tesVgl=this._tesZeitraum(vp);
+      const alleTes=[...(this._teMap?.values() ?? [...tesAktiv,...tesVgl])];
+      const anlieferungAktiv=anlieferungsOtif(tesAktiv,alleTes),anlieferungVgl=anlieferungsOtif(tesVgl,alleTes);
+      this._renderAnlieferungsOtif(anlieferungAktiv);
+      const aktiv=aggregiere(tesAktiv),vgl=aggregiere(tesVgl);
 
       if (aktiv.anzahl === 0) {
         host.innerHTML = `<div class="u-leer" style="grid-column:1/-1">
@@ -5228,40 +5348,48 @@
         if (zeitHost) zeitHost.innerHTML = host.innerHTML;
         if (ladestellenHost) ladestellenHost.innerHTML = '';
         if (teOtifHost) teOtifHost.innerHTML = host.innerHTML;
+        if (teMengenHost) teMengenHost.innerHTML = host.innerHTML;
         return;
       }
 
       const vglName = `Vorperiode: ${bereichLabel(vp)}`;
-      const anlieferungAktiv=anlieferungsOtif(this._tesZeitraum(),[...(this._teMap?.values() ?? this._tesZeitraum())]),anlieferungVgl=anlieferungsOtif(this._tesZeitraum(vp),[...(this._teMap?.values() ?? this._tesZeitraum())]);
       host.innerHTML = KPI_DEFS.filter(def => def.id !== 'durchlaufzeit').map(def => def.id==='otif'
         ? this._anlieferungsKarteHTML(anlieferungAktiv,anlieferungVgl,vglName)
+        : def.id==='mengentreu'
+        ? this._anlieferungsKarteHTML(anlieferungAktiv,anlieferungVgl,vglName,'mengentreu')
         : this._kpiCardHTML(def, aktiv, vgl, vglName)).join('');
+      this._analyseUiNachRender(host,ui);
       if(teOtifHost)teOtifHost.innerHTML=this._kpiCardHTML({id:'otif',label:'OTIF · TE'},aktiv,vgl,vglName);
+      if(teMengenHost)teMengenHost.innerHTML=this._kpiCardHTML({id:'mengentreu',label:'Mengentreue · TE'},aktiv,vgl,vglName);
       if (zeitHost) zeitHost.innerHTML = KPI_DEFS.filter(def => def.id === 'durchlaufzeit').map(def => this._kpiCardHTML(def, aktiv, vgl, vglName)).join('');
       if (ladestellenHost) ladestellenHost.innerHTML = this._ladestellenVerteilungHTML(aktiv);
 
-      // Aufklapp-Richtung der Aufschlüsselung bestimmen: Standard ist nach
-      // unten; ist dort im scrollbaren View zu wenig Platz, nach oben klappen.
-      // Delegierte Handler statt eines Listeners je Karte.
-      const richtungPruefen = (card) => {
-        const pop = card.querySelector('.kpi-breakdown');
-        if (!pop) return;
-        const view = this._$('view-uebersicht');
-        const cardR = card.getBoundingClientRect();
-        const viewR = view.getBoundingClientRect();
-        const noetig = pop.offsetHeight + 12;
-        const platzUnten = viewR.bottom - cardR.bottom;
-        card.classList.toggle('bd-oben', platzUnten < noetig && cardR.top - viewR.top > noetig);
-      };
-      host.onpointerover = (e) => {
-        const card = e.target.closest('.kpi-card.hat-breakdown');
-        if (card && !card.contains(e.relatedTarget)) richtungPruefen(card);
-      };
-      host.onfocusin = (e) => {
-        const card = e.target.closest('.kpi-card.hat-breakdown');
-        if (card) richtungPruefen(card);
-      };
-      if (zeitHost) { zeitHost.onpointerover = host.onpointerover; zeitHost.onfocusin = host.onfocusin; }
+    }
+
+    // focusin muss als echtes Event registriert sein, nicht als onfocusin-Property.
+    _kpiPopupRichtung(card) {
+      const pop = card.querySelector('.kpi-breakdown');
+      const view = this._$('view-uebersicht');
+      if (!pop || !view) return;
+      const cardR = card.getBoundingClientRect();
+      const viewR = view.getBoundingClientRect();
+      const noetig = pop.offsetHeight + 12;
+      const platzUnten = viewR.bottom - cardR.bottom;
+      card.classList.toggle('bd-oben', platzUnten < noetig && cardR.top - viewR.top > noetig);
+    }
+
+    // Nur den inneren Analysebereich bewegen; die SAC-Seite bleibt an ihrer Position.
+    _fokusInUebersicht(ziel) {
+      if (!ziel) return;
+      ziel.focus({ preventScroll: true });
+      const view = this._$('view-uebersicht');
+      if (!view || !view.contains(ziel)) return;
+      const grenze = view.getBoundingClientRect();
+      const rect = ziel.getBoundingClientRect();
+      const oben = grenze.top + view.clientTop + 8;
+      const unten = grenze.bottom - 8;
+      if (rect.top < oben) view.scrollTop -= oben - rect.top;
+      else if (rect.bottom > unten) view.scrollTop += rect.bottom - unten;
     }
 
     // Formatiert den Wert einer Kennzahl aus einem aggregierten Datensatz
