@@ -1,6 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
 //  SAP Custom Widget – Wareneingang Analyse (WE-Analyse)
-//  JavaScript-Arbeitsstand 2.1.49 – Fokus, Popups und erneutes Einhängen der Widgetinstanz
+//  JavaScript-Arbeitsstand 2.1.60 – Feiertags-Samstag mit Ist-Nachweis zählt standardmäßig
 //
 //  Umbau des Live-Trackers zur nachträglichen Auswertung.
 //
@@ -83,9 +83,7 @@
     eingelagert:     'Eingelagert',
   };
 
-  // EWM-Deeplink. Platzhalter bis die echte URL feststeht.
-  const EWM_BASE_URL = 'https://ewm.example.com/te/';
-  const ewmLink = (intTE) => EWM_BASE_URL + encodeURIComponent(intTE);
+  // EWM-Deeplink deaktiviert, bis eine echte Ziel-URL fachlich bestätigt ist.
 
   // Standard-Toleranz in Minuten – ab wann eine TE als "unpünktlich" gilt.
   // Wird über die Property `puenktlichkeitToleranzMin` überschrieben.
@@ -1320,6 +1318,68 @@
       quote:quote(regulaer,'otif'),mengenquote:quote(regulaer,'mengentreu'),fehlendeBelegPositionen,tesOhneBeleg,fehlendeProdukte,nichtZuordenbareNullpositionen};
   }
 
+
+  // Tageswerte der globalen Kacheln, unabhängig von Partnerzuordnungen.
+  // Ein Beleg wird einem einzigen Tag zugeordnet: frühester ausgewählter TE-Anker.
+  // Für dieses Lager gehört jeder Beleg fachlich genau einer TE.
+  function kennzahlenVerlauf(tes, alleTes=tes, belege=anlieferungsOtif(tes,alleTes)) {
+    const tage=new Map();
+    const tagGruppe=tag=>{
+      if(!tage.has(tag))tage.set(tag,{tag,datum:new Date(`${tag}T00:00:00Z`),tes:[],belege:[]});
+      return tage.get(tag);
+    };
+    const ausgewaehlt=new Set(tes.map(te=>te.te));
+    for(const te of tes){const tag=datumSchluessel(te.ankerDatum);if(tag)tagGruppe(tag).tes.push(te);}
+    for(const beleg of belege.belege){
+      const anker=beleg.tes.filter(te=>ausgewaehlt.has(te.te)&&datumSchluessel(te.ankerDatum))
+        .map(te=>datumSchluessel(te.ankerDatum)).sort()[0];
+      if(anker)tagGruppe(anker).belege.push(beleg);
+    }
+    return [...tage.values()].sort((a,b)=>a.tag.localeCompare(b.tag)).map(t=>{
+      const regulaer=t.belege.filter(b=>!b.ausgeschlossen),nullpositionen=t.tes.reduce((n,te)=>n+(te.nullpositionen?.length??0),0);
+      const tePunkt=feld=>({...quote(t.tes,feld),gesamt:t.tes.length,ausgeschlossen:0,nullpositionen});
+      const belegPunkt=feld=>({...quote(regulaer,feld),gesamt:t.belege.length,ausgeschlossen:t.belege.length-regulaer.length,nullpositionen:0});
+      return {tag:t.tag,datum:t.datum,serien:{otifAnlieferung:belegPunkt('otif'),otifTE:tePunkt('otif'),
+        puenktlichTE:tePunkt('puenktlich'),mengeAnlieferung:belegPunkt('mengentreu'),mengeTE:tePunkt('mengentreu')}};
+    });
+  }
+
+
+  // Gleiche, vollständige TE-Kohorte wie die globale Ladestellen-Aufschlüsselung.
+  // Belegquoten werden durch diese zusätzliche TE-Ansicht nicht verändert.
+  function kennzahlenLadestellen(tes,tage) {
+    const gruppen=new Map(),tageGruppen=new Map();
+    for(const te of tes){
+      const ls=ladestelleKurz(te.ladestelle);if(!gruppen.has(ls))gruppen.set(ls,[]);gruppen.get(ls).push(te);
+      const tag=datumSchluessel(te.ankerDatum);if(!tag)continue;
+      if(!tageGruppen.has(tag))tageGruppen.set(tag,new Map());
+      const tm=tageGruppen.get(tag);if(!tm.has(ls))tm.set(ls,[]);tm.get(ls).push(te);
+    }
+    const punkt=(liste,feld)=>({...quote(liste,feld),gesamt:liste.length,ausgeschlossen:0,
+      nullpositionen:liste.reduce((n,te)=>n+(te.nullpositionen?.length??0),0)});
+    const kategorien=LADESTELLE_KATEGORIEN.flatMap((ls,index)=>gruppen.has(ls)?[{ls,index,
+      otif:quote(gruppen.get(ls),'otif'),mengentreu:quote(gruppen.get(ls),'mengentreu'),puenktlich:quote(gruppen.get(ls),'puenktlich'),anzahl:gruppen.get(ls).length}]:[]);
+    return {gruppen:kategorien,tage:tage.map(t=>{
+      const serien={...t.serien};
+      for(const g of kategorien){const liste=tageGruppen.get(t.tag)?.get(g.ls)??[];
+        serien['otifTEls'+g.index]=punkt(liste,'otif');serien['mengeTEls'+g.index]=punkt(liste,'mengentreu');
+        serien['puenktlichTEls'+g.index]=punkt(liste,'puenktlich');}
+      return {...t,serien};
+    })};
+  }
+
+  // Eine Datenlücke wird nicht durch eine Linie überbrückt und nicht als 0 gezeichnet.
+  function kennzahlenLinienSegmente(tage,key) {
+    const segmente=[];let aktuell=[];let vorher=null;
+    for(const t of tage){
+      const wert=t.serien[key]?.wert,ms=t.datum.getTime();
+      if(!Number.isFinite(wert)){if(aktuell.length)segmente.push(aktuell);aktuell=[];vorher=null;continue;}
+      if(vorher!=null&&ms-vorher>86400000){segmente.push(aktuell);aktuell=[];}
+      aktuell.push(t);vorher=ms;
+    }
+    if(aktuell.length)segmente.push(aktuell);return segmente;
+  }
+
   // Aggregiert einen Satz TEs zu allen fünf Kennzahlen. Das identische Gerüst
   // wird sowohl für die Gesamtsumme als auch je Ladestelle verwendet, damit
   // die Hover-Aufschlüsselung exakt dieselbe Rechnung nutzt wie die Karte.
@@ -1403,22 +1463,105 @@
   const TE_ZEITSTRAHL_MAX_ZEILEN = 100;
   const TE_ZEITSTRAHL_PX_PRO_STUNDE = 64;
 
-  function durchlaufzeitTrend(tes, id = 'gesamt') {
+  // Netto-Näherung: BW-Wanduhrwerte, unveränderte Endpunkte; keine DST-Umrechnung.
+  // Der Kalender gehört zur geladenen Abfrage, nicht zum ausgewählten Zeitraum.
+  const NETTO_WERKTAG = Object.freeze([[375,630],[660,855],[870,1110],[1140,1335]].map(Object.freeze));
+  const NETTO_SAMSTAG = NETTO_WERKTAG.slice(0,2);
+  const NETTO_IST_FELDER = Object.freeze([
+    ['dimension_ist_start','IST_START'], ['dimension_ist_ende','IST_ENDE'],
+    ['dimension_ts_ankunft','ANKUNFT'], ['dimension_ts_angedockt','ANGEDOCKT'],
+    ['dimension_ts_entladen_start','ENTLADEN_START'], ['dimension_ts_entladen_ende','ENTLADEN_ENDE'],
+    ['dimension_ts_entladen_tat','ENTLADEN_TAT'], ['dimension_ts_we_buchung','WE_BUCHUNG'],
+    ['dimension_ts_einlagerung','FERTIGSTELLUNG'], ['dimension_ts_abfahrt','ABFAHRT']
+  ]);
+  const NETTO_FEIERTAGE = new Map();
+  function nettoFeiertage(jahr) {
+    if (!Number.isInteger(jahr) || jahr < 2020 || jahr > 2035) return null;
+    if (NETTO_FEIERTAGE.has(jahr)) return NETTO_FEIERTAGE.get(jahr);
+    const a=jahr%19,b=Math.floor(jahr/100),c=jahr%100,d=Math.floor(b/4),e=b%4,
+      f=Math.floor((b+8)/25),g=Math.floor((b-f+1)/3),h=(19*a+b-d-g+15)%30,
+      i=Math.floor(c/4),k=c%4,l=(32+2*e+2*i-h-k)%7,m=Math.floor((a+11*h+22*l)/451),
+      monat=Math.floor((h+l-7*m+114)/31),tag=(h+l-7*m+114)%31+1,
+      ostern=Date.UTC(jahr,monat-1,tag),v=new Map();
+    const add=(ms,name)=>v.set(new Date(ms).toISOString().slice(0,10),name);
+    for (const [mo,t,name] of [[1,1,'Neujahr'],[5,1,'Tag der Arbeit'],[10,3,'Tag der Deutschen Einheit'],[11,1,'Allerheiligen'],[12,25,'1. Weihnachtstag'],[12,26,'2. Weihnachtstag']]) add(Date.UTC(jahr,mo-1,t),name);
+    for (const [offset,name] of [[-2,'Karfreitag'],[1,'Ostermontag'],[39,'Christi Himmelfahrt'],[50,'Pfingstmontag'],[60,'Fronleichnam']]) add(ostern+offset*86400000,name);
+    NETTO_FEIERTAGE.set(jahr,v); return v;
+  }
+
+  function nettoKalenderAusRows(rows, feiertagsSamstag=true) {
+    const stempel=new Set(); let unlesbar=0;
+    for (const row of rows ?? []) {
+      if (!row || typeof row !== 'object') continue;
+      for (const keys of NETTO_IST_FELDER) {
+        const d=readTs(row,...keys);
+        if (d) stempel.add(d.getTime());
+        else if (readDim(row,...keys) != null) unlesbar++;
+      }
+    }
+    const samstage=new Map();
+    for (const ms of stempel) {
+      const d=new Date(ms),tag=d.toISOString().slice(0,10);
+      if (d.getUTCDay()===6) {
+        if (!samstage.has(tag)) samstage.set(tag,new Set());
+        samstage.get(tag).add(ms);
+      }
+    }
+    const fenster = day => {
+      const d=new Date(day),tag=d.toISOString().slice(0,10),w=d.getUTCDay(),fest=nettoFeiertage(d.getUTCFullYear())?.get(tag);
+      if (w===0 || (fest && !(w===6 && samstage.has(tag) && feiertagsSamstag))) return [];
+      return w===6 ? samstage.has(tag) ? NETTO_SAMSTAG : [] : NETTO_WERKTAG;
+    };
+    // Tagespräfixe je Jahr: lange und überlappende Prozesse werden nicht
+    // pro TE/Phase über jeden Kalendertag neu durchlaufen.
+    const jahre=new Map();
+    const jahrDaten = jahr => {
+      if (jahre.has(jahr)) return jahre.get(jahr);
+      const start=Date.UTC(jahr,0,1),ende=Date.UTC(jahr+1,0,1),prefix=[0];
+      for (let day=start;day<ende;day+=86400000) prefix.push(prefix[prefix.length-1]+fenster(day).reduce((sum,[lo,hi])=>sum+hi-lo,0));
+      const v={start,prefix};jahre.set(jahr,v);return v;
+    };
+    const punkte=new Map();
+    const kumulativ = ms => {
+      if (punkte.has(ms)) return punkte.get(ms);
+      const jahr=new Date(ms).getUTCFullYear(),day=Math.floor(ms/86400000)*86400000,j=jahrDaten(jahr);
+      let wert=j.prefix[Math.floor((day-j.start)/86400000)];
+      for (let y=2020;y<jahr;y++) { const p=jahrDaten(y).prefix;wert+=p[p.length-1]; }
+      for (const [lo,hi] of fenster(day)) wert+=Math.max(0,Math.min(ms,day+hi*60000)-(day+lo*60000))/60000;
+      punkte.set(ms,wert); return wert;
+    };
+    const dauer = (start,ende) => {
+      if (!Number.isFinite(start) || !Number.isFinite(ende) || ende<start) return null;
+      if (new Date(start).getUTCFullYear()<2020 || new Date(ende).getUTCFullYear()>2035) return null;
+      return Math.max(0,kumulativ(ende)-kumulativ(start));
+    };
+    let ausserhalb=0,feiertagsStempel=0,min=null,max=null;
+    for (const ms of stempel) {
+      const day=Math.floor(ms/86400000)*86400000,d=new Date(ms);
+      if (!fenster(day).some(([lo,hi])=>ms>=day+lo*60000 && ms<=day+hi*60000)) ausserhalb++;
+      if (nettoFeiertage(d.getUTCFullYear())?.has(d.toISOString().slice(0,10))) feiertagsStempel++;
+      min=min==null?ms:Math.min(min,ms);max=max==null?ms:Math.max(max,ms);
+    }
+    return {dauer,samstage,stempelAnzahl:stempel.size,unlesbar,ausserhalb,feiertagsStempel,min,max,feiertagsSamstag};
+  }
+
+  function durchlaufzeitTrend(tes, id = 'gesamt', kalender = null) {
     const def = PROZESS_DEFS.find(d => d.id === id && d.gesamt);
     if (!def) return [];
     const tage = new Map();
     for (const te of tes) {
       const tag = datumSchluessel(te.ankerDatum);
       if (!tag) continue;
-      if (!tage.has(tag)) tage.set(tag, {tag, datum:new Date(`${tag}T00:00:00Z`), werte:[], fehlend:0, ungueltig:0});
-      const t = tage.get(tag), dauer = prozessDauer(te, def);
+      if (!tage.has(tag)) tage.set(tag, {tag, datum:new Date(`${tag}T00:00:00Z`), werte:[], fehlend:0, ungueltig:0, ...(kalender ? {kalender:0} : {})});
+      const t = tage.get(tag), dauer = prozessDauer(te, def, kalender);
       if (dauer.grund === 'fehlend') t.fehlend++;
       else if (dauer.grund === 'ungueltig') t.ungueltig++;
+      else if (dauer.grund === 'kalender') t.kalender++;
       else t.werte.push(dauer.min);
     }
     return [...tage.values()].sort((a,b) => a.tag.localeCompare(b.tag)).map(t => {
       const werte = t.werte.sort((a,b) => a-b), n = werte.length;
-      return {tag:t.tag, datum:t.datum, n, fehlend:t.fehlend, ungueltig:t.ungueltig,
+      return {tag:t.tag, datum:t.datum, n, fehlend:t.fehlend, ungueltig:t.ungueltig, ...(kalender ? {kalender:t.kalender} : {}),
         mittel:n ? werte.reduce((sum,v) => sum+v, 0)/n : null,
         median:n ? n%2 ? werte[(n-1)/2] : (werte[n/2-1]+werte[n/2])/2 : null};
     });
@@ -1558,27 +1701,32 @@
       breitePx: Math.round(Math.max(900, stunden * TE_ZEITSTRAHL_PX_PRO_STUNDE)) };
   }
 
-  function prozessDauer(te, def) {
+  function prozessDauer(te, def, kalender = null) {
     const von = te[def.von], bis = te[def.bis];
     if (von == null || bis == null) return { min: null, grund: 'fehlend' };
     const a = von.getTime(), b = bis.getTime();
     if (!Number.isFinite(a) || !Number.isFinite(b) || b < a) return { min: null, grund: 'ungueltig' };
+    if (kalender) {
+      const min=kalender.dauer(a,b);
+      return Number.isFinite(min) ? {min,grund:null} : {min:null,grund:'kalender'};
+    }
     return { min: (b - a) / 60000, grund: null };
   }
 
-  function aggregiereProzesszeiten(tes) {
+  function aggregiereProzesszeiten(tes, kalender = null) {
     return PROZESS_DEFS.map(def => {
       const werte = [];
-      let fehlend = 0, ungueltig = 0;
+      let fehlend = 0, ungueltig = 0, ohneKalender = 0;
       for (const te of tes) {
-        const p = prozessDauer(te, def);
+        const p = prozessDauer(te, def, kalender);
         if (p.grund === 'fehlend') fehlend++;
         else if (p.grund === 'ungueltig') ungueltig++;
+        else if (p.grund === 'kalender') ohneKalender++;
         else werte.push(p.min);
       }
       werte.sort((a, b) => a - b);
       const n = werte.length, m = Math.floor(n / 2);
-      return { ...def, gesamtTEs: tes.length, n, fehlend, ungueltig,
+      return { ...def, gesamtTEs: tes.length, n, fehlend, ungueltig, ...(kalender ? {kalender:ohneKalender} : {}),
         mittel: n ? werte.reduce((a, b) => a + b, 0) / n : null,
         median: n ? (n % 2 ? werte[m] : (werte[m - 1] + werte[m]) / 2) : null,
         min: n ? werte[0] : null, max: n ? werte[n - 1] : null };
@@ -1587,7 +1735,7 @@
 
   // Transportmittel ist ein eigenes BW-Merkmal, unabhängig von der Ladestelle.
   // Gruppierung auf TE-Ebene nach Schlüssel; fehlende Werte bleiben sichtbar.
-  function aggregiereTransportzeiten(tes) {
+  function aggregiereTransportzeiten(tes, kalender = null) {
     const gruppen = new Map();
     for (const te of tes) {
       const raw = te.transportmittel == null ? '' : String(te.transportmittel).trim();
@@ -1600,7 +1748,7 @@
     }
     return [...gruppen.values()].map(g => ({
       key: g.key, label: g.label, anzahl: g.tes.length,
-      prozesse: aggregiereProzesszeiten(g.tes)
+      prozesse: aggregiereProzesszeiten(g.tes, kalender)
     })).sort((a,b) => a.key === null ? 1 : b.key === null ? -1 :
       a.label.localeCompare(b.label, 'de', {numeric:true}) || a.key.localeCompare(b.key, 'de', {numeric:true}));
   }
@@ -2376,6 +2524,12 @@
         grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
         gap:                   10px;
       }
+
+      /* Stabile Renderhosts: die vier Hauptkarten und beide optionalen
+         TE-Karten teilen sich ein Raster, ohne ihre DOM-Identität zu verlieren. */
+      .kpi-hauptkarten { display:contents; }
+      .te-kpi { position:relative; min-width:0; }
+      .te-kpi-inhalt { display:grid; height:100%; }
 
       .ansicht-anpassen { margin-top:12px; }
       .ansicht-anpassen > summary { width:fit-content; margin-left:auto; padding:8px 12px;
@@ -3425,6 +3579,21 @@
       .pz-matrix-detail .pz-metrics { grid-template-columns:repeat(4,minmax(0,1fr)); }
       @container (max-width:520px) { .pz-transport { padding:14px; } .pz-matrix-detail .pz-metrics { grid-template-columns:1fr 1fr; } }
 
+      .netto-controls { margin:0 0 16px; padding:14px 16px; border:1px solid var(--c-border); border-radius:var(--r-lg); background:var(--c-bg2); }
+      .netto-controls-head { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+      .netto-controls-head .pz-switch { margin-left:auto; }
+      .netto-caption { margin:10px 0 0; font-size:12px; line-height:1.6; color:var(--c-text2); }
+      .netto-info { margin-top:10px; font-size:12px; line-height:1.7; }
+      .netto-info > summary { display:flex; align-items:center; gap:8px; width:fit-content; cursor:pointer; font-weight:600; }
+      .netto-info > summary::before { content:'i'; display:inline-grid; place-items:center; width:18px; height:18px; border:1px solid currentColor; border-radius:50%; font-family:Georgia,serif; font-style:italic; }
+      .netto-info summary:focus-visible { outline:2px solid var(--c-red); outline-offset:4px; }
+      .netto-info-content { max-width:920px; }
+      .netto-info-content p { margin:10px 0; }
+      .netto-samstage { max-height:150px; overflow:auto; margin:8px 0; padding:8px 12px; border:1px solid var(--c-border); border-radius:6px; }
+      .netto-holiday-option { display:flex; align-items:flex-start; gap:8px; margin:10px 0; }
+      .netto-holiday-option input { margin:4px 0 0; accent-color:var(--c-red); }
+      .netto-warning { color:var(--c-text); font-weight:600; }
+      @container (max-width:520px) { .netto-controls-head .pz-switch { margin-left:0; } .netto-controls { padding:12px; } }
       .tz-widget { margin-top:18px; padding:22px; background:var(--c-bg2); border:1px solid var(--c-border); border-radius:var(--r-lg); box-shadow:var(--shadow-sm); }
       .tz-controls { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
       .tz-controls label { color:var(--c-text2); font-size:11px; }
@@ -3482,6 +3651,47 @@
       .analyse-period-compare { margin:0 0 20px; }
       .analyse-period-compare .kpi-cards { margin-top:16px; grid-template-columns:minmax(240px,420px); }
       @container (max-width:520px) { .analyse-tab { flex:1; padding:12px 8px; } }
+
+
+
+      .kv-te-view { display:flex; flex-wrap:wrap; align-items:center; gap:8px; font-size:12px; color:var(--c-text2); }
+      .kv-chart-head + .kv-switches { margin-top:12px; }
+      .kv-series.kv-te.kv-ls-0 { color:#ffb347; } .kv-line-key.kv-te.kv-ls-0 { color:#ffb347; border-top-color:#ffb347; }
+      .kv-series.kv-te.kv-ls-1 { color:#e17f9b; } .kv-line-key.kv-te.kv-ls-1 { color:#e17f9b; border-top-color:#e17f9b; }
+      .kv-series.kv-te.kv-ls-2 { color:#ffbaa0; } .kv-line-key.kv-te.kv-ls-2 { color:#ffbaa0; border-top-color:#ffbaa0; }
+      .kv-series.kv-te.kv-ls-3 { color:#a9b6c9; } .kv-line-key.kv-te.kv-ls-3 { color:#a9b6c9; border-top-color:#a9b6c9; }
+      :host([theme="light"]) .kv-series.kv-te.kv-ls-0 { color:#783a0c; } :host([theme="light"]) .kv-line-key.kv-te.kv-ls-0 { color:#783a0c; border-top-color:#783a0c; }
+      :host([theme="light"]) .kv-series.kv-te.kv-ls-1 { color:#8e385b; } :host([theme="light"]) .kv-line-key.kv-te.kv-ls-1 { color:#8e385b; border-top-color:#8e385b; }
+      :host([theme="light"]) .kv-series.kv-te.kv-ls-2 { color:#aa4919; } :host([theme="light"]) .kv-line-key.kv-te.kv-ls-2 { color:#aa4919; border-top-color:#aa4919; }
+      :host([theme="light"]) .kv-series.kv-te.kv-ls-3 { color:#596579; } :host([theme="light"]) .kv-line-key.kv-te.kv-ls-3 { color:#596579; border-top-color:#596579; }
+
+      .kv-chart { margin-bottom:18px; }
+      .kv-chart-head { display:flex; align-items:flex-start; justify-content:space-between; flex-wrap:wrap; gap:12px; }
+      .kv-switches { display:flex; flex-wrap:wrap; gap:8px; }
+      .kv-switch { display:flex; align-items:center; gap:8px; border:1px solid var(--c-border2); border-radius:7px; padding:8px 11px; font-size:12px; color:var(--c-text); background:var(--c-bg2); }
+      .kv-switch[aria-pressed="false"] { color:var(--c-text2); background:transparent; }
+      .kv-switch[aria-pressed="false"] .kv-line-key { opacity:.4; }
+      .kv-switch-state { font-size:10px; color:var(--c-text2); }
+      .kv-switch[aria-pressed="true"] .kv-switch-state::after { content:"An"; }
+      .kv-switch[aria-pressed="false"] .kv-switch-state::after { content:"Aus"; }
+      .kv-switch:focus-visible { outline:2px solid var(--c-red-light); outline-offset:3px; }
+      .kv-line-key { display:block; flex-shrink:0; width:25px; height:6px; color:#ff5140; border-top:0 solid #ff5140; }
+      .kv-line-key.kv-te { color:#ffaaa0; border-top-color:#ffaaa0; }
+      :host([theme="light"]) .kv-line-key { color:#c63425; border-top-color:#c63425; }
+      :host([theme="light"]) .kv-line-key.kv-te { color:#8b3232; border-top-color:#8b3232; }
+      .kv-series { color:#ff5140; }
+      .kv-series.kv-te { color:#ffaaa0; }
+      :host([theme="light"]) .kv-series { color:#c63425; }
+      :host([theme="light"]) .kv-series.kv-te { color:#8b3232; }
+      .kv-series[data-hidden="true"] { display:none; }
+      .kv-series polyline { fill:none; stroke:currentColor; stroke-width:2.5; }
+      .kv-point { fill:var(--c-bg); stroke:currentColor; stroke-width:2; cursor:help; }
+      .kv-point:hover { fill:currentColor; stroke-width:3; }
+      .kv-point:focus { fill:currentColor; stroke-width:3; outline:2px solid var(--c-text); outline-offset:4px; }
+      .kv-tooltip { min-height:42px; padding:10px 12px; background:var(--c-bg2); color:var(--c-text2); border:1px solid var(--c-border2); border-radius:7px; font-size:12px; line-height:1.6; }
+      .kv-period { font-size:12px; color:var(--c-text2); line-height:1.6; margin:10px 0 12px; }
+      .kv-period strong { color:var(--c-text); }
+      .kv-intro { margin-bottom:18px; }
 
       .kpi-menge-list { font-size:18px; line-height:1.35; overflow-wrap:anywhere; }
       .lb-toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin:0 0 16px; }
@@ -3725,24 +3935,22 @@
 
           <div class="u-abschnitt">
             <div class="u-titel" id="kpi-titel">Kennzahlen</div>
-            <div class="kpi-cards" id="kpi-cards"></div>
+            <div class="kpi-cards kennzahlen-kacheln" id="kennzahlen-kacheln">
+              <div class="kpi-hauptkarten" id="kpi-cards"></div>
+              <div class="te-kpi" id="otif-te-karte">
+                <div class="te-kpi-inhalt" id="otif-te"></div>
+              </div>
+              <div class="te-kpi" id="mengentreue-te-karte">
+                <div class="te-kpi-inhalt" id="mengentreue-te"></div>
+              </div>
+            </div>
             <details class="ansicht-anpassen" id="ansicht-anpassen">
               <summary>Ansicht anpassen <span class="ansicht-anzahl" id="ansicht-anzahl">· 0 aktiv</span></summary>
               <div class="ansicht-optionen" role="group" aria-label="Zusätzliche Auswertungen auswählen">
-                <label><input type="checkbox" data-ansicht-panel="otif-te-toggle" aria-controls="otif-te-toggle">OTIF je TE</label>
-                <label><input type="checkbox" data-ansicht-panel="mengentreue-te-toggle" aria-controls="mengentreue-te-toggle">Mengentreue je TE</label>
                 <label><input type="checkbox" data-ansicht-panel="otif-anlieferungen-toggle" aria-controls="otif-anlieferungen-toggle">Anlieferungsdetails</label>
                 <label><input type="checkbox" data-ansicht-panel="ladestellen-toggle" aria-controls="ladestellen-toggle">TEs nach Ladestelle</label>
                 <p class="ansicht-hinweis">Die Auswahl bleibt bei Zeitraum-, Reiter-, Daten- und Themenwechsel erhalten.</p>
               </div>
-            </details>
-            <details class="ls-verteilung optionale-auswertung" id="otif-te-toggle">
-              <summary>OTIF je TE ausblenden</summary>
-              <div class="kpi-cards" id="otif-te" style="grid-template-columns:minmax(0,420px)"></div>
-            </details>
-            <details class="ls-verteilung optionale-auswertung" id="mengentreue-te-toggle">
-              <summary>Mengentreue je TE ausblenden</summary>
-              <div class="kpi-cards" id="mengentreue-te" style="grid-template-columns:minmax(0,420px)"></div>
             </details>
             <details class="ls-verteilung otif-anlieferungen optionale-auswertung" id="otif-anlieferungen-toggle">
               <summary>Anlieferungsdetails ausblenden</summary>
@@ -3756,6 +3964,7 @@
 
           <div class="analyse-tabs" role="tablist" aria-label="Auswertung wählen">
             <button id="tab-kennzahlen" class="analyse-tab" role="tab" aria-selected="true" aria-controls="panel-kennzahlen" tabindex="0" data-analyse-tab="kennzahlen">TE-Übersicht</button>
+            <button id="tab-kennzahlenverlauf" class="analyse-tab" role="tab" aria-selected="false" aria-controls="panel-kennzahlenverlauf" tabindex="-1" data-analyse-tab="kennzahlenverlauf">Kennzahlenverlauf</button>
             <button id="tab-durchlaufzeiten" class="analyse-tab" role="tab" aria-selected="false" aria-controls="panel-durchlaufzeiten" tabindex="-1" data-analyse-tab="durchlaufzeiten">Durchlaufzeiten</button>
             <button id="tab-lieferanten" class="analyse-tab" role="tab" aria-selected="false" aria-controls="panel-lieferanten" tabindex="-1" data-analyse-tab="lieferanten">Lieferantenbewertung</button>
             <button id="tab-spediteure" class="analyse-tab" role="tab" aria-selected="false" aria-controls="panel-spediteure" tabindex="-1" data-analyse-tab="spediteure">Frachtführer/Spediteur</button>
@@ -3808,7 +4017,30 @@
             <div id="te-liste"></div>
           </div>
           </section>
+          <section id="panel-kennzahlenverlauf" class="analyse-panel" role="tabpanel" aria-labelledby="tab-kennzahlenverlauf" tabindex="0" hidden>
+            <div id="kennzahlen-verlauf"></div>
+          </section>
           <section id="panel-durchlaufzeiten" class="analyse-panel" role="tabpanel" aria-labelledby="tab-durchlaufzeiten" tabindex="0" hidden>
+            <section class="netto-controls" aria-label="Berechnungsart der Durchlaufzeiten">
+              <div class="netto-controls-head"><strong>Berechnungsart</strong><div class="pz-switch" role="group" aria-label="Brutto oder Netto-Näherung wählen">
+                <button type="button" data-dauer-basis="brutto" aria-pressed="true">Brutto</button>
+                <button type="button" data-dauer-basis="netto" aria-pressed="false">Netto-Näherung</button>
+              </div></div>
+              <p id="netto-status" class="netto-caption">Brutto · vollständige Zeit zwischen den Statusstempeln.</p>
+              <details class="netto-info" id="netto-info"><summary>Info · So entsteht die Netto-Näherung</summary>
+                <div class="netto-info-content">
+                  <p class="netto-warning">Näherung nach Betriebszeiten – keine gemessene Arbeits- oder Bearbeitungszeit.</p>
+                  <p>Mo.–Fr.: 06:15–10:30, 11:00–14:15, 14:30–18:30 und 19:00–22:15 (14&nbsp;h&nbsp;45&nbsp;min). Pausen, Schichtlücke und Nacht werden abgezogen. Sonntage und NRW-Feiertage an anderen Wochentagen zählen nicht; Feiertags-Samstage mit Ist-Nachweis zählen nach der unten beschriebenen Regel. Kalenderbereich: 2020–2035.</p>
+                  <p>Samstag: Mindestens ein gültiger Ist-Stempel in den geladenen EWM19-Zeilen aktiviert die gesamte Frühschicht 06:15–10:30 und 11:00–14:15 (7&nbsp;h&nbsp;30&nbsp;min). Auch Stempel anderer TEs und Fertigstellungen einzelner Positionen zählen. Planstempel zählen nicht. Ohne Samstagstempel werden 0 Betriebsminuten angenommen; dies beweist keinen Stillstand.</p>
+                  <p>Ein früherer Beginn, längeres Arbeiten und Buchungen während einer Pause erweitern die Betriebszeiten nicht automatisch. Die Prüfung nutzt alle geladenen Zeilen; Filter in SAC/BW können Samstagstempel ausblenden. Der gewählte Zeitraum und die TE-Listenfilter schränken die Samstagserkennung im Widget nicht zusätzlich ein.</p>
+                  <p>Für jede TE und jede Prozessphase wird die Schnittmenge ihres bisherigen Zeitintervalls mit diesen Betriebsfenstern berechnet. Erst danach folgen Durchschnitt oder Median. Wartezeit innerhalb einer Schicht bleibt enthalten. Fehlende oder negative Zeitpaare bleiben nicht bewertbar; 0 Nettominuten sind gültig. Überlappende Phasen werden nicht zur Gesamtdauer addiert.</p>
+                  <p>Der Umschalter gilt für den Vorperiodenvergleich, den Durchlaufzeitverlauf, die Prozesskarten und den Transportmittelvergleich. Der Zeitstrahl und die TE-Details zeigen die tatsächlichen Uhrzeiten und Bruttodauern. OTIF, Pünktlichkeit und Mengentreue bleiben unabhängig davon.</p>
+                  <label class="netto-holiday-option"><input type="checkbox" id="netto-feiertags-samstag">Feiertags-Samstage mit Ist-Stempel als Frühschicht zählen (Standard; zum Vergleich ausschaltbar).</label>
+                  <p>Bestätigte Regel: Ein Feiertags-Samstag mit Ist-Stempel zählt mit 7&nbsp;h&nbsp;30&nbsp;min. Ohne Ist-Nachweis zählt auch dieser Samstag nicht. Feiertage an anderen Wochentagen und Sonntage bleiben ausgeschlossen.</p>
+                  <div id="netto-datenbasis"></div>
+                </div>
+              </details>
+            </section>
             <details class="pz-info analyse-period-compare" open>
               <summary>Durchlaufzeit im Vorperiodenvergleich</summary>
               <div class="kpi-cards" id="zeit-kpi-cards"></div>
@@ -3886,6 +4118,13 @@
       this._activeTE    = null;         // aktuell im Detail angezeigte TE-Nummer
       this._activeView  = 'uebersicht';
       this._analyseTab  = 'kennzahlen';
+      this._dauerBasis = 'brutto';
+      this._nettoFeiertagsSamstag = true;
+      this._nettoKalender = null;
+      this._nettoRows = []; // Rohzeilen derselben erfolgreichen Lieferung wie _teMap
+      this._kennzahlenLinien = {};
+      this._kennzahlenLadestellenAnsicht = {otif:'gesamt',puenktlichkeit:'gesamt',menge:'gesamt'};
+      this._kennzahlenVerlaufDirty = true;
       this._herkunftView = 'uebersicht'; // Ansicht, aus der ins Detail gesprungen wurde
       this._theme       = 'dark';       // 'dark' | 'light'
       this._ac          = new AbortController();
@@ -4015,7 +4254,7 @@
         const key = `${host.id}|${partner}|${detail.dataset?.analysisKey ?? `${detail.className}|${i}`}`;
         this._analyseOffeneErklaerungen.set(key, detail.open);
       });
-      return Array.from(host.querySelectorAll('.lb-scroll, .lb-chart-scroll'), el => ({
+      return Array.from(host.querySelectorAll('.lb-scroll, .lb-chart-scroll, .pz-matrix-scroll, .tz-scroll'), el => ({
         label:el.getAttribute('aria-label'), top:el.scrollTop, left:el.scrollLeft
       }));
     }
@@ -4027,7 +4266,7 @@
         const key = `${host.id}|${partner}|${detail.dataset?.analysisKey ?? `${detail.className}|${i}`}`;
         if (this._analyseOffeneErklaerungen?.has(key)) detail.open = this._analyseOffeneErklaerungen.get(key);
       });
-      host.querySelectorAll('.lb-scroll, .lb-chart-scroll').forEach(el => {
+      host.querySelectorAll('.lb-scroll, .lb-chart-scroll, .pz-matrix-scroll, .tz-scroll').forEach(el => {
         const saved = scrolls.find(item => item.label === el.getAttribute('aria-label'));
         if (saved) { el.scrollTop = saved.top; el.scrollLeft = saved.left; }
       });
@@ -4058,6 +4297,19 @@
 
     _bindEvents() {
       const opts = { signal: this._ac.signal };
+      this._$('panel-durchlaufzeiten')?.addEventListener('click', e => {
+        const button=e.target.closest('[data-dauer-basis]');
+        if (!button || !['brutto','netto'].includes(button.dataset.dauerBasis)) return;
+        this._dauerBasis=button.dataset.dauerBasis;
+        this._renderDauerBereich();
+        this._analyseStatus(this._dauerBasis==='netto' ? 'Netto-Näherung nach Betriebszeiten ausgewählt.' : 'Bruttodauern ausgewählt.');
+      }, opts);
+      this._$('netto-feiertags-samstag')?.addEventListener('change', e => {
+        this._nettoFeiertagsSamstag=e.target.checked;
+        this._nettoKalender=null;
+        this._renderDauerBereich();
+        this._analyseStatus(e.target.checked ? 'Standard: Feiertags-Samstage mit Ist-Stempel zählen als Frühschicht.' : 'Vergleichsmodus: Feiertags-Samstage ausgeschlossen.');
+      }, opts);
       const ansichtOptionen = [...this._shadow.querySelectorAll('[data-ansicht-panel]')];
       const ansichtSynchronisieren = () => {
         let anzahl = 0;
@@ -4104,7 +4356,7 @@
       this._shadow.querySelectorAll('[data-analyse-tab]').forEach(button => {
         button.addEventListener('click', () => this._setAnalyseTab(button.dataset.analyseTab), opts);
         button.addEventListener('keydown', e => {
-          const namen = ['kennzahlen', 'durchlaufzeiten', 'lieferanten', 'spediteure'];
+          const namen = ['kennzahlen', 'kennzahlenverlauf', 'durchlaufzeiten', 'lieferanten', 'spediteure'];
           const i = namen.indexOf(button.dataset.analyseTab);
           let ziel;
           if (e.key === 'ArrowRight') ziel = namen[(i + 1) % namen.length];
@@ -4118,6 +4370,23 @@
       });
 
 
+
+      const verlaufHost=this._$('kennzahlen-verlauf');
+      verlaufHost?.addEventListener('click',e=>{
+        const modus=e.target.closest('[data-kv-ls-view]');
+        if(modus){this._setKennzahlenLadestellenAnsicht(modus.dataset.kvLsChart,modus.dataset.kvLsView);return;}
+        const button=e.target.closest('[data-kv-toggle]');
+        if(button){const key=button.dataset.kvToggle;this._kennzahlenLinien??={};this._kennzahlenLinien[key]=this._kennzahlenLinien[key]===false;this._syncKennzahlenLinien(button.closest('.kv-chart'));}
+        else this._kennzahlenPunktInfo(e.target);
+      },opts);
+      verlaufHost?.addEventListener('pointerover',e=>this._kennzahlenPunktInfo(e.target),opts);
+      verlaufHost?.addEventListener('focusin',e=>this._kennzahlenPunktInfo(e.target),opts);
+      verlaufHost?.addEventListener('keydown',e=>this._kennzahlenPunktWechsel(e),opts);
+
+      this._$('lieferanten-trend')?.addEventListener('click', e => {
+        const button = e.target.closest('[data-lb-excluded-te]');
+        if (button) this._oeffneDetail(decodeURIComponent(button.dataset.lbExcludedTe));
+      }, opts);
       this._$('spediteure-gesamt-suche')?.addEventListener('input', e => {
         this._spediteureGesamtSuche = e.target.value; this._renderSpediteureGesamt(this._tesZeitraum());
       }, opts);
@@ -4293,14 +4562,18 @@
     // ── View-Switching ────────────────────────────────────────────────────
 
     _setAnalyseTab(name, fokus = false) {
-      if (!['kennzahlen', 'durchlaufzeiten', 'lieferanten', 'spediteure'].includes(name)) return;
+      if (!['kennzahlen', 'kennzahlenverlauf', 'durchlaufzeiten', 'lieferanten', 'spediteure'].includes(name)) return;
       this._analyseTab = name;
-      for (const id of ['kennzahlen', 'durchlaufzeiten', 'lieferanten', 'spediteure']) {
+      if(name==='kennzahlenverlauf'&&this._kennzahlenVerlaufDirty)this._renderKennzahlenVerlauf();
+      for (const id of ['kennzahlen', 'kennzahlenverlauf', 'durchlaufzeiten', 'lieferanten', 'spediteure']) {
         const aktiv = id === name, button = this._$(`tab-${id}`), panel = this._$(`panel-${id}`);
         if (button) { button.setAttribute('aria-selected', String(aktiv)); button.tabIndex = aktiv ? 0 : -1; }
         if (panel) panel.hidden = !aktiv;
       }
-      if (fokus) this._$(`tab-${name}`)?.focus({preventScroll:true});
+      if (fokus) {
+        const button=this._$(`tab-${name}`);button?.focus({preventScroll:true});
+        this._elementHorizontalSichtbar(button,button?.closest?.('.analyse-tabs'));
+      }
     }
 
     _switchView(name) {
@@ -4326,15 +4599,28 @@
 
     // ── Zustände ──────────────────────────────────────────────────────────
 
+    _syncAnsichtenSperre() {
+      const gesperrt = ['state-loading','state-empty'].some(id => {
+        const el = this._$(id);
+        return el && !el.classList.contains('hidden');
+      });
+      for (const id of ['view-uebersicht','view-detail']) {
+        const view = this._$(id);
+        if (view) view.inert = gesperrt;
+      }
+    }
+
     _showLoading() {
       this._$('state-loading')?.classList.remove('hidden');
       this._$('state-empty')?.classList.add('hidden');
+      this._syncAnsichtenSperre();
       this._startLoaderSteps();
     }
 
     _hideLoading() {
       this._log('Ladezustand beendet — Daten sind da, Rendering beginnt');
       this._$('state-loading')?.classList.add('hidden');
+      this._syncAnsichtenSperre();
       this._stopLoaderSteps();
     }
 
@@ -4365,11 +4651,13 @@
       if (el && text) el.textContent = text;
       this._$('state-empty')?.classList.remove('hidden');
       this._$('state-loading')?.classList.add('hidden');
+      this._syncAnsichtenSperre();
       this._stopLoaderSteps();
     }
 
     _hideEmpty() {
       this._$('state-empty')?.classList.add('hidden');
+      this._syncAnsichtenSperre();
     }
 
     _doRefresh() {
@@ -4609,10 +4897,147 @@
     _renderUebersicht() {
       this._updateKopf();
       this._renderKpiCards();
+      this._kennzahlenVerlaufDirty = true;
+      if(this._analyseTab==='kennzahlenverlauf')this._renderKennzahlenVerlauf();
       this._renderProzesszeiten();
       this._renderLieferanten();
       this._renderSpediteure();
       this._renderTabelle();
+    }
+
+
+    // Scrollt ausschließlich die zuständige horizontale Region, niemals die SAC-Seite.
+    _elementHorizontalSichtbar(element,region) {
+      if(!element?.getBoundingClientRect||!region?.getBoundingClientRect)return;
+      const p=element.getBoundingClientRect(),r=region.getBoundingClientRect();
+      const links=r.left+region.clientLeft+8,rechts=r.left+region.clientLeft+region.clientWidth-8;
+      if(p.left<links)region.scrollLeft+=p.left-links;
+      else if(p.right>rechts)region.scrollLeft+=p.right-rechts;
+    }
+
+    _kennzahlenPunktInfo(ziel) {
+      const punkt=ziel.closest?.('[data-kv-info]');if(!punkt)return;
+      const serie=punkt.closest('[data-kv-series]');
+      if(serie?.dataset.hidden==='true')return;
+      // Auch direktes Fokussieren/Antippen wählt genau einen Tab-Einstieg je Linie.
+      for(const p of serie?.querySelectorAll('.kv-point')??[])p.setAttribute('tabindex',p===punkt?'0':'-1');
+      const ausgabe=punkt.closest('.kv-chart')?.querySelector('.kv-tooltip');
+      if(ausgabe){ausgabe.dataset.serie=serie?.dataset.kvSeries??'';if(ausgabe.textContent!==punkt.dataset.kvInfo)ausgabe.textContent=punkt.dataset.kvInfo;}
+    }
+
+    _kennzahlenPunktWechsel(e) {
+      const punkt=e.target.closest?.('.kv-point');if(!punkt)return;
+      const punkte=Array.from(punkt.closest('[data-kv-series]').querySelectorAll('.kv-point'));
+      const i=punkte.indexOf(punkt);let ziel;
+      if(e.key==='ArrowRight')ziel=Math.min(punkte.length-1,i+1);
+      else if(e.key==='ArrowLeft')ziel=Math.max(0,i-1);
+      else if(e.key==='Home')ziel=0;
+      else if(e.key==='End')ziel=punkte.length-1;
+      else return;
+      e.preventDefault();
+      punkte.forEach((p,j)=>p.setAttribute('tabindex',j===ziel?'0':'-1'));
+      punkte[ziel]?.focus({preventScroll:true});
+      this._elementHorizontalSichtbar(punkte[ziel],punkt.closest('.lb-chart-scroll'));
+    }
+
+    _syncKennzahlenLinien(nurChart=null) {
+      const host=this._$('kennzahlen-verlauf');if(!host)return;
+      const charts=nurChart?[nurChart]:host.querySelectorAll('.kv-chart');
+      for(const chart of charts){
+        for(const button of chart.querySelectorAll('[data-kv-toggle]'))button.setAttribute('aria-pressed',String(this._kennzahlenLinien?.[button.dataset.kvToggle]!==false));
+        for(const gruppe of chart.querySelectorAll('[data-kv-series]'))gruppe.dataset.hidden=String(this._kennzahlenLinien?.[gruppe.dataset.kvSeries]===false);
+        const an=Array.from(chart.querySelectorAll('[data-kv-toggle]')).some(b=>b.getAttribute('aria-pressed')==='true');
+        chart.querySelector('.kv-diagram').hidden=!an;
+        chart.querySelector('.kv-empty').hidden=an;
+        const daten=Array.from(chart.querySelectorAll('[data-kv-series]')).some(g=>g.dataset.hidden!=='true'&&g.querySelector('.kv-point'));
+        chart.querySelector('.kv-no-data').hidden=daten;
+        const info=chart.querySelector('.kv-tooltip');if(!info)continue;
+        info.hidden=!an;
+        if(!an){info.textContent='';delete info.dataset.serie;}
+        else if(!info.dataset.serie||this._kennzahlenLinien?.[info.dataset.serie]===false){
+          delete info.dataset.serie;
+          const text='Punkt berühren oder fokussieren; ←/→ sowie Pos1/Ende wechseln den Tagespunkt.';
+          if(info.textContent!==text)info.textContent=text;
+        }
+      }
+    }
+
+    // Ergebnisse ausschließlich für die aktuellen geladenen Daten / Einstellungen.
+    _kennzahlenBelegeAktuell(tes) {
+      const c=this._kennzahlenBelegBasis;
+      if(c&&c.teMap===this._teMap&&c.von===this._bereich.von.getTime()&&c.bis===this._bereich.bis.getTime()
+        &&c.cfg===JSON.stringify(this._cfg))return c.aktiv;
+      return anlieferungsOtif(tes,this._alleTes());
+    }
+
+
+    _setKennzahlenLadestellenAnsicht(chart,modus) {
+      if(!['otif','puenktlichkeit','menge'].includes(chart)||!['gesamt','ladestellen'].includes(modus))return;
+      this._kennzahlenLadestellenAnsicht??={otif:'gesamt',puenktlichkeit:'gesamt',menge:'gesamt'};
+      if(this._kennzahlenLadestellenAnsicht[chart]===modus)return;
+      const host=this._$('kennzahlen-verlauf');
+      const infos=Array.from(host?.querySelectorAll('.kv-chart')??[],el=>({chart:el.dataset.kvChart,
+        serie:el.querySelector('.kv-tooltip')?.dataset.serie,text:el.querySelector('.kv-tooltip')?.textContent}));
+      this._kennzahlenLadestellenAnsicht[chart]=modus;this._renderKennzahlenVerlauf();
+      // Der Ansichtwechsel einer Grafik verwirft keine Punktinfo der anderen.
+      for(const info of infos){if(info.chart===chart||!info.serie)continue;
+        const el=host.querySelector(`[data-kv-chart="${info.chart}"]`),serie=el?.querySelector(`[data-kv-series="${info.serie}"]`);
+        if(serie&&serie.dataset.hidden!=='true'){const tooltip=el.querySelector('.kv-tooltip');tooltip.dataset.serie=info.serie;tooltip.textContent=info.text;}}
+      host.querySelector(`[data-kv-ls-chart="${chart}"][data-kv-ls-view="${modus}"]`)?.focus({preventScroll:true});
+    }
+
+    _renderKennzahlenVerlauf() {
+      const host=this._$('kennzahlen-verlauf');if(!host)return;
+      this._kennzahlenVerlaufDirty=false;
+      const ui=this._analyseUiVorRender(host),tes=this._tesZeitraum(),beleg=this._kennzahlenBelegeAktuell(tes);
+      let tage=kennzahlenVerlauf(tes,this._alleTes(),beleg);const te=aggregiereBasis(tes);
+      const lsAktiv=['otif','puenktlichkeit','menge'].some(id=>this._kennzahlenLadestellenAnsicht?.[id]==='ladestellen');
+      const ladestellen=lsAktiv?kennzahlenLadestellen(tes,tage):{gruppen:[]};
+      if(lsAktiv)tage=ladestellen.tage;
+      const gruppen=[
+        {id:'otif',titel:'OTIF-Verlauf',linien:[{key:'otifAnlieferung',label:'Anlieferungen',q:beleg.quote,art:'anlieferung'},{key:'otifTE',label:'TEs',q:te.otif,art:'te'}]},
+        {id:'puenktlichkeit',titel:'Pünktlichkeitsverlauf',linien:[{key:'puenktlichTE',label:'TEs',q:te.puenktlich,art:'te'}]},
+        {id:'menge',titel:'Mengentreueverlauf',linien:[{key:'mengeAnlieferung',label:'Anlieferungen',q:beleg.mengenquote,art:'anlieferung'},{key:'mengeTE',label:'TEs',q:te.mengentreu,art:'te'}]}
+      ];
+      for(const g of gruppen){
+        g.lsAnsicht=this._kennzahlenLadestellenAnsicht?.[g.id]==='ladestellen';
+        const teFeld={otif:'otif',puenktlichkeit:'puenktlich',menge:'mengentreu'}[g.id];
+        const teSerie={otif:'otifTEls',puenktlichkeit:'puenktlichTEls',menge:'mengeTEls'}[g.id];
+        if(g.lsAnsicht)g.linien=[...g.linien.filter(l=>l.art!=='te'),...ladestellen.gruppen.map(ls=>({
+          key:teSerie+ls.index,label:'TEs · '+ls.ls,
+          q:ls[teFeld],art:'te',lsIndex:ls.index}))];
+      }
+      // Gleiche Reihenfolge für Legende, Zahlen, Tabelle und Tastatureinstiege.
+      // Große TE-Quadrate zuerst, Anlieferungskreis zuletzt: alle bleiben erreichbar.
+      for(const g of gruppen)g.linien=[...g.linien.filter(l=>l.art==='te'),...g.linien.filter(l=>l.art!=='te')];
+      const muster=l=>l.art!=='te'?'':l.lsIndex==null?'7 5':['6 4','12 4','2 4','10 3 2 3'][l.lsIndex];
+      const W=1000,H=300,L=70,R=45,T=48,B=48,plotW=W-L-R,plotH=H-T-B;
+      const von=this._bereich.von.getTime(),bis=this._bereich.bis.getTime()-86400000;
+      const x=d=>von===bis?L+plotW/2:L+(d.getTime()-von)*plotW/(bis-von),y=v=>T+(100-v)*plotH/100;
+      const achsenTage=[...new Map([{datum:new Date(von)},...tage,{datum:new Date(bis)}].map(p=>[p.datum.getTime(),{datum:p.datum,x:x(p.datum)}])).values()].sort((a,b)=>a.datum-b.datum);
+      const raster=[0,20,40,60,80,100].map(v=>`<line class="lb-chart-grid" x1="${L}" x2="${W-R}" y1="${y(v)}" y2="${y(v)}"></line><text class="lb-chart-label" x="${L-20}" y="${y(v)+4}" text-anchor="end">${v} %</text>`).join('');
+      host.innerHTML=`<p class="lb-context kv-intro">Globale Kennzahlen · ${esc(bereichLabel(this._bereich))}. Jede Linie lässt sich einzeln schalten. Die Zeitraumquoten entsprechen den Kacheln; Tagesquoten zeigen die jeweilige Tagesauswahl. Lieferanten- und Frachtführerzuordnungen begrenzen diese Diagramme nicht.</p>`+gruppen.map(g=>{
+        const schalter=g.linien.map(l=>`<button class="kv-switch" data-kv-toggle="${l.key}" aria-pressed="true" aria-controls="kv-serie-${l.key}"><svg class="kv-line-key ${l.art==='te'?'kv-te':''} ${l.lsIndex!=null?'kv-ls-'+l.lsIndex:''}" viewBox="0 0 25 6" aria-hidden="true" focusable="false"><line x1="0" y1="3" x2="25" y2="3" stroke="currentColor" stroke-width="3" stroke-dasharray="${muster(l)}"></line></svg>${l.label}<span class="kv-switch-state" aria-hidden="true"></span></button>`).join('');
+        const periode=g.linien.map(l=>`<span data-kv-period="${l.key}">${l.label}: <strong>${l.q.wert==null?'nicht bewertbar':fmtProzent(l.q.wert)}</strong> · ${l.q.ok}/${l.q.bewertbar} erfüllt · ${l.q.nb} nicht bewertbar${l.art==='anlieferung'?` · ${beleg.ausgeschlossen} ausgenullt ausgeschlossen`:''}</span>`).join(' &nbsp; | &nbsp; ');
+        const serien=g.linien.map(l=>{
+          const segmente=kennzahlenLinienSegmente(tage,l.key),linien=segmente.filter(a=>a.length>1).map(a=>`<polyline stroke-dasharray="${muster(l)}" points="${a.map(t=>`${x(t.datum).toFixed(2)},${y(t.serien[l.key].wert).toFixed(2)}`).join(' ')}"></polyline>`).join('');
+          const punkte=tage.filter(t=>Number.isFinite(t.serien[l.key].wert)).map((t,i)=>{
+            const q=t.serien[l.key],info=`${fmtDate(t.datum)} · ${l.label}: ${fmtProzent(q.wert)} · ${q.ok}/${q.bewertbar} erfüllt · ${q.nb} nicht bewertbar${l.art==='anlieferung'?` · ${q.ausgeschlossen} ${q.ausgeschlossen===1?'ausgenullte Anlieferung':'ausgenullte Anlieferungen'} ausgeschlossen`:g.id!=='puenktlichkeit'?` · ${q.nullpositionen} ${q.nullpositionen===1?'Nullposition':'Nullpositionen'} separat ausgeschlossen`:''}`;
+            const groesse=l.lsIndex==null?10:22-l.lsIndex*4;
+            const attrs=`class="kv-point" tabindex="${i===0?0:-1}" role="img" aria-label="${esc(info)}" data-kv-info="${esc(info)}" data-kv-day="${t.tag}" data-kv-value="${q.wert}"`;
+            return l.art==='te'?`<rect ${attrs} x="${(x(t.datum)-groesse/2).toFixed(2)}" y="${(y(q.wert)-groesse/2).toFixed(2)}" width="${groesse}" height="${groesse}"><title>${esc(info)}</title></rect>`:`<circle ${attrs} cx="${x(t.datum).toFixed(2)}" cy="${y(q.wert).toFixed(2)}" r="3"><title>${esc(info)}</title></circle>`;
+          }).join('');
+          return `<g id="kv-serie-${l.key}" class="kv-series ${l.art==='te'?'kv-te':''} ${l.lsIndex!=null?'kv-ls-'+l.lsIndex:''}" data-kv-series="${l.key}">${linien}${punkte}</g>`;
+        }).join('');
+        const tabelle=tage.map(t=>`<tr><th scope="row">${fmtDate(t.datum)}</th>${g.linien.map(l=>{const q=t.serien[l.key];return `<td>${q.wert==null?'n. b.':fmtProzent(q.wert)} · ${q.ok}/${q.bewertbar} erfüllt · ${q.nb} n. b.${q.ausgeschlossen?` · ${q.ausgeschlossen} ausgenullt ausgeschlossen`:''}${l.art==='te'&&g.id!=='puenktlichkeit'?` · ${q.nullpositionen} ${q.nullpositionen===1?'Nullposition':'Nullpositionen'} separat ausgeschlossen`:''}</td>`;}).join('')}</tr>`).join('');
+        const ansicht=`<div class="kv-te-view"><span>TE-Ansicht</span><div class="lb-mode" role="group" aria-label="TE-Ansicht ${g.titel}"><button data-kv-ls-chart="${g.id}" data-kv-ls-view="gesamt" aria-pressed="${!g.lsAnsicht}">TEs gesamt</button><button data-kv-ls-chart="${g.id}" data-kv-ls-view="ladestellen" aria-pressed="${!!g.lsAnsicht}">Nach Ladestelle</button></div></div>`;
+        return `<section class="lb-trend kv-chart" data-kv-chart="${g.id}" aria-labelledby="kv-titel-${g.id}"><div class="kv-chart-head"><h3 class="lb-analysis-title" id="kv-titel-${g.id}">${g.titel}</h3>${ansicht}</div><div class="kv-switches" role="group" aria-label="Linien für ${g.titel}">${schalter}</div><div class="kv-period"${g.linien.length?'':' hidden'}>Gesamter Zeitraum: ${periode}</div>${g.lsAnsicht?`<p class="lb-context">TEs nach BW-Ladestelle · jede TE zählt einmal. Fehlende oder unbekannte Werte: „Nicht zugeordnet“. ${g.id==='puenktlichkeit'?'':'Die Anlieferungslinie zeigt weiterhin alle Anlieferungen.'}${!ladestellen.gruppen.length?' Keine TEs im ausgewählten Zeitraum.':''}</p>`:''}${g.id==='puenktlichkeit'?`<p class="lb-context">Pünktlich: Ankunft am Kontrollpunkt spätestens ${esc(fmtMenge(this._cfg?.toleranzMin??30))} min nach geplantem Start; frühere Ankunft zählt als pünktlich. Fehlende Vergleichszeitstempel: nicht bewertbar.</p>`:''}${g.id==='menge'?`<p class="lb-context">Anlieferungen: jede reguläre Positionsabweichung zählt. TEs: Mengentoleranz ${esc(fmtMenge(this._cfg?.mengenToleranzPct??0))} %. Nullpositionen bleiben separat ausgeschlossen.</p>`:''}
+          <div class="kv-empty fb-detail-empty" role="status" hidden>${g.linien.length?'Bitte mindestens eine Linie auswählen.':'Keine TEs im ausgewählten Zeitraum.'}</div>
+          <div class="kv-diagram"><p class="lb-context kv-no-data">Keine bewertbaren Tageswerte für die eingeblendeten Linien im ausgewählten Zeitraum.</p><div class="lb-chart-scroll" tabindex="0" role="region" aria-label="${g.titel} horizontal scrollen"><svg class="lb-trend-chart" viewBox="0 0 ${W} ${H}" role="group" aria-label="${g.titel}, Tagesquoten von 0 bis 100 Prozent"><title>${g.titel}</title>${raster}<line class="lb-chart-axis" x1="${L}" x2="${W-R}" y1="${H-B}" y2="${H-B}"></line><line class="lb-chart-axis" x1="${L}" x2="${L}" y1="${T}" y2="${H-B}"></line>${trendDatumsAchse(achsenTage,H-B,H-16,T,L,W-R)}${serien}</svg></div></div>
+          <div class="kv-tooltip" aria-live="polite"></div>
+          <details class="lb-chart-info" data-analysis-key="kv-table-${g.id}"><summary>Tageswerte und Bewertungsumfang anzeigen</summary><div class="lb-scroll" tabindex="0" role="region" aria-label="Tageswerte ${g.titel} scrollen"><table class="lb-table"><thead><tr><th scope="col">Datum</th>${g.linien.map(l=>`<th scope="col">${l.label}</th>`).join('')}</tr></thead><tbody>${tabelle||`<tr><td colspan="${g.linien.length+1}">Keine TEs im Zeitraum.</td></tr>`}</tbody></table></div></details></section>`;
+      }).join('')+`<details class="pz-info" data-analysis-key="kv-rules"><summary>Berechnung und Darstellung</summary><p>Tagesquote = erfüllte / bewertbare Einheiten des Tages. Zeitraumquote = erfüllte / bewertbare Einheiten des gesamten Zeitraums, kein Mittelwert der Tagesprozente. Tageszuordnung wie bei den Kacheln: geplanter Start, ersatzweise Ankunft, ersatzweise vollständige Fertigstellung. Eine Anlieferung zählt einmal; sämtliche geladenen Positionen des Belegs werden berücksichtigt. Ist=0-Positionen bleiben separat ausgeschlossen; vollständig ausgenullte Anlieferungen stehen nicht im Zähler oder Nenner. Bei TEs ohne reguläre Mengen bleibt die bisherige Einstufung „nicht bewertbar“ erhalten. Fehlende Tage oder Tage ohne bewertbare Werte unterbrechen die jeweilige Linie. Die Y-Achse bleibt bei 0–100 %. Anlieferungen: durchgezogene Linie und Kreise; TEs: gestrichelte Linie und Quadrate. Das Jahr steht einmal über seinem Abschnitt. Tastatur: ein Einstieg je Linie, ←/→ sowie Pos1/Ende wechseln den Tagespunkt. Die TE-Ansicht „Nach Ladestelle“ ist für OTIF, Pünktlichkeit und Mengentreue unabhängig wählbar und verteilt TEs auf BSL, Container, Landverkehr und bei Bedarf Nicht zugeordnet. Jede Kategorie verwendet ihre eigene bewertbare TE-Fallzahl. Keine Mittelung der Ladestellenquoten. Die Anlieferungslinie bleibt global. Ansicht und Linienauswahl bleiben innerhalb dieser Instanz bei Zeitraum-, Daten-, Reiter- und Themenwechsel erhalten.</p></details>`;
+      this._analyseUiNachRender(host,ui);this._syncKennzahlenLinien();
     }
 
     _bewertungsSummenHTML(summen, abweichungsLabel, hinweis) {
@@ -4622,16 +5047,16 @@
       </div>`;
     }
 
-    _bewertungTrendHTML(trend, name, art, gesamt = false) {
+    _bewertungTrendHTML(trend, name, art, gesamt = false, kontextHtml = '') {
       const istSpediteur = art === 'puenktlich';
       const quote = istSpediteur ? 'Pünktlichkeitsquote' : 'Mengentreuequote';
-      const titel = gesamt ? istSpediteur ? 'Verlauf Lieferpünktlichkeit in %' : 'Verlauf Mengentreuequote in %' : `Verlauf ${quote} %`;
+      const titel = gesamt ? istSpediteur ? 'Verlauf Lieferpünktlichkeit in %' : 'Verlauf Mengentreuequote in % · TEs mit eindeutiger Lieferantenzuordnung' : `Verlauf ${quote} %`;
       const gruppe = istSpediteur ? 'Frachtführer/Spediteur' : 'Lieferanten';
       const erfuellung = istSpediteur ? 'pünktlich' : 'mengentreu';
       const basis = istSpediteur ? 'pünktliche TEs / zeitlich bewertbare TEs' : 'mengentreue TEs / mengenbewertbare TEs';
       const punkteDaten = trend.filter(t => Number.isFinite(t.wert));
       if (!punkteDaten.length) return `<section class="lb-trend"><div class="lb-analysis-title">${titel}</div>
-        <div class="fb-detail-empty">Im ausgewählten Zeitraum gibt es ${gesamt ? istSpediteur ? 'für die eindeutig zugeordneten Frachtführer/Spediteure' : 'für die eindeutig zugeordneten Lieferanten' : `für diesen ${gruppe}`} keine tagesbezogen bewertbare ${quote}.</div></section>`;
+        ${kontextHtml}<div class="fb-detail-empty">Im ausgewählten Zeitraum gibt es ${gesamt ? istSpediteur ? 'für die eindeutig zugeordneten Frachtführer/Spediteure' : 'für die eindeutig zugeordneten Lieferanten' : `für diesen ${gruppe}`} keine tagesbezogen bewertbare ${quote}.</div></section>`;
 
       const W = 1000, H = 304, L = 78, R = 78, T = 50, B = 54;
       const plotW = W - L - R, plotH = H - T - B;
@@ -4662,7 +5087,7 @@
       const nbGesamt = trend.reduce((s,t) => s + t.nb, 0);
       return `<section class="lb-trend" aria-label="Verlauf der ${quote} von ${esc(name)}">
         <div class="lb-analysis-title">${titel}</div>
-        <p class="lb-trend-caption">${punkteDaten.length} Tageswerte · ${trend.reduce((sum,t) => sum + t.bewertbar, 0)} bewertbare TEs${nbGesamt ? ` · ${nbGesamt} nicht bewertbar` : ''}</p>
+        ${kontextHtml}<p class="lb-trend-caption">${punkteDaten.length} Tageswerte · ${trend.reduce((sum,t) => sum + t.bewertbar, 0)} bewertbare TEs${nbGesamt ? ` · ${nbGesamt} nicht bewertbar` : ''}</p>
         <div class="lb-chart-scroll" tabindex="0" role="region" aria-label="Diagramm ${quote} von ${esc(name)} horizontal scrollen"><svg class="lb-trend-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Täglicher Verlauf der ${quote}">
           <title>${esc(`Täglicher Verlauf der ${quote} von ${name}`)}</title>
           ${yRaster}<line class="lb-chart-axis" x1="${L}" y1="${T}" x2="${L}" y2="${H-B}"></line>
@@ -4670,8 +5095,25 @@
           <text class="lb-chart-label" transform="translate(18 ${T+plotH/2}) rotate(-90)" text-anchor="middle">${quote} %</text>
           ${xLabels}<polyline class="lb-chart-line" points="${linienpunkte.join(' ')}"></polyline>${kreise}
         </svg></div>
-        <details class="lb-chart-info"><summary>Berechnung und Darstellung</summary><div class="lb-context">Tagesquote = ${basis} ${gesamt ? istSpediteur ? 'aller eindeutig zugeordneten Frachtführer/Spediteure im ausgewählten Zeitraum' : 'aller eindeutig zugeordneten Lieferanten im ausgewählten Zeitraum' : `des ausgewählten ${gruppe}`}. Die Linie verbindet die vorhandenen Tageswerte; Tage ohne bewertbare ${istSpediteur ? 'Plan-/Ankunftszeitstempel' : 'Mengen'} haben keinen Datenpunkt. Tagesbeschriftungen stehen unter den zugehörigen Punkten. Ab mehr als 120 Tagen zeigt die Achse Monatsmarken. Das Jahr steht über seinem Abschnitt; jeder Punkt zeigt das vollständige Datum.${nbGesamt ? ` ${nbGesamt} TE${nbGesamt === 1 ? '' : 's'} sind im Verlauf nicht bewertbar.` : ''}</div></details>
+        <details class="lb-chart-info" data-analysis-key="${gesamt ? istSpediteur ? 'carrier-trend-calculation' : 'supplier-trend-calculation' : 'partner-trend-calculation'}"><summary>Berechnung und Darstellung</summary><div class="lb-context">Tagesquote = ${basis} ${gesamt ? istSpediteur ? 'aller eindeutig zugeordneten Frachtführer/Spediteure im ausgewählten Zeitraum' : 'aller eindeutig zugeordneten Lieferanten im ausgewählten Zeitraum' : `des ausgewählten ${gruppe}`}. Die Linie verbindet die vorhandenen Tageswerte; Tage ohne bewertbare ${istSpediteur ? 'Plan-/Ankunftszeitstempel' : 'Mengen'} haben keinen Datenpunkt. Tagesbeschriftungen stehen unter den zugehörigen Punkten. Ab mehr als 120 Tagen zeigt die Achse Monatsmarken. Das Jahr steht über seinem Abschnitt; jeder Punkt zeigt das vollständige Datum.${nbGesamt ? ` ${nbGesamt} TE${nbGesamt === 1 ? '' : 's'} sind im Verlauf nicht bewertbar.` : ''}</div></details>
       </section>`;
+    }
+
+    _lieferantenBewertungsUmfangHTML(umfang) {
+      const n = (zahl) => `${zahl} ${zahl === 1 ? 'TE' : 'TEs'}`;
+      const hinweise = [];
+      if (umfang.fehlend) hinweise.push(`${n(umfang.fehlend)} ohne eindeutigen Lieferantenschlüssel`);
+      if (umfang.mehrdeutig) hinweise.push(`${n(umfang.mehrdeutig)} mit mehreren Lieferanten`);
+      if (umfang.mengenNb) hinweise.push(`${n(umfang.mengenNb)} mit Lieferant, aber ohne Mengenbewertung`);
+      const partner = te => (te.lieferantenBewertung ?? []).map(id => id.label ?? id.nr ?? id.key ?? 'Nicht gepflegt').join(' · ') || 'Nicht gepflegt';
+      const status = te => te.mengentreu === true ? 'Mengentreu' : te.mengentreu === false ? 'Mengenabweichung' : 'Nicht bewertbar';
+      return `<p class="lb-context" data-lb-basis>Grundlage: TEs mit eindeutiger Lieferantenzuordnung. ${n(umfang.gesamt)} im Zeitraum · ${n(umfang.zugeordnet)} eindeutig zugeordnet · ${n(umfang.bewertbar)} im Quotennenner.</p>
+        ${hinweise.length ? `<p class="lb-context" data-lb-ausschluss-hinweis><strong>Nicht im Diagramm bewertet:</strong> ${esc(hinweise.join(' · '))}. Diese TEs können in der globalen TE-Kachel berücksichtigt sein.</p>` : ''}
+        ${umfang.ausgeschlossen.length ? `<details class="pz-info" data-analysis-key="supplier-excluded"><summary>Nicht im Diagramm bewertete TEs anzeigen (${umfang.ausgeschlossen.length})</summary>
+          <div class="lb-scroll" tabindex="0" role="region" aria-label="Nicht im Lieferantentrend bewertete TEs scrollen"><table class="lb-table"><thead><tr><th scope="col">Interne TE</th><th scope="col">Externe TE</th><th scope="col">Geplanter Start ab</th><th scope="col">Lieferantenzuordnung</th><th scope="col">Ausschlussgrund</th><th scope="col">Mengentreue · TE</th></tr></thead>
+          <tbody>${umfang.ausgeschlossen.map(({te,grund}) => `<tr><th scope="row"><button type="button" class="fb-name-btn" data-lb-excluded-te="${esc(encodeURIComponent(te.te))}">TE ${esc(te.te)}<small>TE-Details öffnen</small></button></th><td>${esc(te.teExt ?? '–')}</td><td>${fmtDateTimeVoll(te.geplantStart)}</td><td>${esc(partner(te))}</td><td>${esc(grund)}</td><td>${status(te)}</td></tr>`).join('')}</tbody></table></div>
+          <p class="lb-context">Die Liste zeigt alle betroffenen TEs des oben ausgewählten Zeitraums, unabhängig von Lieferantensuche und Top-10-Auswahl. Ein Klick auf die interne TE öffnet die vorhandene Detailsicht. Ein fehlender oder mehrfacher Lieferant verhindert die Zuordnung zur Lieferantenbewertung; die globale TE-Kachel benötigt diese Zuordnung nicht. Zugeordnete TEs ohne Mengenbewertung fehlen ebenfalls im Quotennenner. Nur ausgenullte Positionen gelten weiterhin nicht als bewertbare Menge.</p>
+        </details>` : ''}`;
     }
 
     _lieferantTrendHTML(trend, lieferant) { return this._bewertungTrendHTML(trend, lieferant, 'mengentreu'); }
@@ -4762,7 +5204,7 @@
         </tr></thead><tbody>${gruppen.map(g => `<tr>
           <td>${esc(g.lieferantLabel)}<small>${g.lieferantNr ? 'Nr. ' + esc(g.lieferantNr) : 'Zuordnung über Bezeichnung'}</small></td>
           <td>${esc(g.transportmittelLabel)}</td><td class="lb-num">${fmtNum(g.anzahlTe)}${g.anzahlTesMitDatenluecke ? `<small>${g.anzahlTesMitDatenluecke} TEs mit Datenlücken</small>` : ''}</td><td class="lb-num">${fmtNum(g.anzahlPositionen)}</td>
-          <td class="lb-num${g.anzahlPositionen ? ' lb-diff' : ''}">${g.differenzmenge == null ? (g.nullpositionen && !g.nichtBewertbar && !g.ohneProduktdaten ? 'Ausgeschlossen' : 'n. b.') : esc(fmtDelta(g.differenzmenge))}${g.nullpositionen ? `<small>${g.nullpositionen} Nullpositionen separat ausgeschlossen</small>` : ''}${g.nichtBewertbar || g.ohneProduktdaten ? `<small>${g.differenzmenge != null ? 'Teilsumme · ' : ''}Mengendaten unvollständig</small>` : g.differenzmenge === 0 ? `<small>${g.anzahlPositionen ? 'Gegenläufige Abweichungen' : 'Keine Positionsabweichung'}</small>` : ''}</td>
+          <td class="lb-num${g.anzahlPositionen ? ' lb-diff' : ''}">${g.differenzmenge == null ? (g.nullpositionen && !g.nichtBewertbar && !g.ohneProduktdaten ? 'Ausgeschlossen' : 'n. b.') : esc(fmtDelta(g.differenzmenge))}${g.nullpositionen ? `<small>${g.nullpositionen} ${g.nullpositionen===1?'Nullposition':'Nullpositionen'} separat ausgeschlossen</small>` : ''}${g.nichtBewertbar || g.ohneProduktdaten ? `<small>${g.differenzmenge != null ? 'Teilsumme · ' : ''}Mengendaten unvollständig</small>` : g.differenzmenge === 0 ? `<small>${g.anzahlPositionen ? 'Gegenläufige Abweichungen' : 'Keine Positionsabweichung'}</small>` : ''}</td>
           <td>${esc(g.einheitLabel)}</td><td>${esc(g.hwgLabel)}</td>
         </tr>`).join('')}</tbody></table></div>` : `<div class="fb-detail-empty">${suche ? 'Keine Warensender für diese Suche.' : 'Keine zuordenbaren Warensender im ausgewählten Zeitraum.'}</div>`}
         <details class="pz-info"><summary>Berechnung und Einordnung</summary>
@@ -4786,7 +5228,8 @@
         const zugeordneteTes = daten.gruppen.flatMap(g => g.tes);
         trendHost.innerHTML = this._bewertungTrendHTML(
           lieferantMengentreueTrend({tes:zugeordneteTes}),
-          'allen eindeutig zugeordneten Lieferanten', 'mengentreu', true);
+          'allen eindeutig zugeordneten Lieferanten', 'mengentreu', true,
+          this._lieferantenBewertungsUmfangHTML(lieferantenBewertungsUmfang(tes,daten)));
         this._analyseUiNachRender(trendHost, trendUi);
       }
       const suchtext = (this._lieferantenSuche ?? '').trim().toLocaleLowerCase('de');
@@ -4932,6 +5375,43 @@
     //  Wert der unmittelbar vorausgehenden Periode gleicher Länge als
     //  Vergleich — das funktioniert für die Presets ebenso wie für jeden per
     //  Slider gewählten Zeitraum.
+    _dauerKalender() {
+      if (this._dauerBasis!=='netto') return null;
+      if (!this._nettoKalender) this._nettoKalender=nettoKalenderAusRows(this._nettoRows ?? [],this._nettoFeiertagsSamstag);
+      return this._nettoKalender;
+    }
+
+    _dauerBasisText() { return this._dauerBasis==='netto' ? 'Netto-Näherung' : 'Brutto'; }
+
+    _renderDauerBereich() {
+      this._renderZeitKpi();
+      this._renderProzesszeiten();
+    }
+
+    _renderNettoInfo() {
+      const netto=this._dauerBasis==='netto';
+      for (const b of this._shadow.querySelectorAll('[data-dauer-basis]')) b.setAttribute('aria-pressed',String(b.dataset.dauerBasis===this._dauerBasis));
+      this._$('netto-status').textContent=netto
+        ? `Netto-Näherung · Betriebsfenster statt Kalenderzeit. Samstagserkennung aus allen geladenen Ist-Stempeln; die Datenbasis kann unvollständig sein.${this._nettoFeiertagsSamstag?' Feiertags-Samstage mit Ist-Stempel zählen als Frühschicht.':' Vergleichsmodus: Feiertags-Samstage werden abweichend vom Standard ausgeschlossen.'}`
+        : 'Brutto · vollständige Zeit zwischen den Statusstempeln, einschließlich Pausen, Nächten, Wochenenden und Feiertagen.';
+      this._$('netto-feiertags-samstag').checked=!!this._nettoFeiertagsSamstag;
+      const k=this._nettoKalender,host=this._$('netto-datenbasis'),ui=this._analyseUiVorRender(host);
+      host.innerHTML=k ? `<p><strong>Geladene Datenbasis:</strong> ${k.stempelAnzahl.toLocaleString('de-DE')} ${k.stempelAnzahl===1?'unterschiedlicher Ist-Zeitpunkt':'unterschiedliche Ist-Zeitpunkte'}${k.min!=null ? ` · ${fmtDate(new Date(k.min))}–${fmtDate(new Date(k.max))}` : ''}. ${k.samstage.size} ${k.samstage.size===1?'Samstag':'Samstage'} mit Ist-Stempel · ${k.ausserhalb} ${k.ausserhalb===1?'Zeitpunkt':'Zeitpunkte'} außerhalb der angenommenen Betriebsfenster · ${k.feiertagsStempel} an Feiertagen${k.unlesbar ? ` · ${k.unlesbar} ${k.unlesbar===1?'nicht lesbares Zeitstempelfeld':'nicht lesbare Zeitstempelfelder'}` : ''}.</p>
+        ${k.samstage.size ? `<details data-analysis-key="samstagsnachweise"><summary>Samstagserkennung nachvollziehen</summary><div class="netto-samstage" role="region" tabindex="0" aria-label="Samstage mit geladenen Ist-Stempeln">${[...k.samstage.keys()].sort().map(tag=>{const fest=nettoFeiertage(Number(tag.slice(0,4)))?.get(tag);const n=k.samstage.get(tag).size;return `${fmtDate(new Date(tag+'T00:00:00Z'))} · ${n} ${n===1?'unterschiedlicher Zeitpunkt':'unterschiedliche Zeitpunkte'}${fest ? ` · ${esc(fest)} · ${k.feiertagsSamstag?'Frühschicht angenommen':'ausgeschlossen'}` : ' · Frühschicht angenommen'}`;}).join('<br>')}</div></details>` : '<p>Kein geladener Ist-Stempel an einem Samstag. Dies bedeutet nicht, dass tatsächlich an keinem Samstag gearbeitet wurde.</p>'}`
+        : '<p>Die Datenbasis wird beim ersten Wechsel zur Netto-Näherung ausgewertet.</p>';
+      this._analyseUiNachRender(host,ui);
+    }
+
+    // Gleiche Netto-Regel in Karte, Vorperiode und Ladestellen-Popup.
+    _renderZeitKpi() {
+      const host=this._$('zeit-kpi-cards'); if (!host) return;
+      const vp=vorperiode(this._bereich),kalender=this._dauerKalender();
+      const basis=tes=>kalender ? aggregiere(tes.map(te=>({...te,durchlaufzeitMin:prozessDauer(te,PROZESS_DEFS.find(d=>d.id==='gesamt'),kalender).min}))) : aggregiere(tes);
+      const aktiv=basis(this._tesZeitraum()),vgl=basis(this._tesZeitraum(vp));
+      const def={id:'durchlaufzeit',label:`Ø Durchlaufzeit · ${this._dauerBasisText()}`};
+      host.innerHTML=this._kpiCardHTML(def,aktiv,vgl,`Vorperiode: ${bereichLabel(vp)}`);
+    }
+
     _renderDurchlaufTrend(tes) {
       const host = this._$('durchlauf-trend');
       if (!host) return;
@@ -4939,14 +5419,14 @@
       const id = this._durchlaufTrendArt === 'operativ' ? 'operativ' : 'gesamt';
       const modus = this._prozessModus === 'median' ? 'median' : 'mittel';
       const statistik = modus === 'median' ? 'Median' : 'Durchschnitt';
-      const daten = durchlaufzeitTrend(tes, id), punkteDaten = daten.filter(d => Number.isFinite(d[modus]));
+      const daten = durchlaufzeitTrend(tes, id, this._dauerKalender()), punkteDaten = daten.filter(d => Number.isFinite(d[modus]));
       const knoepfe = `<div class="pz-switch" aria-label="Durchlaufzeitart wählen">
         <button type="button" data-dlz-trend="gesamt" aria-pressed="${id === 'gesamt'}">Gesamt</button>
         <button type="button" data-dlz-trend="operativ" aria-pressed="${id === 'operativ'}">Operativ</button></div>`;
       const statistikKnoepfe = `<div class="pz-switch" role="group" aria-label="Statistik für alle Prozesszeiten wählen">
         <button type="button" data-dlz-statistik="mittel" aria-pressed="${modus === 'mittel'}">Durchschnitt</button>
         <button type="button" data-dlz-statistik="median" aria-pressed="${modus === 'median'}">Median</button></div>`;
-      const titel = `<div class="dlz-trend-head"><div class="lb-analysis-title">Verlauf Durchlaufzeit in Minuten · ${statistik}</div><div class="dlz-trend-controls"><div class="dlz-trend-control"><span>Statistik</span>${statistikKnoepfe}</div><div class="dlz-trend-control"><span>Dauer</span>${knoepfe}</div></div></div>`;
+      const titel = `<div class="dlz-trend-head"><div class="lb-analysis-title">Verlauf Durchlaufzeit in Minuten · ${statistik} · ${this._dauerBasisText()}</div><div class="dlz-trend-controls"><div class="dlz-trend-control"><span>Statistik</span>${statistikKnoepfe}</div><div class="dlz-trend-control"><span>Dauer</span>${knoepfe}</div></div></div>`;
       const text = id === 'gesamt' ? 'Ankunft → vollständige Fertigstellung' : 'Entladestart → vollständige Fertigstellung';
       if (!punkteDaten.length) {
         host.innerHTML = `<section class="lb-trend dlz-trend">${titel}<div class="fb-detail-empty">Im ausgewählten Zeitraum gibt es keine bewertbaren ${id === 'gesamt' ? 'Gesamt-' : 'operativen '}Durchlaufzeiten.</div></section>`;
@@ -4974,13 +5454,13 @@
             ${werte.has(i) ? `<text class="lb-chart-value" x="${(p.x+(i===0?8:i===punkte.length-1?-8:0)).toFixed(1)}" y="${(p.y<T+16?p.y+19:p.y-10).toFixed(1)}" text-anchor="${i===0?'start':i===punkte.length-1?'end':'middle'}">${fmt(p[modus])}</text>` : ''}`).join('');
         const fehlend = daten.reduce((sum,d)=>sum+d.fehlend,0), ungueltig = daten.reduce((sum,d)=>sum+d.ungueltig,0);
         host.innerHTML = `<section class="lb-trend dlz-trend" aria-label="Täglicher Verlauf der ${id === 'gesamt' ? 'Gesamt-' : 'operativen '}Durchlaufzeit">
-          ${titel}<p class="lb-trend-caption">${text} · ${punkteDaten.length} Tageswerte · ${punkteDaten.reduce((sum,d)=>sum+d.n,0)} auswertbare TEs${fehlend ? ` · ${fehlend} ohne vollständiges Zeitpaar` : ''}${ungueltig ? ` · ${ungueltig} mit ungültiger Zeitfolge` : ''}</p><div class="lb-chart-scroll" tabindex="0" role="region" aria-label="Diagramm ${statistik} der ${id === 'gesamt' ? 'Gesamt-' : 'operativen '}Durchlaufzeit horizontal scrollen"><svg class="lb-trend-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${statistik} der ${id === 'gesamt' ? 'Gesamt-' : 'operativen '}Durchlaufzeit je Tag in Minuten">
+          ${titel}<p class="lb-trend-caption">${text} · ${this._dauerBasisText()} · ${punkteDaten.length} Tageswerte · ${punkteDaten.reduce((sum,d)=>sum+d.n,0)} auswertbare TEs${fehlend ? ` · ${fehlend} ohne vollständiges Zeitpaar` : ''}${ungueltig ? ` · ${ungueltig} mit ungültiger Zeitfolge` : ''}${daten.some(d=>d.kalender) ? ` · ${daten.reduce((n,d)=>n+(d.kalender??0),0)} außerhalb Kalenderbereich` : ''}</p><div class="lb-chart-scroll" tabindex="0" role="region" aria-label="Diagramm ${statistik} der ${id === 'gesamt' ? 'Gesamt-' : 'operativen '}Durchlaufzeit horizontal scrollen"><svg class="lb-trend-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${statistik} der ${id === 'gesamt' ? 'Gesamt-' : 'operativen '}Durchlaufzeit je Tag in Minuten">
             <title>${statistik} der Durchlaufzeit je Tag in Minuten</title>${raster}
             <line class="lb-chart-axis" x1="${L}" y1="${T}" x2="${L}" y2="${H-B}"></line>
             <line class="lb-chart-axis" x1="${L}" y1="${H-B}" x2="${W-R}" y2="${H-B}"></line>
             <text class="lb-chart-label" transform="translate(18 ${T+hoehe/2}) rotate(-90)" text-anchor="middle">Minuten</text>
             ${dates}<polyline class="lb-chart-line" points="${linienpunkte.join(' ')}"></polyline>${kreise}
-          </svg></div><details class="lb-chart-info"><summary>Berechnung und Darstellung</summary><div class="lb-context">${text} · Tageswert: ${statistik} der bewertbaren TEs nach Zeitraumanker. ${fehlend} TEs ohne vollständiges Zeitpaar · ${ungueltig} mit ungültiger Zeitfolge. Die Linie verbindet vorhandene Tageswerte; Tage ohne bewertbare TEs haben keinen Datenpunkt. Tagesbeschriftungen stehen unter den zugehörigen Punkten; ab mehr als 120 Tagen werden Monate beschriftet. Jahresangaben stehen über den Abschnitten, vollständige Daten am Punkt. Der Statistikwechsel gilt auch für Prozesszeiten und Transportmittelvergleich. Die Durchlaufzeitkarte im Vorperiodenvergleich zeigt weiterhin den Durchschnitt. Listenfilter gelten nur für die TE-Liste.</div></details>
+          </svg></div><details class="lb-chart-info"><summary>Berechnung und Darstellung</summary><div class="lb-context">${text} · ${this._dauerBasisText()} · Tageswert: ${statistik} der bewertbaren TEs nach Zeitraumanker. ${fehlend} TEs ohne vollständiges Zeitpaar · ${ungueltig} mit ungültiger Zeitfolge. ${daten.some(d=>d.kalender) ? `${daten.reduce((n,d)=>n+(d.kalender??0),0)} TEs außerhalb des Kalenderbereichs 2020–2035. ` : ''}Die Linie verbindet vorhandene Tageswerte; Tage ohne bewertbare TEs haben keinen Datenpunkt. Tagesbeschriftungen stehen unter den zugehörigen Punkten; ab mehr als 120 Tagen werden Monate beschriftet. Jahresangaben stehen über den Abschnitten, vollständige Daten am Punkt. Der Statistikwechsel gilt auch für Prozesszeiten und Transportmittelvergleich. Die Durchlaufzeitkarte im Vorperiodenvergleich zeigt weiterhin den Durchschnitt in der gewählten Berechnungsart. Listenfilter gelten nur für die TE-Liste.</div></details>
         </section>`;
       }
       this._analyseUiNachRender(host, uiScroll);
@@ -5010,13 +5490,15 @@
     _renderProzesszeiten() {
       const host = this._$('prozesszeiten');
       if (!host) return;
+      const uiScroll=this._analyseUiVorRender(host);
       const tes = this._tesZeitraum();
+      this._renderNettoInfo();
       this._renderDurchlaufTrend(tes);
       if (!tes.length) {
         host.innerHTML = '<div class="u-leer">Keine Transporteinheiten im ausgewählten Zeitraum.</div>';
         return;
       }
-      const daten = aggregiereProzesszeiten(tes);
+      const daten = aggregiereProzesszeiten(tes, this._dauerKalender());
       const phasen = daten.filter(d => !d.gesamt);
       const modus = this._prozessModus === 'median' ? 'median' : 'mittel';
       const label = modus === 'median' ? 'Median' : 'Durchschnitt';
@@ -5030,7 +5512,7 @@
       const num = n => n == null ? '–' : n.toLocaleString('de-DE', {maximumFractionDigits:1});
       host.innerHTML = `<div class="pz-totals">
         ${gesamtKarten.map(d => `<section class="pz-card pz-total ${d.id === 'gesamt' ? 'pz-overall' : ''}" data-prozess="${d.id}">
-          <div class="pz-kicker">${esc(d.label)}</div>
+          <div class="pz-kicker">${esc(d.label)} · ${this._dauerBasisText()}</div>
           <div class="pz-big">${prefix}${num(d[modus])} <small>min</small></div>
           <div class="pz-sub">${esc(d.strecke)}</div>
           <span class="pz-pill">${label} · ${d.n} / ${tes.length} TEs auswertbar</span>
@@ -5039,7 +5521,7 @@
       <div class="pz-dashboard">
         <section class="pz-chart" aria-label="Prozesszeiten im Vergleich">
           <div class="pz-head"><div><div class="pz-title">Durchlaufzeit</div>
-            <div class="pz-sub">${esc(bereichLabel(this._bereich))} · ${tes.length} TEs im Zeitraum</div></div>
+            <div class="pz-sub">${esc(bereichLabel(this._bereich))} · ${tes.length} TEs im Zeitraum · ${this._dauerBasisText()}</div></div>
             <div class="pz-switch" aria-label="Statistik wählen">
               <button data-pz-modus="mittel" aria-pressed="${modus === 'mittel'}">Durchschnitt</button>
               <button data-pz-modus="median" aria-pressed="${modus === 'median'}">Median</button>
@@ -5062,22 +5544,23 @@
             <div class="pz-metrics">${[['Durchschnitt',focus.mittel],['Median',focus.median],['Minimum',focus.min],['Maximum',focus.max]].map(([l,v])=>`<div class="pz-metric"><span>${l}</span><strong>${fmtProzessMin(v)}</strong></div>`).join('')}</div>
             <div class="pz-sub">${focus.n} / ${tes.length} TEs auswertbar</div>
             <div class="pz-coverage" aria-hidden="true"><div style="width:${focus.n/tes.length*100}%"></div></div>
-            <div class="pz-sub">${focus.fehlend} unvollständig · ${focus.ungueltig} ungültige Zeitfolge</div>
+            <div class="pz-sub">${focus.fehlend} unvollständig · ${focus.ungueltig} ungültige Zeitfolge${focus.kalender ? ` · ${focus.kalender} außerhalb Kalenderbereich` : ''}</div>
           </section>
         </aside>
       </div>
       ${this._transportzeitenHTML(tes, modus)}
       ${this._teZeitstrahlHTML(tes)}
-      <details class="pz-info"><summary>Detailtabelle und Berechnungsgrundlage</summary>
-        <div class="pz-scroll"><table class="pz-table"><thead><tr><th scope="col">Prozess</th><th scope="col">Ø</th><th scope="col">Median</th><th scope="col">Min.</th><th scope="col">Max.</th><th scope="col">Auswertbar</th><th scope="col">Fehlend</th><th scope="col">Ungültig</th></tr></thead><tbody>
-          ${daten.map(d=>`<tr><td>${esc(d.label)}</td><td>${fmtProzessMin(d.mittel)}</td><td>${fmtProzessMin(d.median)}</td><td>${fmtProzessMin(d.min)}</td><td>${fmtProzessMin(d.max)}</td><td>${d.n} / ${tes.length}</td><td>${d.fehlend}</td><td>${d.ungueltig}</td></tr>`).join('')}
+      <details class="pz-info" data-analysis-key="prozessgrundlage"><summary>Detailtabelle und Berechnungsgrundlage</summary>
+        <div class="pz-scroll"><table class="pz-table"><thead><tr><th scope="col">Prozess</th><th scope="col">Ø</th><th scope="col">Median</th><th scope="col">Min.</th><th scope="col">Max.</th><th scope="col">Auswertbar</th><th scope="col">Fehlend</th><th scope="col">Ungültig</th>${this._dauerBasis==='netto' ? '<th scope="col">Außerhalb Kalender</th>' : ''}</tr></thead><tbody>
+          ${daten.map(d=>`<tr><td>${esc(d.label)}</td><td>${fmtProzessMin(d.mittel)}</td><td>${fmtProzessMin(d.median)}</td><td>${fmtProzessMin(d.min)}</td><td>${fmtProzessMin(d.max)}</td><td>${d.n} / ${tes.length}</td><td>${d.fehlend}</td><td>${d.ungueltig}</td>${this._dauerBasis==='netto' ? `<td>${d.kalender??0}</td>` : ''}</tr>`).join('')}
         </tbody></table></div>
-        Jede TE zählt je Schritt einmal. Fehlende Zeitstempel und negative Zeitdifferenzen werden ausgeschlossen; 0 Minuten sind gültig.
+        ${this._dauerBasisText()}: Jede TE zählt je Schritt einmal.${this._dauerBasis==='netto' ? ' Nur die Schnittmengen mit den Betriebsfenstern zählen. Zeitpaare außerhalb 2020–2035 sind nicht bewertbar; Details dazu stehen im Infobutton oben.' : ''} Fehlende Zeitstempel und negative Zeitdifferenzen werden ausgeschlossen; 0 Minuten sind gültig.
         Zeitraumzuordnung: geplanter Start, ersatzweise Ankunft, ersatzweise vollständige Fertigstellung.
         Einlagerung endet mit dem letzten Fertigstellungszeitstempel aller Positionen; Bestandsarten bleiben unberücksichtigt.
         Entladung: reguläres Entladeende ohne Ersatzwert; Vereinnahmung: tatsächliches Entladeende bis WE-Buchung. Die Zuordnung des regulären Stempels zum ersten Entladeende bleibt fachlich zu prüfen.
         Unterschiedliche Fallzahlen je Schritt: Phasendurchschnitte nicht zur Gesamtdauer addieren. Die beiden Durchlaufzeiten werden direkt ab Ankunft beziehungsweise Entladestart bis Fertigstellung berechnet.
       </details>`;
+      this._analyseUiNachRender(host,uiScroll);
       host.onclick = e => {
         const button = e.target.closest('[data-pz-modus], [data-pz-fokus], [data-pz-sort], [data-pz-cell], [data-tz-te]');
         if (!button || !host.contains(button)) return;
@@ -5118,7 +5601,7 @@
     }
 
     _transportzeitenHTML(tes, modus) {
-      const gruppen = aggregiereTransportzeiten(tes);
+      const gruppen = aggregiereTransportzeiten(tes, this._dauerKalender());
       const spalten = [
         {id:'anmeldung',label:'Wartezeit'}, {id:'vorlauf',label:'Entladevorlauf'},
         {id:'entladung',label:'Entladung'}, {id:'vereinnahmung',label:'Vereinnahmung'},
@@ -5137,17 +5620,17 @@
       const detail = dAktiv ? `<div class="pz-title">${esc(gAktiv.label)} · ${esc(dAktiv.label)}</div>
         <div class="pz-sub">${esc(dAktiv.strecke)}${gAktiv.key != null && gAktiv.key !== gAktiv.label ? ' · '+esc(gAktiv.key) : ''}</div>
         <div class="pz-metrics">${[['Durchschnitt',dAktiv.mittel],['Median',dAktiv.median],['Minimum',dAktiv.min],['Maximum',dAktiv.max]].map(([l,v])=>`<div class="pz-metric"><span>${l}</span><strong>${fmtProzessMin(v)}</strong></div>`).join('')}</div>
-        <div class="pz-sub"><strong>${dAktiv.n} / ${gAktiv.anzahl} TEs auswertbar (${Math.round(dAktiv.n/gAktiv.anzahl*100)} %)</strong> · ${dAktiv.fehlend} unvollständig · ${dAktiv.ungueltig} ungültige Zeitfolge</div>` :
+        <div class="pz-sub"><strong>${dAktiv.n} / ${gAktiv.anzahl} TEs auswertbar (${Math.round(dAktiv.n/gAktiv.anzahl*100)} %)</strong> · ${dAktiv.fehlend} unvollständig · ${dAktiv.ungueltig} ungültige Zeitfolge${dAktiv.kalender ? ` · ${dAktiv.kalender} außerhalb Kalenderbereich` : ''}</div>` :
         '<div class="pz-sub">Klicke auf einen Zeitwert, um Median, Minimum, Maximum und Datenabdeckung zu sehen.</div>';
       return `<section class="pz-transport" aria-label="Durchlaufzeit nach Transportmittel">
         <div class="pz-head"><div><div class="pz-title">Durchlaufzeit nach Transportmittel</div>
-          <div class="pz-sub">${stat} je TE · ${esc(bereichLabel(this._bereich))} · ${gruppen.length} Transportmittelgruppen</div></div>
+          <div class="pz-sub">${stat} je TE · ${this._dauerBasisText()} · ${esc(bereichLabel(this._bereich))} · ${gruppen.length} Transportmittelgruppen</div></div>
           <div class="pz-switch" aria-label="Statistik der Transportmittelmatrix wählen">
             <button data-pz-modus="mittel" aria-pressed="${modus==='mittel'}">Durchschnitt</button>
             <button data-pz-modus="median" aria-pressed="${modus==='median'}">Median</button>
           </div></div>
         <div class="pz-matrix-scroll" role="region" aria-label="Transportmittelmatrix, horizontal scrollbar" tabindex="0">
-          <table class="pz-matrix"><caption>Zeitwerte in Minuten · Spaltenüberschrift zum Sortieren anklicken</caption>
+          <table class="pz-matrix"><caption>Zeitwerte in Minuten · ${this._dauerBasisText()} · Spaltenüberschrift zum Sortieren anklicken</caption>
             <thead><tr><th scope="col" aria-sort="${sortAttr('name')}"><button class="pz-sort" data-pz-sort="name">Transportmittel <span>${sortIcon('name')}</span></button></th>
               ${spalten.map(c=>`<th scope="col" class="${c.gesamt?'pz-matrix-total':''}" aria-sort="${sortAttr(c.id)}"><button class="pz-sort" data-pz-sort="${c.id}">${c.label} <span>${sortIcon(c.id)}</span></button></th>`).join('')}
             </tr></thead><tbody>${sortiert.map(g=>`<tr>
@@ -5230,7 +5713,7 @@
       }).join('');
       return `<section class="tz-widget" aria-label="TE-Zeitstrahl">
         <div class="pz-head"><div><div class="pz-title">TE-Zeitstrahl · Prozessverlauf</div>
-          <div class="pz-sub">Unterhalb der Transportmittelanalyse · ${datumsLabel(daten.datum)} · gemeinsame absolute Uhrzeitachse</div></div>${auswahl}</div>
+          <div class="pz-sub">Unterhalb der Transportmittelanalyse · ${datumsLabel(daten.datum)} · gemeinsame absolute Uhrzeitachse${this._dauerBasis==='netto'?' · Bruttodauern, unveränderte Ist-Zeiten':''}</div></div>${auswahl}</div>
         <div class="tz-scroll" role="region" aria-label="TE-Zeitstrahl, horizontal und vertikal scrollbar" tabindex="0">
           <div class="tz-canvas" style="width:${daten.breitePx + 250}px">
             <div class="tz-axis"><div class="tz-axis-label">${datumsLabel(daten.datum)}</div><div class="tz-axis-track">
@@ -5241,13 +5724,13 @@
         <div class="tz-legend">${TE_ZEITSTRAHL_PHASES.map((def,i)=>`<span class="tz-legend-item"><i class="tz-swatch tz-phase-${i}"></i>${esc(def.label)}</span>`).join('')}
           <span class="tz-legend-item"><i class="tz-shift-swatch"></i>Schichtwechsel 14:30</span></div>
         <div class="tz-summary">${daten.alleZeilen} von ${daten.kandidaten} TEs mit gültiger Gesamtdurchlaufzeit · ${daten.fehlend} mit fehlenden Zeitstempeln · ${daten.ungueltig} mit ungültiger Zeitfolge${daten.weitere ? ` · weitere ${daten.weitere} TEs aus Darstellungsgründen nicht eingeblendet` : ''}. Zeile anklicken, um die TE-Details zu öffnen.</div>
-        <details class="pz-info"><summary>Darstellung und Datenregeln</summary>
+        <details class="pz-info" data-analysis-key="zeitstrahlregeln"><summary>Darstellung und Datenregeln</summary>
           Jede Zeile zeigt die Gesamtdurchlaufzeit von Ankunft bis zur vollständigen Fertigstellung aller Positionen. Die Zeitachse verwendet durchgehend einen festen Stundentakt; bei Tageswechseln wird zusätzlich das Datum angezeigt. Mehrtägige Achsen sind horizontal scrollbar. Jede TE bleibt in einer eigenen Zeile, auch wenn mehrere TEs gleichzeitig durchlaufen. Überlappende Phasen innerhalb derselben TE stehen in zusätzlichen Spuren untereinander; ihre tatsächlichen Start- und Endzeiten werden nicht verschoben. Aufeinanderfolgende Phasen bleiben in einer Spur. 0-Minuten-Phasen erscheinen als schmale Markierungen. Die Gesamtdurchlaufzeit wird weiterhin direkt aus Ankunft und vollständiger Fertigstellung berechnet; die Phasendauern werden wegen möglicher Überlappungen nicht dafür addiert. Die fünf farbigen Abschnitte entsprechen den vorhandenen Prozessdefinitionen; bei einem fehlenden oder ungültigen Phasenpaar bleibt der betreffende Abschnitt frei. Die hervorgehobenen Linien bei 14:30 markieren den Schichtwechsel an jedem Tag innerhalb der dargestellten Achse. Phasen außerhalb der eigenen TE-Gesamtdurchlaufzeit werden nicht gezeichnet. Die Tageszuordnung folgt der Zeitraumlogik des Widgets: geplanter Start, ersatzweise Ankunft, ersatzweise vollständige Fertigstellung. Bestandsarten bleiben unberücksichtigt. Pro Tag werden höchstens ${TE_ZEITSTRAHL_MAX_ZEILEN} vollständige TEs dargestellt; die Auswertung darüber bleibt unverändert.</details>
       </section>`;
     }
 
     _prozessDetailHTML(te) {
-      return `<div class="detail-section"><div class="d-section-title">Prozesszeiten dieser TE</div>
+      return `<div class="detail-section"><div class="d-section-title">Prozesszeiten dieser TE · Brutto</div>
         <div class="pz-detail">${PROZESS_DEFS.map(def => {
           const p = prozessDauer(te, def);
           return `<div class="pz-detail-item"><div class="pz-name">${esc(def.label)}</div>
@@ -5321,7 +5804,7 @@
         ${ausgeschlossen.length ? `<details class="pz-info" data-analysis-key="delivery-zero"><summary>Ausgenullte Anlieferungen (${ausgeschlossen.length}) · separat ausgeschlossen</summary>${table(ausgeschlossen,true)}</details>`:''}
         <details class="pz-info" data-analysis-key="delivery-records"><summary>Anlieferungsbelege und Berechnung (${aktiv.regulaer})</summary>
           <p>OTIF = pünktlich und vollständig je Anlieferungsbeleg. Der Zeitraum wählt Belege aus; alle geladenen beteiligten TEs werden bewertet, auch außerhalb des Zeitraums oder ohne Zeitanker. Jede positive oder negative reguläre Positionsabweichung verhindert OTIF; die Mengentoleranz der TE-Kennzahl gilt hier nicht. Eine verspätete beteiligte TE verhindert OTIF für den Beleg. Pünktlichkeit verwendet Ankunft am Kontrollpunkt gegenüber Planstart und die bestehende Zeittoleranz.</p>
-          <p>Ist=0-Positionen bleiben separat ausgeschlossen. Besteht die gesamte Anlieferung aus Nullpositionen, wird sie weder als erfüllt noch als nicht erfüllt gezählt. Unbekannte Daten ergeben „nicht bewertbar“, sofern kein Mengenfehler und keine Verspätung bereits feststehen. Quote = erfüllte / bewertbare Anlieferungen. Mengentreue je Anlieferung bewertet dieselben regulären Positionen, unabhängig von der Pünktlichkeit: mengentreue / mengenmäßig bewertbare Anlieferungen. Fehlende Zeitstempel beeinflussen diese Mengenquote nicht. Bekannte Mengenfehler verhindern Mengentreue, sonst ergeben fehlende oder nicht eindeutig zuordenbare Mengen „nicht bewertbar“. OTIF und Mengentreue je TE sind separat einblendbar.</p>
+          <p>Ist=0-Positionen bleiben separat ausgeschlossen. Besteht die gesamte Anlieferung aus Nullpositionen, wird sie weder als erfüllt noch als nicht erfüllt gezählt. Unbekannte Daten ergeben „nicht bewertbar“, sofern kein Mengenfehler und keine Verspätung bereits feststehen. Quote = erfüllte / bewertbare Anlieferungen. Mengentreue je Anlieferung bewertet dieselben regulären Positionen, unabhängig von der Pünktlichkeit: mengentreue / mengenmäßig bewertbare Anlieferungen. Fehlende Zeitstempel beeinflussen diese Mengenquote nicht. Bekannte Mengenfehler verhindern Mengentreue, sonst ergeben fehlende oder nicht eindeutig zuordenbare Mengen „nicht bewertbar“. OTIF und Mengentreue je TE stehen dauerhaft im oberen Kennzahlenbereich.</p>
           ${aktiv.regulaer ? table(aktiv.belege.filter(g=>!g.ausgeschlossen),false):'<p class="lb-context">Keine regulären Anlieferungen im Zeitraum.</p>'}
         </details>`;
       this._analyseUiNachRender(host,ui);
@@ -5338,6 +5821,7 @@
       const vp=vorperiode(this._bereich),tesAktiv=this._tesZeitraum(),tesVgl=this._tesZeitraum(vp);
       const alleTes=[...(this._teMap?.values() ?? [...tesAktiv,...tesVgl])];
       const anlieferungAktiv=anlieferungsOtif(tesAktiv,alleTes),anlieferungVgl=anlieferungsOtif(tesVgl,alleTes);
+      this._kennzahlenBelegBasis={teMap:this._teMap,von:this._bereich.von.getTime(),bis:this._bereich.bis.getTime(),cfg:JSON.stringify(this._cfg),aktiv:anlieferungAktiv};
       this._renderAnlieferungsOtif(anlieferungAktiv);
       const aktiv=aggregiere(tesAktiv),vgl=aggregiere(tesVgl);
 
@@ -5345,10 +5829,10 @@
         host.innerHTML = `<div class="u-leer" style="grid-column:1/-1">
           Keine Transporteinheiten im Zeitraum ${esc(bereichLabel(this._bereich))}
         </div>`;
-        if (zeitHost) zeitHost.innerHTML = host.innerHTML;
+        if (zeitHost) this._renderZeitKpi();
         if (ladestellenHost) ladestellenHost.innerHTML = '';
-        if (teOtifHost) teOtifHost.innerHTML = host.innerHTML;
-        if (teMengenHost) teMengenHost.innerHTML = host.innerHTML;
+        if (teOtifHost) teOtifHost.innerHTML = this._kpiCardHTML({id:'otif',label:'OTIF · TE'},aktiv,vgl,`Vorperiode: ${bereichLabel(vp)}`);
+        if (teMengenHost) teMengenHost.innerHTML = this._kpiCardHTML({id:'mengentreu',label:'Mengentreue · TE'},aktiv,vgl,`Vorperiode: ${bereichLabel(vp)}`);
         return;
       }
 
@@ -5361,7 +5845,7 @@
       this._analyseUiNachRender(host,ui);
       if(teOtifHost)teOtifHost.innerHTML=this._kpiCardHTML({id:'otif',label:'OTIF · TE'},aktiv,vgl,vglName);
       if(teMengenHost)teMengenHost.innerHTML=this._kpiCardHTML({id:'mengentreu',label:'Mengentreue · TE'},aktiv,vgl,vglName);
-      if (zeitHost) zeitHost.innerHTML = KPI_DEFS.filter(def => def.id === 'durchlaufzeit').map(def => this._kpiCardHTML(def, aktiv, vgl, vglName)).join('');
+      if (zeitHost) this._renderZeitKpi();
       if (ladestellenHost) ladestellenHost.innerHTML = this._ladestellenVerteilungHTML(aktiv);
 
     }
@@ -5500,7 +5984,7 @@
       }
 
       if (['otif','mengentreu','abwMenge'].includes(def.id) && aktiv.nullpositionen?.anzahl) {
-        subTxt += ` · ${aktiv.nullpositionen.anzahl} Nullpositionen separat ausgeschlossen`;
+        subTxt += ` · ${aktiv.nullpositionen.anzahl} ${aktiv.nullpositionen.anzahl===1?'Nullposition':'Nullpositionen'} separat ausgeschlossen`;
       }
 
       // Trend nur wenn beide Werte vorhanden sind
@@ -5796,7 +6280,6 @@
               <div class="dh-te">${esc(te.teExt ?? te.te)}</div>
               <div class="dh-sub">${esc(te.lieferantName ?? '')}</div>
             </div>
-            <a class="dh-ewm" href="${esc(ewmLink(te.te))}" target="_blank" rel="noopener">In EWM öffnen ↗</a>
             <span class="tc-badge badge-${esc(status)}">${esc(STATUS_LABEL[status] ?? status)}</span>
             ${deltaHTML}
           </div>
@@ -6132,10 +6615,14 @@
         // hinterlassen — lieber sichtbar leer als endlos drehend.
         this._log('Fehler beim Parsen der Daten', 'error', err);
         this._teMap = new Map();
+        this._nettoRows = [];
+        this._nettoKalender = null;
         this._hideLoading();
         this._showEmpty('Daten konnten nicht ausgewertet werden');
         return;
       }
+      this._nettoRows = rows;
+      this._nettoKalender = null;
       this._log(`Parsing abgeschlossen in ${this._seitStart() - tParseStart}ms — ${this._teMap.size} TEs`);
 
       // Rows kamen an, aber keine einzige TE hat es durch den Parser
@@ -6444,6 +6931,26 @@
     }
     return {gruppen:[...gruppen.values()].map(g => ({...g, basis:aggregiereBasis(g.tes),
       dauer:aggregiereProzesszeiten(g.tes).find(d => d.id === 'gesamt')})), fehlend, mehrdeutig};
+  }
+
+  // Der Diagrammnenner ist eine Teilmenge der globalen TE-Kachel.
+  // Ausschlussliste aus derselben Lieferantenzuordnung wie der Trend ableiten.
+  function lieferantenBewertungsUmfang(tes, daten = aggregiereLieferanten(tes)) {
+    const zugeordnet = new Set(daten.gruppen.flatMap(g => g.tes.map(te => te.te)));
+    const ausgeschlossen = []; let bewertbar = 0, mengenNb = 0;
+    for (const te of tes) {
+      if (!zugeordnet.has(te.te)) {
+        ausgeschlossen.push({te,grund:(te.lieferantenBewertung?.length ?? 0) > 1
+          ? 'Mehrere Lieferanten auf dieser TE' : 'Kein eindeutiger Lieferantenschlüssel'});
+      } else if (te.mengentreu == null) {
+        mengenNb++;
+        ausgeschlossen.push({te,grund:te.nullpositionen?.length && !te.mengenPositionen?.length
+          ? 'Nur ausgenullte Positionen – Mengenbewertung ausgeschlossen' : 'Mengenbewertung unvollständig oder nicht vorhanden'});
+      } else bewertbar++;
+    }
+    ausgeschlossen.sort((a,b) => String(a.te.te).localeCompare(String(b.te.te),'de',{numeric:true}));
+    return {gesamt:tes.length,zugeordnet:zugeordnet.size,bewertbar,mengenNb,
+      fehlend:daten.fehlend,mehrdeutig:daten.mehrdeutig,ausgeschlossen};
   }
 
   // Summen über alle eindeutig zugeordneten Gruppen, unabhängig von Bottom-10,
