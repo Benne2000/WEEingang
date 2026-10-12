@@ -1,6 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
 //  SAP Custom Widget – Wareneingang Analyse (WE-Analyse)
-//  JavaScript-Arbeitsstand 2.1.60 – Feiertags-Samstag mit Ist-Nachweis zählt standardmäßig
+//  JavaScript-Arbeitsstand 2.1.62 – Tagesinfos, unterscheidbare Marker und größere Trefferflächen
 //
 //  Umbau des Live-Trackers zur nachträglichen Auswertung.
 //
@@ -1368,16 +1368,11 @@
     })};
   }
 
-  // Eine Datenlücke wird nicht durch eine Linie überbrückt und nicht als 0 gezeichnet.
+  // Verbindet ausschließlich vorhandene Tageswerte, auch über Tage ohne Bewertung.
+  // Keine fiktiven Punkte, keine Nullwerte und keine Änderung der Tages-/Zeitraumquote.
   function kennzahlenLinienSegmente(tage,key) {
-    const segmente=[];let aktuell=[];let vorher=null;
-    for(const t of tage){
-      const wert=t.serien[key]?.wert,ms=t.datum.getTime();
-      if(!Number.isFinite(wert)){if(aktuell.length)segmente.push(aktuell);aktuell=[];vorher=null;continue;}
-      if(vorher!=null&&ms-vorher>86400000){segmente.push(aktuell);aktuell=[];}
-      aktuell.push(t);vorher=ms;
-    }
-    if(aktuell.length)segmente.push(aktuell);return segmente;
+    const punkte=tage.filter(t=>Number.isFinite(t.serien[key]?.wert));
+    return punkte.length?[punkte]:[];
   }
 
   // Aggregiert einen Satz TEs zu allen fünf Kennzahlen. Das identische Gerüst
@@ -3658,11 +3653,11 @@
       .kv-chart-head + .kv-switches { margin-top:12px; }
       .kv-series.kv-te.kv-ls-0 { color:#ffb347; } .kv-line-key.kv-te.kv-ls-0 { color:#ffb347; border-top-color:#ffb347; }
       .kv-series.kv-te.kv-ls-1 { color:#e17f9b; } .kv-line-key.kv-te.kv-ls-1 { color:#e17f9b; border-top-color:#e17f9b; }
-      .kv-series.kv-te.kv-ls-2 { color:#ffbaa0; } .kv-line-key.kv-te.kv-ls-2 { color:#ffbaa0; border-top-color:#ffbaa0; }
+      .kv-series.kv-te.kv-ls-2 { color:#66c4ce; } .kv-line-key.kv-te.kv-ls-2 { color:#66c4ce; border-top-color:#66c4ce; }
       .kv-series.kv-te.kv-ls-3 { color:#a9b6c9; } .kv-line-key.kv-te.kv-ls-3 { color:#a9b6c9; border-top-color:#a9b6c9; }
       :host([theme="light"]) .kv-series.kv-te.kv-ls-0 { color:#783a0c; } :host([theme="light"]) .kv-line-key.kv-te.kv-ls-0 { color:#783a0c; border-top-color:#783a0c; }
       :host([theme="light"]) .kv-series.kv-te.kv-ls-1 { color:#8e385b; } :host([theme="light"]) .kv-line-key.kv-te.kv-ls-1 { color:#8e385b; border-top-color:#8e385b; }
-      :host([theme="light"]) .kv-series.kv-te.kv-ls-2 { color:#aa4919; } :host([theme="light"]) .kv-line-key.kv-te.kv-ls-2 { color:#aa4919; border-top-color:#aa4919; }
+      :host([theme="light"]) .kv-series.kv-te.kv-ls-2 { color:#006b73; } :host([theme="light"]) .kv-line-key.kv-te.kv-ls-2 { color:#006b73; border-top-color:#006b73; }
       :host([theme="light"]) .kv-series.kv-te.kv-ls-3 { color:#596579; } :host([theme="light"]) .kv-line-key.kv-te.kv-ls-3 { color:#596579; border-top-color:#596579; }
 
       .kv-chart { margin-bottom:18px; }
@@ -3675,7 +3670,7 @@
       .kv-switch[aria-pressed="true"] .kv-switch-state::after { content:"An"; }
       .kv-switch[aria-pressed="false"] .kv-switch-state::after { content:"Aus"; }
       .kv-switch:focus-visible { outline:2px solid var(--c-red-light); outline-offset:3px; }
-      .kv-line-key { display:block; flex-shrink:0; width:25px; height:6px; color:#ff5140; border-top:0 solid #ff5140; }
+      .kv-line-key { display:block; flex-shrink:0; width:25px; height:12px; color:#ff5140; border-top:0 solid #ff5140; }
       .kv-line-key.kv-te { color:#ffaaa0; border-top-color:#ffaaa0; }
       :host([theme="light"]) .kv-line-key { color:#c63425; border-top-color:#c63425; }
       :host([theme="light"]) .kv-line-key.kv-te { color:#8b3232; border-top-color:#8b3232; }
@@ -3684,11 +3679,13 @@
       :host([theme="light"]) .kv-series { color:#c63425; }
       :host([theme="light"]) .kv-series.kv-te { color:#8b3232; }
       .kv-series[data-hidden="true"] { display:none; }
-      .kv-series polyline { fill:none; stroke:currentColor; stroke-width:2.5; }
-      .kv-point { fill:var(--c-bg); stroke:currentColor; stroke-width:2; cursor:help; }
-      .kv-point:hover { fill:currentColor; stroke-width:3; }
-      .kv-point:focus { fill:currentColor; stroke-width:3; outline:2px solid var(--c-text); outline-offset:4px; }
-      .kv-tooltip { min-height:42px; padding:10px 12px; background:var(--c-bg2); color:var(--c-text2); border:1px solid var(--c-border2); border-radius:7px; font-size:12px; line-height:1.6; }
+      .kv-series polyline { fill:none; stroke:currentColor; stroke-width:2.5; stroke-linecap:round; stroke-linejoin:round; vector-effect:non-scaling-stroke; }
+      .kv-point { fill:var(--c-bg); stroke:currentColor; stroke-width:1.25; vector-effect:non-scaling-stroke; cursor:help; }
+      .kv-day-hit { fill:transparent; pointer-events:all; cursor:help; }
+      .kv-legend-marker { fill:var(--c-bg2); stroke:currentColor; stroke-width:1.25; vector-effect:non-scaling-stroke; }
+      .kv-point:hover { fill:currentColor; stroke-width:2; }
+      .kv-point:focus { fill:currentColor; stroke-width:2; outline:2px solid var(--c-text); outline-offset:4px; }
+      .kv-tooltip { white-space:pre-line; min-height:42px; padding:10px 12px; background:var(--c-bg2); color:var(--c-text2); border:1px solid var(--c-border2); border-radius:7px; font-size:12px; line-height:1.6; }
       .kv-period { font-size:12px; color:var(--c-text2); line-height:1.6; margin:10px 0 12px; }
       .kv-period strong { color:var(--c-text); }
       .kv-intro { margin-bottom:18px; }
@@ -3780,8 +3777,9 @@
       .lb-chart-date-tick { stroke:var(--c-text2); stroke-width:1.5; vector-effect:non-scaling-stroke; }
       .lb-chart-year { fill:var(--c-text2); font:600 11px var(--font-mono); }
       .lb-chart-year-boundary { stroke:var(--c-text3); stroke-width:1.5; stroke-dasharray:4 5; opacity:.65; vector-effect:non-scaling-stroke; }
-      .lb-chart-line { fill:none; stroke:var(--c-red-light); stroke-width:3; stroke-linecap:round; stroke-linejoin:round; vector-effect:non-scaling-stroke; }
-      .lb-chart-point { fill:var(--c-red-light); stroke:var(--c-bg); stroke-width:2; vector-effect:non-scaling-stroke; }
+      .lb-chart-line { fill:none; stroke:var(--c-red-light); stroke-width:2.5; stroke-linecap:round; stroke-linejoin:round; vector-effect:non-scaling-stroke; }
+      .lb-chart-point { fill:var(--c-bg); stroke:var(--c-red-light); stroke-width:1.25; vector-effect:non-scaling-stroke; }
+      .lb-chart-hit { fill:transparent; stroke:none; pointer-events:all; cursor:help; }
       .lb-chart-label { fill:var(--c-text2); font:11px var(--font-mono); }
       .lb-chart-value { fill:var(--c-text); font:600 10px var(--font-mono); }
       .dlz-trend-head { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; }
@@ -4915,14 +4913,40 @@
       else if(p.right>rechts)region.scrollLeft+=p.right-rechts;
     }
 
+    _kennzahlenMarkerForm(linie) {
+      return linie.art!=='te'?'kreis':linie.lsIndex==null?'quadrat'
+        :['quadrat','raute','dreieck','kreuz'][linie.lsIndex];
+    }
+
+    _verlaufMarkerHTML(form,x,y,r,attrs,info='') {
+      const n=v=>v.toFixed(2),titel=info?`<title>${esc(info)}</title>`:'';
+      if(form==='kreis')return `<circle ${attrs} cx="${n(x)}" cy="${n(y)}" r="${r}">${titel}</circle>`;
+      if(form==='quadrat')return `<rect ${attrs} x="${n(x-r)}" y="${n(y-r)}" width="${r*2}" height="${r*2}">${titel}</rect>`;
+      const points=form==='raute'?[[x,y-r],[x+r,y],[x,y+r],[x-r,y]]
+        :form==='dreieck'?[[x,y-r],[x+r,y+r],[x-r,y+r]]
+        :[[x-r/3,y-r],[x+r/3,y-r],[x+r/3,y-r/3],[x+r,y-r/3],[x+r,y+r/3],[x+r/3,y+r/3],[x+r/3,y+r],[x-r/3,y+r],[x-r/3,y+r/3],[x-r,y+r/3],[x-r,y-r/3],[x-r/3,y-r/3]];
+      return `<polygon ${attrs} points="${points.map(([a,b])=>`${n(a)},${n(b)}`).join(' ')}">${titel}</polygon>`;
+    }
+
+    _kennzahlenTagesInfo(ziel) {
+      const hit=ziel?.closest?.('[data-kv-day-values]');if(!hit)return false;
+      const chart=hit.closest('.kv-chart'),info=chart?.querySelector('.kv-tooltip');
+      if(!info)return true;
+      const werte=JSON.parse(hit.dataset.kvDayValues).filter(p=>this._kennzahlenLinien?.[p.key]!==false);
+      info.textContent=werte.map(p=>p.text).join('\n');
+      info.dataset.day=hit.dataset.kvDay;delete info.dataset.serie;
+      return true;
+    }
+
     _kennzahlenPunktInfo(ziel) {
+      if(this._kennzahlenTagesInfo(ziel))return;
       const punkt=ziel.closest?.('[data-kv-info]');if(!punkt)return;
       const serie=punkt.closest('[data-kv-series]');
       if(serie?.dataset.hidden==='true')return;
       // Auch direktes Fokussieren/Antippen wählt genau einen Tab-Einstieg je Linie.
       for(const p of serie?.querySelectorAll('.kv-point')??[])p.setAttribute('tabindex',p===punkt?'0':'-1');
       const ausgabe=punkt.closest('.kv-chart')?.querySelector('.kv-tooltip');
-      if(ausgabe){ausgabe.dataset.serie=serie?.dataset.kvSeries??'';if(ausgabe.textContent!==punkt.dataset.kvInfo)ausgabe.textContent=punkt.dataset.kvInfo;}
+      if(ausgabe){delete ausgabe.dataset.day;ausgabe.dataset.serie=serie?.dataset.kvSeries??'';if(ausgabe.textContent!==punkt.dataset.kvInfo)ausgabe.textContent=punkt.dataset.kvInfo;}
     }
 
     _kennzahlenPunktWechsel(e) {
@@ -4953,10 +4977,11 @@
         chart.querySelector('.kv-no-data').hidden=daten;
         const info=chart.querySelector('.kv-tooltip');if(!info)continue;
         info.hidden=!an;
-        if(!an){info.textContent='';delete info.dataset.serie;}
+        if(!an){info.textContent='';delete info.dataset.serie;delete info.dataset.day;}
+        else if(info.dataset.day){this._kennzahlenTagesInfo(chart.querySelector(`[data-kv-day-hit="${info.dataset.day}"]`));}
         else if(!info.dataset.serie||this._kennzahlenLinien?.[info.dataset.serie]===false){
           delete info.dataset.serie;
-          const text='Punkt berühren oder fokussieren; ←/→ sowie Pos1/Ende wechseln den Tagespunkt.';
+          const text='Tagesspalte berühren: alle eingeblendeten Reihen. Tastatur am Punkt: ←/→ sowie Pos1/Ende.';
           if(info.textContent!==text)info.textContent=text;
         }
       }
@@ -5008,24 +5033,33 @@
           q:ls[teFeld],art:'te',lsIndex:ls.index}))];
       }
       // Gleiche Reihenfolge für Legende, Zahlen, Tabelle und Tastatureinstiege.
-      // Große TE-Quadrate zuerst, Anlieferungskreis zuletzt: alle bleiben erreichbar.
+      // Kompakte TE-Quadrate zuerst, Anlieferungskreis zuletzt: Tastaturreihenfolge bleibt erhalten.
       for(const g of gruppen)g.linien=[...g.linien.filter(l=>l.art==='te'),...g.linien.filter(l=>l.art!=='te')];
-      const muster=l=>l.art!=='te'?'':l.lsIndex==null?'7 5':['6 4','12 4','2 4','10 3 2 3'][l.lsIndex];
       const W=1000,H=300,L=70,R=45,T=48,B=48,plotW=W-L-R,plotH=H-T-B;
       const von=this._bereich.von.getTime(),bis=this._bereich.bis.getTime()-86400000;
       const x=d=>von===bis?L+plotW/2:L+(d.getTime()-von)*plotW/(bis-von),y=v=>T+(100-v)*plotH/100;
       const achsenTage=[...new Map([{datum:new Date(von)},...tage,{datum:new Date(bis)}].map(p=>[p.datum.getTime(),{datum:p.datum,x:x(p.datum)}])).values()].sort((a,b)=>a.datum-b.datum);
       const raster=[0,20,40,60,80,100].map(v=>`<line class="lb-chart-grid" x1="${L}" x2="${W-R}" y1="${y(v)}" y2="${y(v)}"></line><text class="lb-chart-label" x="${L-20}" y="${y(v)+4}" text-anchor="end">${v} %</text>`).join('');
-      host.innerHTML=`<p class="lb-context kv-intro">Globale Kennzahlen · ${esc(bereichLabel(this._bereich))}. Jede Linie lässt sich einzeln schalten. Die Zeitraumquoten entsprechen den Kacheln; Tagesquoten zeigen die jeweilige Tagesauswahl. Lieferanten- und Frachtführerzuordnungen begrenzen diese Diagramme nicht.</p>`+gruppen.map(g=>{
-        const schalter=g.linien.map(l=>`<button class="kv-switch" data-kv-toggle="${l.key}" aria-pressed="true" aria-controls="kv-serie-${l.key}"><svg class="kv-line-key ${l.art==='te'?'kv-te':''} ${l.lsIndex!=null?'kv-ls-'+l.lsIndex:''}" viewBox="0 0 25 6" aria-hidden="true" focusable="false"><line x1="0" y1="3" x2="25" y2="3" stroke="currentColor" stroke-width="3" stroke-dasharray="${muster(l)}"></line></svg>${l.label}<span class="kv-switch-state" aria-hidden="true"></span></button>`).join('');
+      host.innerHTML=`<p class="lb-context kv-intro">Globale Kennzahlen · ${esc(bereichLabel(this._bereich))}. Jede Linie lässt sich einzeln schalten. Linien verbinden vorhandene Tageswerte; Tage ohne Bewertung bleiben ohne Datenpunkt. Tagesspalte berühren oder antippen: Werte aller eingeblendeten Reihen. Die Zeitraumquoten entsprechen den Kacheln; Tagesquoten zeigen die jeweilige Tagesauswahl. Lieferanten- und Frachtführerzuordnungen begrenzen diese Diagramme nicht.</p>`+gruppen.map(g=>{
+        const schalter=g.linien.map(l=>`<button class="kv-switch" data-kv-toggle="${l.key}" aria-pressed="true" aria-controls="kv-serie-${l.key}"><svg class="kv-line-key ${l.art==='te'?'kv-te':''} ${l.lsIndex!=null?'kv-ls-'+l.lsIndex:''}" viewBox="0 0 25 12" aria-hidden="true" focusable="false"><line x1="1" y1="6" x2="24" y2="6" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"></line>${this._verlaufMarkerHTML(this._kennzahlenMarkerForm(l),12.5,6,3,'class="kv-legend-marker"')}</svg>${l.label}<span class="kv-switch-state" aria-hidden="true"></span></button>`).join('');
         const periode=g.linien.map(l=>`<span data-kv-period="${l.key}">${l.label}: <strong>${l.q.wert==null?'nicht bewertbar':fmtProzent(l.q.wert)}</strong> · ${l.q.ok}/${l.q.bewertbar} erfüllt · ${l.q.nb} nicht bewertbar${l.art==='anlieferung'?` · ${beleg.ausgeschlossen} ausgenullt ausgeschlossen`:''}</span>`).join(' &nbsp; | &nbsp; ');
+        const punktInfo=(t,l)=>{
+          const q=t.serien[l.key];
+          return `${fmtDate(t.datum)} · ${l.label}: ${Number.isFinite(q.wert)?fmtProzent(q.wert):'nicht bewertbar'} · ${q.ok}/${q.bewertbar} erfüllt · ${q.nb} nicht bewertbar${l.art==='anlieferung'?` · ${q.ausgeschlossen} ${q.ausgeschlossen===1?'ausgenullte Anlieferung':'ausgenullte Anlieferungen'} ausgeschlossen`:g.id!=='puenktlichkeit'?` · ${q.nullpositionen} ${q.nullpositionen===1?'Nullposition':'Nullpositionen'} separat ausgeschlossen`:''}`;
+        };
+        // Vorhandene Tagesspalten: gemeinsame Info unabhängig von Markerüberlagerungen.
+        const treffer=tage.map((t,i)=>{
+          const links=i?Math.max(L,(x(tage[i-1].datum)+x(t.datum))/2):L;
+          const rechts=i+1<tage.length?Math.min(W-R,(x(t.datum)+x(tage[i+1].datum))/2):W-R;
+          const werte=g.linien.map(l=>({key:l.key,text:punktInfo(t,l)}));
+          return `<rect class="kv-day-hit" x="${links.toFixed(2)}" y="${T}" width="${Math.max(0,rechts-links).toFixed(2)}" height="${plotH}" data-kv-day-hit="${t.tag}" data-kv-day="${t.tag}" data-kv-day-values="${esc(JSON.stringify(werte))}" aria-hidden="true"></rect>`;
+        }).join('');
         const serien=g.linien.map(l=>{
-          const segmente=kennzahlenLinienSegmente(tage,l.key),linien=segmente.filter(a=>a.length>1).map(a=>`<polyline stroke-dasharray="${muster(l)}" points="${a.map(t=>`${x(t.datum).toFixed(2)},${y(t.serien[l.key].wert).toFixed(2)}`).join(' ')}"></polyline>`).join('');
+          const segmente=kennzahlenLinienSegmente(tage,l.key),linien=segmente.filter(a=>a.length>1).map(a=>`<polyline points="${a.map(t=>`${x(t.datum).toFixed(2)},${y(t.serien[l.key].wert).toFixed(2)}`).join(' ')}"></polyline>`).join('');
           const punkte=tage.filter(t=>Number.isFinite(t.serien[l.key].wert)).map((t,i)=>{
-            const q=t.serien[l.key],info=`${fmtDate(t.datum)} · ${l.label}: ${fmtProzent(q.wert)} · ${q.ok}/${q.bewertbar} erfüllt · ${q.nb} nicht bewertbar${l.art==='anlieferung'?` · ${q.ausgeschlossen} ${q.ausgeschlossen===1?'ausgenullte Anlieferung':'ausgenullte Anlieferungen'} ausgeschlossen`:g.id!=='puenktlichkeit'?` · ${q.nullpositionen} ${q.nullpositionen===1?'Nullposition':'Nullpositionen'} separat ausgeschlossen`:''}`;
-            const groesse=l.lsIndex==null?10:22-l.lsIndex*4;
-            const attrs=`class="kv-point" tabindex="${i===0?0:-1}" role="img" aria-label="${esc(info)}" data-kv-info="${esc(info)}" data-kv-day="${t.tag}" data-kv-value="${q.wert}"`;
-            return l.art==='te'?`<rect ${attrs} x="${(x(t.datum)-groesse/2).toFixed(2)}" y="${(y(q.wert)-groesse/2).toFixed(2)}" width="${groesse}" height="${groesse}"><title>${esc(info)}</title></rect>`:`<circle ${attrs} cx="${x(t.datum).toFixed(2)}" cy="${y(q.wert).toFixed(2)}" r="3"><title>${esc(info)}</title></circle>`;
+            const q=t.serien[l.key],info=punktInfo(t,l),form=this._kennzahlenMarkerForm(l);
+            const attrs=`class="kv-point" tabindex="${i===0?0:-1}" role="img" aria-label="${esc(info)}" data-kv-info="${esc(info)}" data-kv-day="${t.tag}" data-kv-value="${q.wert}" data-kv-x="${x(t.datum).toFixed(2)}" data-kv-y="${y(q.wert).toFixed(2)}" data-kv-form="${form}"`;
+            return this._verlaufMarkerHTML(form,x(t.datum),y(q.wert),l.art==='te'?3.5:3,attrs,info);
           }).join('');
           return `<g id="kv-serie-${l.key}" class="kv-series ${l.art==='te'?'kv-te':''} ${l.lsIndex!=null?'kv-ls-'+l.lsIndex:''}" data-kv-series="${l.key}">${linien}${punkte}</g>`;
         }).join('');
@@ -5033,10 +5067,10 @@
         const ansicht=`<div class="kv-te-view"><span>TE-Ansicht</span><div class="lb-mode" role="group" aria-label="TE-Ansicht ${g.titel}"><button data-kv-ls-chart="${g.id}" data-kv-ls-view="gesamt" aria-pressed="${!g.lsAnsicht}">TEs gesamt</button><button data-kv-ls-chart="${g.id}" data-kv-ls-view="ladestellen" aria-pressed="${!!g.lsAnsicht}">Nach Ladestelle</button></div></div>`;
         return `<section class="lb-trend kv-chart" data-kv-chart="${g.id}" aria-labelledby="kv-titel-${g.id}"><div class="kv-chart-head"><h3 class="lb-analysis-title" id="kv-titel-${g.id}">${g.titel}</h3>${ansicht}</div><div class="kv-switches" role="group" aria-label="Linien für ${g.titel}">${schalter}</div><div class="kv-period"${g.linien.length?'':' hidden'}>Gesamter Zeitraum: ${periode}</div>${g.lsAnsicht?`<p class="lb-context">TEs nach BW-Ladestelle · jede TE zählt einmal. Fehlende oder unbekannte Werte: „Nicht zugeordnet“. ${g.id==='puenktlichkeit'?'':'Die Anlieferungslinie zeigt weiterhin alle Anlieferungen.'}${!ladestellen.gruppen.length?' Keine TEs im ausgewählten Zeitraum.':''}</p>`:''}${g.id==='puenktlichkeit'?`<p class="lb-context">Pünktlich: Ankunft am Kontrollpunkt spätestens ${esc(fmtMenge(this._cfg?.toleranzMin??30))} min nach geplantem Start; frühere Ankunft zählt als pünktlich. Fehlende Vergleichszeitstempel: nicht bewertbar.</p>`:''}${g.id==='menge'?`<p class="lb-context">Anlieferungen: jede reguläre Positionsabweichung zählt. TEs: Mengentoleranz ${esc(fmtMenge(this._cfg?.mengenToleranzPct??0))} %. Nullpositionen bleiben separat ausgeschlossen.</p>`:''}
           <div class="kv-empty fb-detail-empty" role="status" hidden>${g.linien.length?'Bitte mindestens eine Linie auswählen.':'Keine TEs im ausgewählten Zeitraum.'}</div>
-          <div class="kv-diagram"><p class="lb-context kv-no-data">Keine bewertbaren Tageswerte für die eingeblendeten Linien im ausgewählten Zeitraum.</p><div class="lb-chart-scroll" tabindex="0" role="region" aria-label="${g.titel} horizontal scrollen"><svg class="lb-trend-chart" viewBox="0 0 ${W} ${H}" role="group" aria-label="${g.titel}, Tagesquoten von 0 bis 100 Prozent"><title>${g.titel}</title>${raster}<line class="lb-chart-axis" x1="${L}" x2="${W-R}" y1="${H-B}" y2="${H-B}"></line><line class="lb-chart-axis" x1="${L}" x2="${L}" y1="${T}" y2="${H-B}"></line>${trendDatumsAchse(achsenTage,H-B,H-16,T,L,W-R)}${serien}</svg></div></div>
+          <div class="kv-diagram"><p class="lb-context kv-no-data">Keine bewertbaren Tageswerte für die eingeblendeten Linien im ausgewählten Zeitraum.</p><div class="lb-chart-scroll" tabindex="0" role="region" aria-label="${g.titel} horizontal scrollen"><svg class="lb-trend-chart" viewBox="0 0 ${W} ${H}" role="group" aria-label="${g.titel}, Tagesquoten von 0 bis 100 Prozent"><title>${g.titel}</title>${raster}<line class="lb-chart-axis" x1="${L}" x2="${W-R}" y1="${H-B}" y2="${H-B}"></line><line class="lb-chart-axis" x1="${L}" x2="${L}" y1="${T}" y2="${H-B}"></line>${trendDatumsAchse(achsenTage,H-B,H-16,T,L,W-R)}${serien}${treffer}</svg></div></div>
           <div class="kv-tooltip" aria-live="polite"></div>
           <details class="lb-chart-info" data-analysis-key="kv-table-${g.id}"><summary>Tageswerte und Bewertungsumfang anzeigen</summary><div class="lb-scroll" tabindex="0" role="region" aria-label="Tageswerte ${g.titel} scrollen"><table class="lb-table"><thead><tr><th scope="col">Datum</th>${g.linien.map(l=>`<th scope="col">${l.label}</th>`).join('')}</tr></thead><tbody>${tabelle||`<tr><td colspan="${g.linien.length+1}">Keine TEs im Zeitraum.</td></tr>`}</tbody></table></div></details></section>`;
-      }).join('')+`<details class="pz-info" data-analysis-key="kv-rules"><summary>Berechnung und Darstellung</summary><p>Tagesquote = erfüllte / bewertbare Einheiten des Tages. Zeitraumquote = erfüllte / bewertbare Einheiten des gesamten Zeitraums, kein Mittelwert der Tagesprozente. Tageszuordnung wie bei den Kacheln: geplanter Start, ersatzweise Ankunft, ersatzweise vollständige Fertigstellung. Eine Anlieferung zählt einmal; sämtliche geladenen Positionen des Belegs werden berücksichtigt. Ist=0-Positionen bleiben separat ausgeschlossen; vollständig ausgenullte Anlieferungen stehen nicht im Zähler oder Nenner. Bei TEs ohne reguläre Mengen bleibt die bisherige Einstufung „nicht bewertbar“ erhalten. Fehlende Tage oder Tage ohne bewertbare Werte unterbrechen die jeweilige Linie. Die Y-Achse bleibt bei 0–100 %. Anlieferungen: durchgezogene Linie und Kreise; TEs: gestrichelte Linie und Quadrate. Das Jahr steht einmal über seinem Abschnitt. Tastatur: ein Einstieg je Linie, ←/→ sowie Pos1/Ende wechseln den Tagespunkt. Die TE-Ansicht „Nach Ladestelle“ ist für OTIF, Pünktlichkeit und Mengentreue unabhängig wählbar und verteilt TEs auf BSL, Container, Landverkehr und bei Bedarf Nicht zugeordnet. Jede Kategorie verwendet ihre eigene bewertbare TE-Fallzahl. Keine Mittelung der Ladestellenquoten. Die Anlieferungslinie bleibt global. Ansicht und Linienauswahl bleiben innerhalb dieser Instanz bei Zeitraum-, Daten-, Reiter- und Themenwechsel erhalten.</p></details>`;
+      }).join('')+`<details class="pz-info" data-analysis-key="kv-rules"><summary>Berechnung und Darstellung</summary><p>Tagesquote = erfüllte / bewertbare Einheiten des Tages. Zeitraumquote = erfüllte / bewertbare Einheiten des gesamten Zeitraums, kein Mittelwert der Tagesprozente. Tageszuordnung wie bei den Kacheln: geplanter Start, ersatzweise Ankunft, ersatzweise vollständige Fertigstellung. Eine Anlieferung zählt einmal; sämtliche geladenen Positionen des Belegs werden berücksichtigt. Ist=0-Positionen bleiben separat ausgeschlossen; vollständig ausgenullte Anlieferungen stehen nicht im Zähler oder Nenner. Bei TEs ohne reguläre Mengen bleibt die bisherige Einstufung „nicht bewertbar“ erhalten. Die Linie verbindet die vorhandenen bewertbaren Tageswerte auch über Datenlücken. Für Tage ohne Bewertung gibt es keinen Punkt und keinen berechneten Zwischenwert. Die Y-Achse bleibt bei 0–100 %. Alle Datenreihen: durchgezogene Linien mit abgerundeten Übergängen. Anlieferungen: Kreise; TEs gesamt: Quadrate. Ladestellen: BSL Quadrat, Container Raute, Landverkehr Dreieck, Nicht zugeordnet Kreuz. Tagesspalten zeigen per Maus oder Antippen die Werte aller eingeblendeten Reihen; Tastaturfokus zeigt weiterhin den einzelnen Punkt. Farben entsprechen den Linienschaltern. Das Jahr steht einmal über seinem Abschnitt. Tastatur: ein Einstieg je Linie, ←/→ sowie Pos1/Ende wechseln den Tagespunkt. Die TE-Ansicht „Nach Ladestelle“ ist für OTIF, Pünktlichkeit und Mengentreue unabhängig wählbar und verteilt TEs auf BSL, Container, Landverkehr und bei Bedarf Nicht zugeordnet. Jede Kategorie verwendet ihre eigene bewertbare TE-Fallzahl. Keine Mittelung der Ladestellenquoten. Die Anlieferungslinie bleibt global. Ansicht und Linienauswahl bleiben innerhalb dieser Instanz bei Zeitraum-, Daten-, Reiter- und Themenwechsel erhalten.</p></details>`;
       this._analyseUiNachRender(host,ui);this._syncKennzahlenLinien();
     }
 
@@ -5081,7 +5115,7 @@
       const wertIndizes = punkte.length <= 10
         ? new Set(punkte.map((_,i)=>i))
         : new Set([0, punkte.length-1, punkte.reduce((minI,p,i,a) => p.wert < a[minI].wert ? i : minI, 0)]);
-      const kreise = punkte.map((p,i) => `<circle class="lb-chart-point" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="4">
+      const kreise = punkte.map((p,i) => `<circle class="lb-chart-hit" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="8" aria-hidden="true"><title>${esc(`${fmtDate(p.datum)}: ${fmtProzent(p.wert)} · ${p.ok}/${p.bewertbar} TEs ${erfuellung}${p.nb ? ` · ${p.nb} n. b.` : ''}`)}</title></circle><circle class="lb-chart-point" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="3">
           <title>${esc(`${fmtDate(p.datum)}: ${fmtProzent(p.wert)} · ${p.ok}/${p.bewertbar} TEs ${erfuellung}${p.nb ? ` · ${p.nb} n. b.` : ''}`)}</title></circle>
         ${wertIndizes.has(i) ? `<text class="lb-chart-value" x="${(p.x+(i===0?8:i===punkte.length-1?-8:0)).toFixed(1)}" y="${(p.y < T+16 ? p.y + 19 : p.y - 10).toFixed(1)}" text-anchor="${i===0?'start':i===punkte.length-1?'end':'middle'}">${esc(fmtProzent(p.wert))}</text>` : ''}`).join('');
       const nbGesamt = trend.reduce((s,t) => s + t.nb, 0);
@@ -5449,7 +5483,7 @@
         const dates = trendDatumsAchse(punkte, H-B, H-22, T, L, W-R);
         const werte = punkte.length <= 8 ? new Set(punkte.map((_,i)=>i))
           : new Set([0,punkte.length-1,punkte.reduce((best,p,i,a)=>p[modus]>a[best][modus]?i:best,0)]);
-        const kreise = punkte.map((p,i) => `<circle class="lb-chart-point" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="4">
+        const kreise = punkte.map((p,i) => `<circle class="lb-chart-hit" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="8" aria-hidden="true"><title>${fmtDate(p.datum)}: ${fmtProzessMin(p[modus])} ${statistik} · ${p.n} TEs auswertbar · ${p.fehlend} fehlend · ${p.ungueltig} ungültig</title></circle><circle class="lb-chart-point" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="3">
             <title>${fmtDate(p.datum)}: ${fmtProzessMin(p[modus])} ${statistik} · ${p.n} TEs auswertbar · ${p.fehlend} fehlend · ${p.ungueltig} ungültig</title></circle>
             ${werte.has(i) ? `<text class="lb-chart-value" x="${(p.x+(i===0?8:i===punkte.length-1?-8:0)).toFixed(1)}" y="${(p.y<T+16?p.y+19:p.y-10).toFixed(1)}" text-anchor="${i===0?'start':i===punkte.length-1?'end':'middle'}">${fmt(p[modus])}</text>` : ''}`).join('');
         const fehlend = daten.reduce((sum,d)=>sum+d.fehlend,0), ungueltig = daten.reduce((sum,d)=>sum+d.ungueltig,0);
