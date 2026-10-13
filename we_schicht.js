@@ -1,6 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
 //  SAP Custom Widget – Wareneingang Analyse (WE-Analyse)
-//  JavaScript-Arbeitsstand 2.1.62 – Tagesinfos, unterscheidbare Marker und größere Trefferflächen
+//  JavaScript-Arbeitsstand 2.1.73 – Einheitliche Abstände vor Abschnittsüberschriften
 //
 //  Umbau des Live-Trackers zur nachträglichen Auswertung.
 //
@@ -1173,7 +1173,7 @@
   //    gestern      – der komplette Vortag
   //    dieseWoche   – Montag dieser Woche bis einschließlich heute
   //    letzteWoche  – die abgeschlossene Vorwoche (Mo bis So)
-  //    standard     – Montag der Vorwoche bis einschließlich gestern
+  //    standard     – Montag der Vorwoche bis letzten BW-Werktag (04-Uhr-Annahme)
   //                   (Voreinstellung des Zeitraum-Sliders)
 
   const TAG_MS = 86400000;
@@ -1193,16 +1193,37 @@
 
   const tagePlus = (d, n) => new Date(tagStart(d).getTime() + n * TAG_MS);
 
+  // Vorbelegung, keine bestätigte BW-Ladehistorie. Uhrzeit als bestehende Wanduhr.
+  function letzterBwWerktag(zeit=jetztWanduhr()) {
+    let datum=tagePlus(zeit,zeit.getUTCHours()<4?-2:-1);
+    const istFeiertag=d=>{
+      const jahr=d.getUTCFullYear(),key=d.toISOString().slice(0,10);
+      const kalender=nettoFeiertage(jahr);
+      if(kalender)return kalender.has(key);
+      // Vorbelegung auch außerhalb des begrenzten Netto-Kalenders korrekt halten.
+      const mo=d.getUTCMonth()+1,tag=d.getUTCDate();
+      if([[1,1],[5,1],[10,3],[11,1],[12,25],[12,26]].some(([m,t])=>m===mo&&t===tag))return true;
+      const a=jahr%19,b=Math.floor(jahr/100),c=jahr%100,e=Math.floor(b/4),f=b%4,
+        g=Math.floor((b+8)/25),h=Math.floor((b-g+1)/3),i=(19*a+b-e-h+15)%30,
+        j=Math.floor(c/4),k=c%4,l=(32+2*f+2*j-i-k)%7,m=Math.floor((a+11*i+22*l)/451),
+        ostern=Date.UTC(jahr,Math.floor((i+l-7*m+114)/31)-1,(i+l-7*m+114)%31+1);
+      return [-2,1,39,50,60].some(offset=>datumSchluessel(new Date(ostern+offset*TAG_MS))===key);
+    };
+    while(datum.getUTCDay()===0||datum.getUTCDay()===6||istFeiertag(datum))datum=tagePlus(datum,-1);
+    return datum;
+  }
+
   // Liefert den Bereich zu einem vordefinierten Zeitfilter.
   function presetBereich(id) {
-    const heute   = heuteTag();
+    const zeit=jetztWanduhr();
+    const heute   = tagStart(zeit);
     const moDiese = montagVon(heute);
     switch (id) {
       case 'gestern':     return { von: tagePlus(heute, -1), bis: heute };
       case 'dieseWoche':  return { von: moDiese,             bis: tagePlus(heute, 1) };
       case 'letzteWoche': return { von: tagePlus(moDiese, -7), bis: moDiese };
       case 'standard':
-      default:            return { von: tagePlus(moDiese, -7), bis: heute };
+      default:            return { von: tagePlus(moDiese, -7), bis: tagePlus(letzterBwWerktag(zeit),1) };
     }
   }
 
@@ -1237,7 +1258,7 @@
     if (p) return PRESET_NAMEN[p];
     const std = presetBereich('standard');
     if (std.von.getTime() === b.von.getTime() && std.bis.getTime() === b.bis.getTime()) {
-      return 'Letzte Woche bis gestern';
+      return 'Vorwoche bis letzter Werktag';
     }
     return 'Individueller Zeitraum';
   }
@@ -1948,6 +1969,37 @@
         transition:    background 0.15s, color 0.15s;
       }
       .theme-btn:hover { background: var(--c-bg4); color: var(--c-text); }
+
+      .hilfe-btn { display:inline-flex; align-items:center; gap:6px; padding:6px 10px; color:var(--c-text); background:var(--c-bg3); border:1px solid var(--c-border2); border-radius:6px; font-size:12px; flex-shrink:0; }
+      .hilfe-btn:focus-visible,.hilfe-dialog button:focus-visible,.hilfe-dialog summary:focus-visible { outline:2px solid var(--c-red-light); outline-offset:3px; }
+      .hilfe-dialog { width:min(940px,calc(100vw - 24px)); max-width:calc(100vw - 24px); height:min(820px,86vh); max-height:calc(100vh - 24px); margin:auto; padding:0; border:1px solid var(--c-border2); border-radius:14px; background:var(--c-bg); color:var(--c-text); box-shadow:0 18px 70px rgba(0,0,0,.45); overflow:hidden; }
+      .hilfe-dialog[open] { display:flex; flex-direction:column; }
+      .hilfe-dialog::backdrop { background:rgba(0,0,0,.62); }
+      .hilfe-kopf { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:16px 20px; background:var(--c-bg2); border-bottom:1px solid var(--c-border2); flex-shrink:0; }
+      .hilfe-kopf h2 { font-size:22px; margin:3px 0 0; line-height:1.2; }
+      .hilfe-kicker { color:var(--c-text2); font-size:11px; letter-spacing:.07em; text-transform:uppercase; }
+      .hilfe-schliessen { display:inline-flex; align-items:center; gap:8px; padding:9px 12px; background:var(--c-bg3); color:var(--c-text); border:1px solid var(--c-border2); border-radius:7px; flex-shrink:0; }
+      .hilfe-inhalt { padding:18px 22px 30px; overflow:auto; overscroll-behavior:contain; min-height:0; line-height:1.65; font-size:14px; }
+      .hilfe-einstieg { margin:0 0 14px; color:var(--c-text2); font-size:15px; }
+      .hilfe-nav { display:flex; flex-wrap:wrap; gap:8px; margin:12px 0; }
+      .hilfe-nav button { padding:7px 10px; border:1px solid var(--c-border2); border-radius:7px; background:var(--c-bg2); color:var(--c-text); font-size:12px; }
+      .hilfe-kapitel { margin-top:22px; padding-top:14px; border-top:1px solid var(--c-border2); scroll-margin-top:14px; }
+      .hilfe-kapitel:focus { outline:2px solid var(--c-red-light); outline-offset:3px; }
+      .hilfe-kapitel h3 { margin:0 0 14px; font-size:18px; line-height:1.4; }
+      .hilfe-kapitel h4 { margin:16px 0 6px; font-size:15px; }
+      .hilfe-kapitel p { margin:8px 0 12px; }
+      .hilfe-kapitel li { margin-bottom:8px; }
+      .hilfe-kapitel ol,.hilfe-kapitel ul { padding-left:23px; }
+      .hilfe-kapitel figure { margin:10px 0 16px; }
+      .hilfe-bild-scroll { max-width:100%; overflow-x:auto; overscroll-behavior-x:contain; }
+      .hilfe-bild-scroll:focus-visible { outline:2px solid var(--c-red-light); outline-offset:3px; }
+      .hilfe-bild { display:block; width:100%; height:auto; color:var(--c-text); }
+      @media (max-width:520px) { .hilfe-bild { width:900px; max-width:none; } }
+      .hilfe-kapitel figcaption,.hilfe-bildhinweis { font-size:12px; line-height:1.5; color:var(--c-text2); margin:8px 0; }
+      .hilfe-hinweis { padding:12px 16px; border-left:3px solid var(--c-red-light); background:var(--c-bg2); border-radius:0 8px 8px 0; margin:16px 0; }
+      .hilfe-hinweis h4 { margin:0 0 7px; }
+      .hilfe-hinweis p:last-child { margin-bottom:0; }
+      @media (max-width:520px) { .hilfe-kopf { padding:12px; gap:8px; } .hilfe-kopf h2 { font-size:18px; } .hilfe-inhalt { padding:14px 14px 22px; } .hilfe-schliessen { padding:8px; font-size:12px; } }
 
       /* ── Navigationszeile ── */
       .navbar {
@@ -2878,8 +2930,8 @@
         background:    var(--c-bg2);
         border:        1px solid var(--c-border);
         border-radius: var(--r-lg);
-        overflow-x:    auto;
-        overflow-y:    visible;
+        overflow:      auto;
+        max-height:    560px;
       }
 
       .te-tabelle {
@@ -3093,12 +3145,13 @@
       /* ── Zwei-Spalten-Layout für Metadaten ── */
       .d-cols {
         display:               grid;
-        grid-template-columns: 1fr 1fr;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
         gap:                   16px;
         margin-bottom:         22px;
       }
 
-      @media (max-width: 600px) { .d-cols { grid-template-columns: 1fr; } }
+      .d-cols > .detail-section { container-type:inline-size; min-width:0; }
+      @container (max-width:600px) { .d-cols { grid-template-columns:minmax(0, 1fr); } }
 
       /* ══ Detailansicht (Etappe 3) ══ */
       /* Alle Detailinhalte markierbar & kopierbar (STRG+C) */
@@ -3124,7 +3177,8 @@
       .detail-head.s-ankunft::before         { background: var(--c-yellow); }
       .detail-head.s-erwartet::before        { background: var(--c-text3); }
 
-      .dh-top { display: flex; align-items: center; gap: 12px; }
+      .dh-top { display: flex; flex-wrap:wrap; align-items: center; gap: 12px; }
+      .dh-top > div { min-width:0; overflow-wrap:anywhere; }
       .dh-te {
         font-family:    var(--font-mono);
         font-size:      22px;
@@ -3162,13 +3216,14 @@
 
       .dh-facts {
         display: grid;
-        grid-template-columns: repeat(4, 1fr);
+        grid-template-columns: repeat(4, minmax(0, 1fr));
         gap: 10px 18px;
         margin-top: 15px;
         padding-top: 14px;
         border-top: 1px solid var(--c-border);
       }
-      @media (max-width: 720px) { .dh-facts { grid-template-columns: repeat(2, 1fr); } }
+      @container (max-width:720px) { .dh-facts { grid-template-columns:repeat(2, minmax(0, 1fr)); } }
+      .dh-fact-v, .detail-row-v { min-width:0; overflow-wrap:anywhere; }
       .dh-fact { display: flex; flex-direction: column; gap: 2px; }
       .dh-fact-l { font-size: 9px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--c-text3); }
       .dh-fact-v { font-size: 13px; color: var(--c-text); font-family: var(--font-mono); }
@@ -3205,6 +3260,10 @@
       .vgl-row.leer { opacity: 0.4; }
       .vgl-label { color: var(--c-text); font-size: 12px; }
       .vgl-zeit  { font-family: var(--font-mono); font-size: 10px; color: var(--c-text2); white-space: nowrap; }
+      @container (max-width:520px) {
+        .vgl-row { grid-template-columns:minmax(0, 1fr) 64px auto; }
+        .vgl-zeit { grid-column:1 / -1; grid-row:2; white-space:normal; }
+      }
       .vgl-dauer {
         font-family: var(--font-mono); font-size: 12px; font-weight: 600;
         text-align: right; min-width: 62px;
@@ -3213,7 +3272,7 @@
       .vgl-dauer.bad { color: var(--c-red-light); }
 
       /* Positionstabelle */
-      .pt-scroll { overflow-x: auto; border: 1px solid var(--c-border); border-radius: var(--r-md); }
+      .pt-scroll { overflow:auto; max-height:560px; border: 1px solid var(--c-border); border-radius: var(--r-md); }
       .pt-table { border-collapse: separate; border-spacing: 0; width: 100%; font-size: 11px; white-space: nowrap; }
       .pt-table th {
         position: sticky; top: 0; z-index: 2;
@@ -3357,6 +3416,7 @@
         padding:     1px 4px;
         border-radius: 3px;
       }
+      .zs-soll-time-offset { bottom:-29px; }
       /* Ist-Verbindungslinie */
       .zs-ist-linie {
         position:      absolute;
@@ -3550,6 +3610,7 @@
       .pz-matrix tbody tr:last-child th, .pz-matrix tbody tr:last-child td { border-bottom:0; }
       .pz-matrix .pz-matrix-total { border-left:2px solid var(--c-border2); background:var(--c-bg3); }
       .pz-sort { width:100%; color:inherit; padding:8px 2px; font:600 11px var(--font); line-height:1.5; min-height:48px; }
+      .pz-matrix thead th:first-child .pz-sort { text-align:left; }
       .pz-sort span { color:var(--c-text3); font-size:10px; margin-left:4px; }
       .pz-cell { display:block; width:100%; min-height:90px; border:1px solid transparent; border-radius:8px; padding:12px 9px; color:var(--c-text); text-align:center; }
       .pz-cell strong { display:block; font:600 15px var(--font-mono); }
@@ -3594,7 +3655,7 @@
       .tz-controls label { color:var(--c-text2); font-size:11px; }
       .tz-controls select { min-width:150px; padding:8px 10px; color:var(--c-text); background:var(--c-bg); border:1px solid var(--c-border2); border-radius:7px; font:11px var(--font); }
       .tz-scroll { overflow:auto; margin-top:18px; border:1px solid var(--c-border); border-radius:8px; background:var(--c-bg); }
-      .tz-canvas { min-width:100%; padding-bottom:8px; }
+      .tz-canvas { min-width:100%; padding-bottom:8px; padding-right:52px; }
       .tz-axis, .tz-row { display:grid; grid-template-columns:250px minmax(0,1fr); }
       .tz-axis { position:sticky; top:0; z-index:4; min-height:56px; background:var(--c-bg3); border-bottom:1px solid var(--c-border2); }
       .tz-axis-label { position:sticky; left:0; z-index:5; display:flex; align-items:center; padding:10px 12px; color:var(--c-text2); background:var(--c-bg3); border-right:1px solid var(--c-border2); font:10px var(--font-mono); }
@@ -3605,7 +3666,8 @@
       .tz-tick.tz-day-change { width:2px; background:var(--c-text3); }
       .tz-tick span b, .tz-tick span em { display:block; font-style:normal; line-height:1.35; }
       .tz-tick span b { color:var(--c-text); font-weight:600; }
-      .tz-tick.tz-last span { left:-5px; transform:translateX(-100%); }
+      .tz-tick.tz-last { transform:translateX(-100%); }
+      .tz-tick.tz-last span { left:5px; transform:none; }
       .tz-shift-axis { position:absolute; top:0; bottom:0; z-index:2; width:3px; background:var(--c-red-light); box-shadow:0 0 0 1px var(--c-red-dim); }
       .tz-shift-axis span { position:absolute; left:7px; bottom:5px; padding:3px 6px; white-space:nowrap; color:var(--c-text); background:var(--c-red-dim); border:1px solid var(--c-red-border); border-radius:4px; font:600 9px var(--font); }
       .tz-row { width:100%; min-height:88px; padding:0; color:var(--c-text); text-align:left; border-bottom:1px solid var(--c-border); }
@@ -3643,6 +3705,7 @@
       .analyse-tab[aria-selected="true"] { color:var(--c-text); background:var(--c-red-dim); border-bottom-color:var(--c-red-light); }
       .analyse-tab:focus-visible, .analyse-panel:focus-visible { outline:2px solid var(--c-red-light); outline-offset:2px; }
       .analyse-panel[hidden] { display:none !important; }
+      .analyse-panel > :not(:empty) ~ .u-abschnitt { margin-top:24px; }
       .analyse-period-compare { margin:0 0 20px; }
       .analyse-period-compare .kpi-cards { margin-top:16px; grid-template-columns:minmax(240px,420px); }
       @container (max-width:520px) { .analyse-tab { flex:1; padding:12px 8px; } }
@@ -3729,6 +3792,15 @@
       .lb-mengen-table td:first-child { min-width:200px; }
       .lb-mengen-table td:nth-child(2) { min-width:140px; }
       .lb-mengen-table .lb-num { text-align:right; font-family:var(--font-mono); }
+      .fb-summary-table > thead > tr > th:nth-child(n+3):nth-child(-n+6),
+      .fb-summary-table > tbody > tr > .lb-num:nth-child(n+3):nth-child(-n+6) { text-align:center; }
+      .fb-summary-table > thead > tr > th:nth-child(n+7) { text-align:right; }
+      .fb-summary-table > thead > tr > th > button { display:block; width:100%; text-align:inherit; }
+      .lm-summary-table > thead > tr > th:nth-child(n+3):nth-child(-n+4),
+      .lm-summary-table > tbody > tr > .lb-num:nth-child(n+3):nth-child(-n+4) { text-align:center; }
+      .lm-summary-table > thead > tr > th:nth-child(5) { text-align:right; }
+      .lm-summary-table > thead > tr > th > button { display:block; width:100%; text-align:inherit; }
+
       .lb-mengen-table .lb-diff { color:var(--c-red-light); font-weight:600; }
       .lb-mengen-table tbody tr:nth-child(even) { background:var(--c-bg2); }
       .lb-mengen-table tbody tr:hover { background:var(--c-bg3); }
@@ -3744,6 +3816,7 @@
       /* Ein vertikaler Scrollbereich; Detailtabellen scrollen nur horizontal. */
       .lb-inline-detail-row .lb-scroll { max-height:none; }
       .lb-inline-detail-row .lb-scroll > .lb-table > thead > tr > th { position:static; }
+      .lb-inline-detail-row .lb-scroll > .lb-table > thead > tr > th:first-child { position:sticky; top:auto; left:0; }
       .fb-detail-head > div { min-width:0; overflow-wrap:anywhere; }
       .fb-detail { margin:4px 0 18px; padding:18px; border:1px solid var(--c-red-border); border-radius:var(--r-md); background:var(--c-bg2); box-shadow:var(--shadow-sm); }
       .fb-detail-head { display:flex; align-items:flex-start; justify-content:space-between; gap:14px; margin-bottom:12px; }
@@ -3765,6 +3838,7 @@
       .lb-analysis-table th:nth-child(4) { min-width:170px; }
       .lb-analysis-table td { min-width:0; padding:11px 10px; white-space:nowrap; }
       .lb-analysis-table .lb-num { text-align:right; font-family:var(--font-mono); }
+      .lb-analysis-table th.lb-num { text-align:right; }
       .lb-analysis-table .lb-diff { color:var(--c-red-light); font-weight:700; }
       .lb-analysis-table td:last-child { color:var(--c-text); font:inherit; }
       .lb-trend { margin-top:18px; padding:16px; border:1px solid var(--c-border2); border-radius:9px; background:var(--c-bg); }
@@ -3842,6 +3916,7 @@
           <span class="refresh-icon" id="refresh-icon">⟳</span>
           <span>Aktualisieren</span>
         </button>
+        <button type="button" class="hilfe-btn" id="hilfe-btn" aria-haspopup="dialog" aria-controls="hilfe-dialog" aria-expanded="false" title="Bedienungsanleitung und Datenhinweise öffnen"><span aria-hidden="true">ⓘ</span> Hilfe</button>
         <button class="theme-btn" id="theme-btn" title="Theme wechseln">◑</button>
       </div>
 
@@ -3856,7 +3931,7 @@
 
         <div class="zr-slider-block">
           <div class="zr-slider-kopf">
-            <span>Individueller Zeitraum</span>
+            <span title="Standard-Vorbelegung: letzter Werktag vor heute; vor 04:00 Uhr noch einen Kalendertag zurück. Samstag, Sonntag und NRW-Feiertage werden übersprungen. BW-Laden gegen 04:00 Uhr ist eine Annahme, kein bestätigter Datenstand. Eigene Zeiträume bleiben frei wählbar.">Individueller Zeitraum</span>
             <span class="zr-slider-werte" id="zr-werte">–</span>
           </div>
           <div class="zr-slider" id="zr-slider">
@@ -3873,7 +3948,7 @@
           </div>
         </div>
 
-        <button class="zr-reset" id="zr-reset" title="Auf letzte Woche bis gestern zurücksetzen">Standard</button>
+        <button class="zr-reset" id="zr-reset" title="Auf Vorwoche bis letzten BW-Werktag zurücksetzen">Standard</button>
       </div>
 
       <!-- Body -->
@@ -4086,6 +4161,49 @@
 
       </div>
     </div>
+
+    <dialog id="hilfe-dialog" class="hilfe-dialog" aria-labelledby="hilfe-titel" aria-describedby="hilfe-einstieg">
+      <div class="hilfe-kopf"><div><span class="hilfe-kicker">Bedienungsanleitung</span><h2 id="hilfe-titel">WE-Analyse nutzen</h2></div><button type="button" id="hilfe-schliessen" class="hilfe-schliessen" autofocus>Schließen <span aria-hidden="true">×</span></button></div>
+      <div class="hilfe-inhalt" id="hilfe-inhalt" tabindex="0">
+        <p id="hilfe-einstieg" class="hilfe-einstieg">Vom Überblick zur einzelnen Transporteinheit: Zeitraum wählen, Kennzahlen ansehen und Auffälligkeiten in den Details nachvollziehen. Die WE-Analyse wertet historische Daten aus.</p>
+        <nav class="hilfe-nav" aria-label="Kapitel der Bedienungsanleitung"><button type="button" data-hilfe-ziel="hilfe-start">Start &amp; Filter</button><button type="button" data-hilfe-ziel="hilfe-te">TE-Details</button><button type="button" data-hilfe-ziel="hilfe-verlauf">Diagramme &amp; Mausinfos</button><button type="button" data-hilfe-ziel="hilfe-partner">Partneranalysen</button><button type="button" data-hilfe-ziel="hilfe-daten">Daten verstehen</button></nav>
+        <p class="hilfe-bildhinweis">Die Bilder sind schematische Bedienbeispiele ohne Echtdaten. In schmalen Ansichten lassen sie sich horizontal verschieben; per Tastatur das Bild fokussieren und die Pfeiltasten nutzen.</p>
+        <section class="hilfe-kapitel" id="hilfe-start" tabindex="-1"><h3>1 · Zeitraum, Kennzahlen und Filter</h3>
+          <figure><div class="hilfe-bild-scroll" tabindex="0" role="region" aria-label="Bedienbild; in schmaler Ansicht horizontal scrollbar"><svg class="hilfe-bild" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 190" role="img" aria-label="Zeitraum oben wählen, Kennzahlen lesen und darunter einen Reiter öffnen."><rect x="1" y="1" width="898" height="188" rx="14" fill="var(--c-bg2)" stroke="var(--c-border2)"/><g font-family="Arial, sans-serif" font-size="16" fill="currentColor"><rect x="20" y="18" width="210" height="42" rx="7" fill="var(--c-bg3)" stroke="var(--c-red-light)"/><text x="32" y="46">1 · Zeitraum wählen</text><rect x="250" y="18" width="305" height="42" rx="7" fill="var(--c-bg3)" stroke="var(--c-border2)"/><text x="262" y="46">Von ●────────● Bis</text><rect x="575" y="18" width="305" height="42" rx="7" fill="var(--c-bg3)" stroke="var(--c-border2)"/><text x="587" y="46">Standard / Gestern / Wochen</text><rect x="20" y="84" width="138" height="44" rx="7" fill="var(--c-bg3)" stroke="var(--c-border2)"/><text x="32" y="112">OTIF · TE</text><rect x="166" y="84" width="138" height="44" rx="7" fill="var(--c-bg3)" stroke="var(--c-border2)"/><text x="178" y="112">OTIF · Anl.</text><rect x="312" y="84" width="138" height="44" rx="7" fill="var(--c-bg3)" stroke="var(--c-border2)"/><text x="324" y="112">Menge · TE</text><rect x="458" y="84" width="138" height="44" rx="7" fill="var(--c-bg3)" stroke="var(--c-border2)"/><text x="470" y="112">Menge · Anl.</text><rect x="604" y="84" width="138" height="44" rx="7" fill="var(--c-bg3)" stroke="var(--c-border2)"/><text x="616" y="112">Pünktlichkeit</text><rect x="750" y="84" width="138" height="44" rx="7" fill="var(--c-bg3)" stroke="var(--c-border2)"/><text x="762" y="112">Δ Menge</text><text x="22" y="158">2 · Kennzahlen vergleichen</text><text x="465" y="158">3 · Passenden Reiter darunter öffnen</text></g></svg></div><figcaption>Oben beginnt die Auswahl. Die sechs Kennzahlen stehen über den Reitern.</figcaption></figure>
+          <ol><li><strong>Zeitraum:</strong> „Letzte Woche“, „Diese Woche“ oder „Gestern“ anklicken. Im individuellen Zeitraum den linken Punkt für „Von“ und den rechten Punkt für „Bis“ verschieben. Der ausgewählte Zeitraum gilt für die gesamte Auswertung.</li><li><strong>Worauf beruht der Zeitraum?</strong> Für die Zuordnung einer TE ist vorrangig ihr <strong>geplanter Start</strong> maßgeblich. Fehlt dieser, wird die tatsächliche Ankunft am Kontrollpunkt verwendet; fehlt auch sie, die vollständige Fertigstellung (Einlagerung). Ohne diese Zeitangaben kann die TE keinem Zeitraum zugeordnet werden. „Von“ und „Bis“ schließen die ausgewählten Kalendertage vollständig ein.<p><strong>Beispiel:</strong> Eine für den 09.10. geplante TE gehört zum 09.10., auch wenn sie erst am 12.10. fertiggestellt und später nach BW übertragen wird. Der Tag der Fertigstellung oder der BW-Übertragung ersetzt einen vorhandenen geplanten Start nicht.</p><p>Bei den Anlieferungskennzahlen wählt der Zeitraum die Anlieferungen über die zugeordneten TEs aus. Für ihre Bewertung werden anschließend alle geladenen beteiligten TEs berücksichtigt.</p></li><li><strong>Standard:</strong> stellt die automatische Vorbelegung wieder her. Sie reicht vom Montag der Vorwoche bis zum letzten Wochentag (Montag bis Freitag) vor heute. Vor 04:00 Uhr wird zunächst noch ein Kalendertag zurückgegangen; Samstag, Sonntag und NRW-Feiertage werden übersprungen. Eigene Zeiträume bleiben frei wählbar. Die 04:00-Uhr-Grenze richtet sich nach der lokalen Uhrzeit des Browsers. Diese Vorbelegung nimmt einen BW-Lauf gegen 04:00 Uhr an und bestätigt keinen tatsächlichen Ladeabschluss. In einer offen gebliebenen Story bleibt die gewählte Standard-Vorbelegung erhalten; „Standard“ wählt sie anhand der aktuellen Uhrzeit neu.</li><li><strong>Sechs Kennzahlen:</strong> OTIF TE, OTIF Anlieferungen, Mengentreue TE, Mengentreue Anlieferungen, Pünktlichkeit und Abweichende Menge. TE und Anlieferung sind unterschiedliche Bewertungsebenen. Der Vorperiodenvergleich steht direkt in der jeweiligen Karte.</li><li><strong>Karten mit kleinem Raster-Symbol:</strong> Maus darüberhalten oder die Karte per Tastatur fokussieren. Die zusätzliche Aufschlüsselung nach Ladestelle zeigt deren Werte und Fallzahlen.</li><li><strong>Ansicht anpassen:</strong> anklicken und „Anlieferungsdetails“ oder „TEs nach Ladestelle“ einblenden. Aufklappbare Überschriften und „Berechnung und Darstellung“ öffnen zusätzliche Tabellen oder Erklärungen.</li></ol>
+          <div class="hilfe-hinweis"><h4>Was bedeuten die Farben der Kennzahlen?</h4><p><strong>OTIF TE, OTIF Anlieferungen, Mengentreue TE, Mengentreue Anlieferungen und Pünktlichkeit:</strong> Die Farbe des Wertes und des Quotenbalkens richtet sich nach der Erfüllungsquote. Dieselben Grenzen gelten für die Quoten in der zusätzlichen Ladestellen-Aufschlüsselung.</p><ul><li><strong>Grün:</strong> mindestens 95 %.</li><li><strong>Gelb:</strong> mindestens 85 %, aber weniger als 95 %.</li><li><strong>Rot:</strong> weniger als 85 %.</li><li><strong>Grau / „–“:</strong> kein bewertbarer Quotenwert vorhanden; das bedeutet nicht 0 %.</li></ul><p>Die Farbe wird aus der ungerundeten Quote bestimmt. Die angezeigte Quote ist auf eine Nachkommastelle gerundet: Ein Wert knapp unter 95 % kann deshalb als „95,0 %“ erscheinen und noch gelb sein. Die Farbgrenzen sind feste Darstellungsregeln des Widgets und ändern keine Berechnung.</p><p><strong>Abweichende Menge:</strong> Grün bedeutet, dass keine der mengenmäßig bewertbaren TEs eine Abweichung hat. Gelb bedeutet, dass mindestens eine dieser TEs eine Abweichung aufweist – unabhängig von deren Höhe. Grau / „–“ steht für fehlende bewertbare Mengendaten. Diese Karte verwendet keine Prozent-Ampel und keine rote Größenstufe. Über- und Unterlieferungen werden als Positionsbeträge gezählt; sie gleichen sich nicht aus. Der zusätzlich angezeigte Nettowert ist davon zu unterscheiden.</p><h4>Farbe und Pfeile beim Vorperiodenvergleich</h4><p>Die kleine Vergleichsanzeige bezieht sich auf den unmittelbar vorhergehenden Zeitraum gleicher Länge in Kalendertagen. Beispiel: Mo 05.10. bis Fr 09.10.2026 wird mit Mi 30.09. bis So 04.10.2026 verglichen. Die Vorperiode kann also Wochenenden und Feiertage enthalten; sie wählt nicht automatisch dieselben Wochentage der Vorwoche. Sie bewertet die Veränderung und kann daher eine andere Farbe als die Kennzahl selbst haben.</p><ul><li><strong>Grün:</strong> Verbesserung gegenüber der Vorperiode – höhere OTIF-, Mengentreue- oder Pünktlichkeitsquote, aber niedrigere abweichende Menge.</li><li><strong>Rot:</strong> Verschlechterung – niedrigere Quote oder höhere abweichende Menge.</li><li><strong>Grau mit „±“:</strong> keine Veränderung nach Rundung der Differenz in der jeweiligen Anzeigeeinheit: Quoten auf 0,1 Prozentpunkte, Mengen auf 0,01 Mengeneinheiten und Durchlaufzeit auf ganze Minuten.</li><li><strong>Grau mit „–“:</strong> kein darstellbarer Vergleich, beispielsweise weil ein Wert fehlt oder die Mengenwerte nicht vergleichbar sind.</li></ul><p><strong>▲</strong> bedeutet, dass der Zahlenwert gestiegen ist; <strong>▼</strong>, dass er gesunken ist. Der Pfeil allein sagt nicht, ob die Entwicklung besser oder schlechter ist. Der Vergleich wird aus den ungerundeten Ausgangswerten berechnet: 95,04 % gegenüber 94,96 % erscheinen beide als „95,0 %“, die Differenz wird aber als grüne „▲ 0,1 pp“ angezeigt. Bei Quoten bezeichnet „pp“ die Änderung in Prozentpunkten: von 90 % auf 95 % = +5 pp. Mengen werden in ihrer jeweiligen Einheit verglichen; verschiedene Einheiten werden nicht miteinander verrechnet. Linienfarben und Ladestellenfarben dienen dagegen der Unterscheidung der Datenreihen bzw. Kategorien; ihre Bedeutung steht in der jeweiligen Legende.</p></div>
+          <div class="hilfe-hinweis"><strong>Welche Filter wirken wo?</strong><p>Der Zeitraum gilt für die Auswertung. Suche, Ladestelle und Schnellfilter in der TE-Übersicht begrenzen die TE-Liste; sie ändern die globalen Kennzahlen und die anderen Reiter nicht. Suchfelder in den Partnerreitern filtern deren jeweilige Tabelle. Übergeordnete Story-/BW-Filter können bereits die gelieferten Daten einschränken.</p></div>
+          <p>Zum Sortieren Spaltenüberschriften mit Sortierpfeil anklicken; ein weiterer Klick wechselt die Richtung. ◑ im Kopfbereich wechselt Hell/Dunkel. „Aktualisieren“ wertet ausschließlich die bereits an das Widget gelieferten Daten neu aus. Neue Daten erhält das Widget erst durch die Aktualisierung der Story bzw. Datenquelle in SAC. Der Button startet keine EWM-/BW-Übertragung.</p>
+        </section>
+        <section class="hilfe-kapitel" id="hilfe-te" tabindex="-1"><h3>2 · Eine TE öffnen und zurückgehen</h3>
+          <ol><li>Den Reiter <strong>TE-Übersicht</strong> öffnen. Über Suche und Schnellfilter die gesuchte TE eingrenzen, beispielsweise „OTIF je TE verletzt“, „Unpünktlich“ oder „Mengenabweichung“.</li><li>Die <strong>TE-Zeile oder „Detail →“</strong> anklicken. Per Tastatur die Zeile fokussieren und Enter oder Leertaste drücken.</li><li>In der TE-Detailsicht Zeitstempel, Zeitstrahl, Anlieferungen und Produkt-/Positionsdaten prüfen. Maus auf Zeitstrahlabschnitte oder gekürzte Texte halten, um vorhandene Zusatzinformationen anzuzeigen.</li><li>Mit <strong>„← Zurück zur Übersicht“</strong> zur vorherigen Ansicht zurückgehen. Die Hilfe schließt mit „Schließen“ oder Escape und lässt deine Auswahl bestehen.</li></ol>
+          <p>Auch im TE-Zeitstrahl unter <strong>Durchlaufzeiten</strong> öffnet ein Klick auf eine TE-Zeile deren Details. Bei fehlenden Daten können einzelne Phasen oder Bewertungen nicht angezeigt werden; „nicht bewertbar“ ist kein Wert von 0.</p>
+        </section>
+        <section class="hilfe-kapitel" id="hilfe-verlauf" tabindex="-1"><h3>3 · Diagramme lesen und Mausinformationen nutzen</h3>
+          <figure><div class="hilfe-bild-scroll" tabindex="0" role="region" aria-label="Bedienbild; in schmaler Ansicht horizontal scrollbar"><svg class="hilfe-bild" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 190" role="img" aria-label="Tagesspalte mit Maus berühren: Tageswerte erscheinen unter dem Diagramm."><rect x="1" y="1" width="898" height="188" rx="14" fill="var(--c-bg2)" stroke="var(--c-border2)"/><g font-family="Arial, sans-serif" font-size="16" fill="currentColor"><line x1="55" y1="145" x2="560" y2="145" stroke="var(--c-text3)"/><rect x="248" y="22" width="105" height="135" fill="var(--c-red-dim)"/><polyline points="55,74 160,112 300,48 430,90 560,58" fill="none" stroke="var(--c-red-light)" stroke-width="3"/><polyline points="55,100 160,82 300,48 430,60 560,102" fill="none" stroke="var(--c-blue)" stroke-width="3"/><circle cx="300" cy="48" r="5" fill="var(--c-bg2)" stroke="var(--c-red-light)" stroke-width="2"/><path d="M320 82 L320 112 L327 106 L335 119 L340 116 L331 103 L342 103 Z" fill="var(--c-text)"/><text x="250" y="178">Tagesdatum</text><rect x="600" y="22" width="275" height="43" rx="7" fill="var(--c-bg3)" stroke="var(--c-red-light)"/><text x="612" y="50">Maus in die Tagesspalte</text><rect x="600" y="80" width="275" height="43" rx="7" fill="var(--c-bg3)" stroke="var(--c-border2)"/><text x="612" y="108">Alle sichtbaren Tageswerte</text><text x="612" y="153">Info unter dem Diagramm</text></g></svg></div><figcaption>Im Kennzahlenverlauf zeigt eine Tagesspalte die Tageswerte aller eingeblendeten Reihen unter dem Diagramm.</figcaption></figure>
+          <h4>Kennzahlenverlauf</h4><p>OTIF, Pünktlichkeit und Mengentreue stehen in eigenen Diagrammen. „TEs gesamt“ und „Nach Ladestelle“ wechseln die TE-Aufteilung. Die Linienschalter mit „An/Aus“ blenden einzelne Reihen ein oder aus. Formen und Farben entsprechen der Legende.</p>
+          <ul><li><strong>Maus oder Antippen:</strong> eine Tagesspalte im Diagramm wählen. Direkt darunter erscheinen Datum, Quote, erfüllt/bewertbar und nicht bewertbar für alle sichtbaren Reihen – auch bei überlagerten Punkten.</li><li><strong>Tastatur:</strong> mit Tab einen Punkt je Reihe erreichen. ←/→ sowie Pos1/Ende wechseln den tatsächlichen Tagespunkt; dessen Information erscheint darunter.</li><li><strong>Tageswerte und Bewertungsumfang:</strong> unter dem Diagramm aufklappen, um die genauen Fallzahlen in einer Tabelle zu sehen.</li></ul>
+          <p>Die durchgehenden Linien verbinden vorhandene Tageswerte auch über Datenlücken. Tage ohne bewertbaren Wert erhalten keinen künstlichen Datenpunkt. Tagesquoten und Zeitraumquoten können sich unterscheiden; die Zeitraumquote wird aus den gesamten Fallzahlen berechnet.</p>
+          <h4>Durchlaufzeiten</h4><p>„Gesamt“ und „Operativ“ wählen den betrachteten Ablauf. „Durchschnitt“ und „Median“ ändern die Auswertung der Prozesszeiten. Eine Prozessphase anklicken, um ihre Details anzusehen. Eine Zelle im Transportmittelvergleich anklicken, um die zugehörigen TEs darunter zu prüfen. Im TE-Zeitstrahl einen Tag auswählen und eine TE-Zeile für die Einzelansicht anklicken.</p>
+          <div class="hilfe-hinweis"><h4>Durchschnitt und Median verstehen</h4><p><strong>Durchschnitt:</strong> Die gültigen Durchlaufzeiten werden addiert und durch die Anzahl der ausgewerteten TEs geteilt. Einzelne besonders lange Vorgänge können den Durchschnitt deutlich erhöhen.</p><p><strong>Median:</strong> Die gültigen Zeiten werden der Größe nach sortiert. Bei einer ungeraden Anzahl ist der Median der mittlere Wert; bei einer geraden Anzahl der Durchschnitt der beiden mittleren Werte. Er wird von einzelnen besonders langen oder kurzen Vorgängen weniger stark beeinflusst.</p><p><strong>Beispiel:</strong> Drei TEs benötigen 30, 40 und 200 Minuten. Der Durchschnitt beträgt (30 + 40 + 200) ÷ 3 = <strong>90 Minuten</strong>. Der Median ist der mittlere Wert: <strong>40 Minuten</strong>. Beide beschreiben denselben Datenbestand aus unterschiedlicher Sicht.</p><h4>Gesamt und Operativ</h4><ul><li><strong>Gesamt:</strong> tatsächliche Ankunft am Kontrollpunkt bis zur vollständigen Fertigstellung (Einlagerung).</li><li><strong>Operativ:</strong> tatsächlicher Entladestart bis zur vollständigen Fertigstellung (Einlagerung).</li></ul><p>Die Zeit zwischen Ankunft und Entladestart gehört damit zur Gesamtdurchlaufzeit. Die gewählte Berechnungsart „Brutto“ oder „Netto-Näherung“ bestimmt, welche Minuten innerhalb des jeweiligen Zeitpaars gezählt werden. Der Statistikwechsel gilt für Verlauf, Prozesszeiten und Transportmittelvergleich; die Karte „Ø Gesamtdurchlaufzeit“ im Vorperiodenvergleich zeigt immer den Durchschnitt von Ankunft bis vollständiger Fertigstellung in der gewählten Berechnungsart, auch bei ausgewähltem „Operativ“.</p><h4>Fallzahlen und überlappende Prozessphasen</h4><p>In Durchschnitt und Median gehen nur gültige Zeitpaare ein: Anfang und Ende müssen vorhanden sein, und das Ende darf nicht vor dem Anfang liegen. Fehlende oder ungültige Zeitpaare werden nicht als 0 Minuten gerechnet. Für die Netto-Näherung muss außerdem der Kalenderbereich passen. Eine echte gültige Dauer von 0 Minuten wird berücksichtigt.</p><p>Die angezeigte Fallzahl nennt die für den jeweiligen Wert ausgewerteten TEs. Unterschiedliche Phasen oder Transportmittel können unterschiedliche Fallzahlen haben; beachte diese beim Vergleich.</p><p>Prozessphasen können sich zeitlich überlappen. Ihre Durchschnittswerte dürfen deshalb nicht einfach zur Gesamtdurchlaufzeit addiert werden. Unterschiedliche Fallzahlen sind ein weiterer Grund, warum eine solche Summe nicht der Gesamtdauer entsprechen muss. Gesamt und Operativ werden direkt aus ihrem jeweiligen Anfangs- und Endzeitstempel berechnet.</p></div>
+          <p><strong>Mausinfos:</strong> bei Verlaufsdiagrammen einen kleinen Punkt oder den Bereich knapp daneben kurz berühren. Der Tooltip zeigt Datum, Wert und vorhandene Fallzahlen. Zeitstrahlabschnitte zeigen beim Darüberhalten ihre tatsächlichen Zeiten bzw. Dauern. Diese Tooltips ändern keine Werte und führen nicht automatisch in eine Detailansicht.</p>
+          <div class="hilfe-hinweis"><strong>Brutto und Netto-Näherung</strong><p>Brutto zählt die tatsächliche Zeitspanne. Die Netto-Näherung berücksichtigt festgelegte Betriebsfenster, Pausen, Wochenenden und NRW-Feiertage. Ein Samstag mit geladenem Ist-Nachweis wird als vollständige Frühschicht angenommen; das gilt standardmäßig auch für Feiertags-Samstage. Diese Näherung ist keine gemessene Arbeits- oder Mitarbeiterzeit. Die Erklärung „Wie wird Netto angenähert?“ enthält die vollständige Regel. TE-Details und Zeitstrahl zeigen weiterhin tatsächliche Zeitstempel und Bruttodauern.</p></div>
+        </section>
+        <section class="hilfe-kapitel" id="hilfe-partner" tabindex="-1"><h3>4 · Bei Lieferant und Frachtführer tiefer einsteigen</h3>
+          <figure><div class="hilfe-bild-scroll" tabindex="0" role="region" aria-label="Bedienbild; in schmaler Ansicht horizontal scrollbar"><svg class="hilfe-bild" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 190" role="img" aria-label="Lieferant oder Frachtführer öffnen, Analyse lesen und bei Bedarf TE in der Übersicht suchen."><rect x="1" y="1" width="898" height="188" rx="14" fill="var(--c-bg2)" stroke="var(--c-border2)"/><g font-family="Arial, sans-serif" font-size="16" fill="currentColor"><rect x="20" y="22" width="260" height="42" rx="7" fill="var(--c-bg3)" stroke="var(--c-red-light)"/><text x="32" y="50">Partnername anklicken</text><text x="290" y="50">→</text><rect x="320" y="22" width="260" height="42" rx="7" fill="var(--c-bg3)" stroke="var(--c-border2)"/><text x="332" y="50">Analyse unter der Tabelle</text><text x="605" y="50">→</text><rect x="640" y="22" width="240" height="42" rx="7" fill="var(--c-bg3)" stroke="var(--c-border2)"/><text x="652" y="50">TE-Nummer übernehmen</text><rect x="20" y="104" width="390" height="43" rx="7" fill="var(--c-bg3)" stroke="var(--c-red-light)"/><text x="32" y="132">TE-Übersicht → Suche → TE-Zeile</text><text x="435" y="131">→</text><rect x="475" y="104" width="405" height="43" rx="7" fill="var(--c-bg3)" stroke="var(--c-border2)"/><text x="487" y="132">TE-Details · Zurück zur Übersicht</text></g></svg></div><figcaption>Partneranalyse aufklappen. Für die vollständige TE-Sicht die TE-Nummer in der TE-Übersicht suchen und deren Zeile öffnen.</figcaption></figure>
+          <h4>Lieferantenbewertung</h4><p>Die Tabelle „Warensender … Mengenabweichungen“ bietet den Überblick nach Lieferant, Transportmittel, Einheit und HWG. In der darunterliegenden Bewertungstabelle <strong>„Lieferantenbewertung · Mengentreue“ den Lieferantennamen mit „Details öffnen“ anklicken</strong>. Die Analyse öffnet direkt unter der Zeile und zeigt den Verlauf sowie TE-, Anlieferungs- und Produktabweichungen. Weitere Detailüberschriften aufklappen, wenn sie angeboten werden. „Alle“/„10 schlechteste“, Suchfeld und Sortierpfeile steuern die angezeigte Partnerliste.</p>
+          <h4>Frachtführer/Spediteur</h4><p>Den <strong>Namen mit „Details öffnen“</strong> anklicken. Die aufgeklappte Pünktlichkeitsanalyse zeigt betroffene TEs, geplanten Start, tatsächliche Ankunft und Abweichung. Den Partner erneut anklicken oder die Schließen-Schaltfläche in seiner Analyse verwenden, um zurück zur Tabelle zu gehen. Die Bewertung der Lieferanten erfolgt nach Mengen, die Bewertung der Frachtführer nach Pünktlichkeit.</p>
+          <p>Für eine vollständige TE-Detailsicht eine TE-Nummer aus der Partneranalyse übernehmen, zur <strong>TE-Übersicht</strong> wechseln, die Nummer suchen und die TE-Zeile öffnen. Wo ausdrücklich „TE-Details öffnen“ angeboten wird, ist der direkte Absprung möglich.</p>
+        </section>
+        <section class="hilfe-kapitel" id="hilfe-daten" tabindex="-1"><h3>5 · Datenbasis und Mengentreue richtig einordnen</h3>
+          <figure><div class="hilfe-bild-scroll" tabindex="0" role="region" aria-label="Bedienbild; in schmaler Ansicht horizontal scrollbar"><svg class="hilfe-bild" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 145" role="img" aria-label="Finale Einlagerung ermöglicht die EWM-BW-Übertragung gegen vier Uhr und die historische Auswertung."><rect x="1" y="1" width="898" height="143" rx="14" fill="var(--c-bg2)" stroke="var(--c-border2)"/><g font-family="Arial, sans-serif" font-size="16" fill="currentColor"><rect x="20" y="27" width="260" height="48" rx="7" fill="var(--c-bg3)" stroke="var(--c-red-light)"/><text x="32" y="55">EWM · final eingelagert</text><text x="290" y="59">→</text><rect x="330" y="27" width="245" height="48" rx="7" fill="var(--c-bg3)" stroke="var(--c-border2)"/><text x="342" y="55">BW · Übertragung ~04:00</text><text x="600" y="59">→</text><rect x="650" y="27" width="225" height="48" rx="7" fill="var(--c-bg3)" stroke="var(--c-border2)"/><text x="662" y="55">Historische Auswertung</text><text x="25" y="115">Noch nicht final abgeschlossene Anlieferungen fehlen im übertragenen Datenbestand.</text></g></svg></div><figcaption>Finale Einlagerung ist die Voraussetzung für die beschriebene EWM-/BW-Bereitstellung.</figcaption></figure>
+          <div class="hilfe-hinweis"><h4>Bereitstellung der Daten aus EWM nach BW</h4><p>Die Bereitstellung der Daten für die Übertragung aus SAP EWM zu SAP BW geschieht dann, wenn alle Anlieferpositionen in EWM final eingelagert sind. Dies ist ein Standardprozess des Systems. Noch nicht abgeschlossene und nicht final eingelagerte Anlieferungen werden standardmäßig nicht übertragen. Die Übertragung findet gegen 4 Uhr morgens statt und deshalb stehen erstmal alle Daten vom Vortag zur Verfügung.</p></div>
+          <p>Die Anzeige enthält damit die im gelieferten Datenbestand vorhandenen, abgeschlossenen Anlieferungen. Noch nicht übertragene Vorgänge sind darin nicht vollständig sichtbar. Ein Datum allein bestätigt keinen erfolgreich abgeschlossenen BW-Lauf.</p>
+          <div class="hilfe-hinweis"><h4>Manuelle Erfassung und spätere Mengenänderungen</h4><p>Anlieferungen werden manuell angelegt. Dabei können Positionsmengen versehentlich falsch erfasst werden und müssen anschließend korrigiert werden. Solche Erfassungsfehler und nachträglichen Mengenanpassungen können die angezeigte Mengentreue beeinflussen. Eine Mengenabweichung kann daher auch durch die Datenerfassung oder eine Korrektur entstanden sein. Prüfe zur Einordnung die betroffene Anlieferung und ihre Positionsdaten.</p></div>
+          <p><strong>Wichtige Bewertungsregeln:</strong> Ist-Menge 0 wird separat ausgeschlossen. Gegenläufige Über- und Unterlieferungen gleichen sich für die Mengentreue nicht aus. Fehlende Daten bleiben nicht bewertbar. Pünktlichkeit: Ankunft bis einschließlich Planstart + <span data-hilfe-toleranz>30</span> Minuten (aktuell eingestellte Toleranz; Standard 30 Minuten); frühere Ankunft zählt ebenfalls als pünktlich. Die eingestellte Mengentoleranz von <span data-hilfe-mengentoleranz>0</span> % gilt für Mengentreue TE und damit OTIF TE. Für Anlieferungen zählt jede reguläre Positionsabweichung. Für die genaue Einordnung die eingebauten Berechnungserklärungen und Positionsdetails nutzen.</p>
+        </section>
+      </div>
+    </dialog>
   `;
 
   // ── Web Component ─────────────────────────────────────────────────────────
@@ -4128,8 +4246,9 @@
       this._ac          = new AbortController();
       this._loaderTimer = null;
 
-      // Auswertungszeitraum: Standard = letzte Woche bis einschließlich gestern
+      // Auswertungszeitraum: Vorwoche bis letzten abgeschlossenen BW-Werktag (Vorbelegung)
       this._bereich     = presetBereich('standard');
+      this._bereichQuelle = 'standard';
       this._domain      = null;         // { von, bis, tage } — Wertebereich des Sliders
       this._sliderTimer = null;
 
@@ -4167,6 +4286,9 @@
     disconnectedCallback() {
       this._log('disconnectedCallback — Widget wird aus dem DOM entfernt');
       this._ac.abort();
+      const hilfe=this._$('hilfe-dialog');
+      if(hilfe?.open)hilfe.close();
+      this._$('hilfe-btn')?.setAttribute('aria-expanded','false');
       this._stopLoaderSteps();
       this._watchdogStop();
       clearTimeout(this._suchTimer);
@@ -4252,7 +4374,7 @@
         const key = `${host.id}|${partner}|${detail.dataset?.analysisKey ?? `${detail.className}|${i}`}`;
         this._analyseOffeneErklaerungen.set(key, detail.open);
       });
-      return Array.from(host.querySelectorAll('.lb-scroll, .lb-chart-scroll, .pz-matrix-scroll, .tz-scroll'), el => ({
+      return Array.from(host.querySelectorAll('.lb-scroll, .lb-chart-scroll, .pz-matrix-scroll, .tz-scroll, .te-tabelle-wrap, .pt-scroll'), el => ({
         label:el.getAttribute('aria-label'), top:el.scrollTop, left:el.scrollLeft
       }));
     }
@@ -4264,7 +4386,7 @@
         const key = `${host.id}|${partner}|${detail.dataset?.analysisKey ?? `${detail.className}|${i}`}`;
         if (this._analyseOffeneErklaerungen?.has(key)) detail.open = this._analyseOffeneErklaerungen.get(key);
       });
-      host.querySelectorAll('.lb-scroll, .lb-chart-scroll, .pz-matrix-scroll, .tz-scroll').forEach(el => {
+      host.querySelectorAll('.lb-scroll, .lb-chart-scroll, .pz-matrix-scroll, .tz-scroll, .te-tabelle-wrap, .pt-scroll').forEach(el => {
         const saved = scrolls.find(item => item.label === el.getAttribute('aria-label'));
         if (saved) { el.scrollTop = saved.top; el.scrollLeft = saved.left; }
       });
@@ -4293,8 +4415,44 @@
 
     // ── Event-Binding ────────────────────────────────────────────────────
 
+    _aktualisiereHilfe() {
+      for(const element of this._shadow.querySelectorAll('[data-hilfe-toleranz]'))element.textContent=fmtMenge(this._cfg.toleranzMin);
+      for(const element of this._shadow.querySelectorAll('[data-hilfe-mengentoleranz]'))element.textContent=fmtMenge(this._cfg.mengenToleranzPct);
+    }
+
     _bindEvents() {
       const opts = { signal: this._ac.signal };
+      const hilfe=this._$('hilfe-dialog');
+      this._$('hilfe-btn')?.addEventListener('click',()=>{
+        if(hilfe?.open&&hilfe.matches(':modal'))return;
+        if(hilfe?.open)hilfe.close();
+        this._aktualisiereHilfe();
+        hilfe?.showModal();
+        this._$('hilfe-btn')?.setAttribute('aria-expanded','true');
+        this._$('hilfe-schliessen')?.focus({preventScroll:true});
+      },opts);
+      this._$('hilfe-schliessen')?.addEventListener('click',()=>hilfe?.close(),opts);
+      hilfe?.addEventListener('close',()=>{
+        if(hilfe.open)return;
+        this._$('hilfe-btn')?.setAttribute('aria-expanded','false');
+        if(this.isConnected)this._$('hilfe-btn')?.focus({preventScroll:true});
+      },opts);
+      hilfe?.addEventListener('keydown',e=>{
+        if(e.key!=='Tab')return;
+        const focusziele=Array.from(hilfe.querySelectorAll('button:not([disabled]),[tabindex="0"]'));
+        const index=focusziele.indexOf(this._shadow.activeElement);
+        if(!focusziele.length)return;
+        if(index<0||(!e.shiftKey&&index===focusziele.length-1)||(e.shiftKey&&index===0)){
+          e.preventDefault();focusziele[e.shiftKey?focusziele.length-1:0].focus();
+        }
+      },opts);
+      hilfe?.addEventListener('click',e=>{
+        const button=e.target.closest('[data-hilfe-ziel]');if(!button)return;
+        const ziel=this._$(button.dataset.hilfeZiel),body=this._$('hilfe-inhalt');
+        if(!ziel||!body)return;
+        const top=ziel.getBoundingClientRect().top-body.getBoundingClientRect().top+body.scrollTop;
+        body.scrollTop=Math.max(0,top-14);ziel.focus({preventScroll:true});
+      },opts);
       this._$('panel-durchlaufzeiten')?.addEventListener('click', e => {
         const button=e.target.closest('[data-dauer-basis]');
         if (!button || !['brutto','netto'].includes(button.dataset.dauerBasis)) return;
@@ -4340,7 +4498,7 @@
         this._fokusInUebersicht(this._$('ansicht-anpassen').querySelector('summary'));
       }, opts);
       // Stabile Hosts behalten ihre delegierten Handler bei Karten-Neuaufbau.
-      for (const id of ['kpi-cards','zeit-kpi-cards','otif-te','mengentreue-te']) {
+      for (const id of ['kpi-cards','zeit-kpi-cards']) {
         const host = this._$(id);
         host?.addEventListener?.('pointerover', e => {
           const card = e.target.closest('.kpi-card.hat-breakdown');
@@ -4352,7 +4510,10 @@
         }, opts);
       }
       this._shadow.querySelectorAll('[data-analyse-tab]').forEach(button => {
-        button.addEventListener('click', () => this._setAnalyseTab(button.dataset.analyseTab), opts);
+        button.addEventListener('click', () => {
+          this._setAnalyseTab(button.dataset.analyseTab);
+          this._elementHorizontalSichtbar(button, button.closest('.analyse-tabs'));
+        }, opts);
         button.addEventListener('keydown', e => {
           const namen = ['kennzahlen', 'kennzahlenverlauf', 'durchlaufzeiten', 'lieferanten', 'spediteure'];
           const i = namen.indexOf(button.dataset.analyseTab);
@@ -4575,9 +4736,16 @@
     }
 
     _switchView(name) {
+      const vorherigeView = this._activeView;
+      if (name === 'detail' && vorherigeView === 'uebersicht') {
+        this._teTabelleScroll = this._analyseUiVorRender(this._$('te-liste'));
+      }
       this._activeView = name;
       this._shadow.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
       this._$(`view-${name}`)?.classList.add('active');
+      if (name === 'uebersicht' && vorherigeView === 'detail') {
+        this._analyseUiNachRender(this._$('te-liste'), this._teTabelleScroll ?? []);
+      }
       // Beim Zurückkehren die Übersicht frisch rendern (Filter/Daten könnten
       // sich zwischenzeitlich geändert haben).
       if (name === 'uebersicht' && this._teMap.size) this._renderUebersicht();
@@ -4770,6 +4938,7 @@
     // Ziehen auch bei vielen TEs flüssig bleibt.
     _bereichAusSlider(aIdx, bIdx) {
       this._updateSliderAnzeige(aIdx, bIdx);
+      this._bereichQuelle = 'manuell';
       this._bereich = {
         von: this._idxZuDatum(aIdx),
         bis: new Date(this._idxZuDatum(bIdx).getTime() + TAG_MS),
@@ -5160,7 +5329,7 @@
       return `<details class="pz-info nullpositionen-block"><summary>Nullpositionen · ${zeilen.length} Positionen auf ${teAnzahl} TEs · separat ausgeschlossen</summary>
         <p class="lb-context">Ist-Menge = 0: Diese Positionen beeinflussen weder Mengentreue noch die reguläre Mengenabweichung. OTIF verwendet die verbleibenden Positionen. TEs nur mit Nullpositionen sind für Mengentreue und OTIF nicht bewertbar. Pünktlichkeit und Prozesszeiten bleiben unabhängig davon. Produkt je Anlieferung und Einheit dient als Positionsersatz; eine echte Positionsnummer ist noch nicht angebunden.</p>
         <div class="lb-scroll" tabindex="0" role="region" aria-label="Nullpositionen ${esc(kontext)} scrollen"><table class="lb-table lb-analysis-table"><thead><tr>
-          <th scope="col">Datum</th><th scope="col">Interne TE</th><th scope="col">Externe TE</th><th scope="col">Anlieferung</th><th scope="col">Produkt / Positionsersatz</th><th scope="col">Lieferant</th><th scope="col">Ist</th><th scope="col">Soll</th><th scope="col">Abweichung (separat)</th><th scope="col">Einheit</th><th scope="col">Geplanter Start ab</th>
+          <th scope="col">Datum</th><th scope="col">Interne TE</th><th scope="col">Externe TE</th><th scope="col">Anlieferung</th><th scope="col">Produkt / Positionsersatz</th><th scope="col">Lieferant</th><th scope="col" class="lb-num">Ist</th><th scope="col" class="lb-num">Soll</th><th scope="col" class="lb-num">Abweichung (separat)</th><th scope="col">Einheit</th><th scope="col">Geplanter Start ab</th>
         </tr></thead><tbody>${zeilen.map(p=>`<tr>
           <td>${esc(fmtDate(p.datum))}</td><td>${esc(p.te ?? '–')}</td><td>${esc(p.teExt ?? '–')}</td><td>${esc(p.anlieferung ?? '–')}</td>
           <td>${esc(p.nr ?? '–')}<small>${esc(p.name ?? '–')}${p.quellzeilen>1 ? ` · ${p.quellzeilen} Quellzeilen` : ''}</small></td><td>${esc(p.lieferant ?? '–')}</td><td class="lb-num">0</td>
@@ -5194,7 +5363,7 @@
         <section class="lb-analysis-block"><div class="lb-analysis-title">TEs mit Mengenabweichung</div>
           ${analyseZeilen.length ? `<div class="lb-scroll" tabindex="0" role="region" aria-label="TEs mit Mengenabweichung scrollen"><table class="lb-table lb-analysis-table"><thead><tr>
             <th scope="col">Datum</th><th scope="col">Interne TE-Nummer</th><th scope="col">Externe TE-Nummer</th><th scope="col">Lieferant</th><th scope="col">Transportmittel</th>
-            <th scope="col">Anzahl Positionen inkorrekt Mengentreue</th><th scope="col">Anzahl TE Überlieferung</th><th scope="col">Anzahl TE Unterlieferung</th><th scope="col">Summe Differenzmenge</th><th scope="col">Einheit</th>
+            <th scope="col" class="lb-num">Anzahl Positionen inkorrekt Mengentreue</th><th scope="col" class="lb-num">Anzahl TE Überlieferung</th><th scope="col" class="lb-num">Anzahl TE Unterlieferung</th><th scope="col" class="lb-num">Summe Differenzmenge</th><th scope="col">Einheit</th>
           </tr></thead><tbody>${analyseHTML}</tbody></table></div>`
           : '<div class="fb-detail-empty">Für diesen Lieferanten gibt es im ausgewählten Zeitraum keine TE mit Mengenabweichung.</div>'}
         </section>
@@ -5233,7 +5402,7 @@
       });
       host.innerHTML = `<p class="lb-context">${daten.anzahlLieferanten} Warensender · ${daten.anzahlTesGesamt} zugeordnete TEs · ${daten.anzahlTes} verschiedene TEs mit Positionsabweichung · ${daten.anzahlPositionen} abweichende Positionen (Produkt je Anlieferung) · ${esc(bereichLabel(this._bereich))}${suche ? ` · ${gruppen.length} von ${daten.gruppen.length} Gruppen angezeigt` : ''}</p>
         ${daten.ohneLieferant || daten.nichtBewertbar || daten.ohneProduktdaten ? `<p class="lb-context">Datenlücken: ${daten.ohneLieferant} Produktzeilen ohne Lieferantenzuordnung · ${daten.nichtBewertbar} Produktzeilen ohne bewertbare Mengenabweichung · ${daten.ohneProduktdaten} TE-/Lieferantenzuordnungen ohne Produktdaten. Warensender mit fehlenden Mengendaten bleiben sichtbar.</p>` : ''}
-        ${gruppen.length ? `<div class="lb-scroll" tabindex="0" role="region" aria-label="Warensender und Mengenabweichungen scrollen"><table class="lb-table lb-mengen-table"><thead><tr>
+        ${gruppen.length ? `<div class="lb-scroll" tabindex="0" role="region" aria-label="Warensender und Mengenabweichungen scrollen"><table class="lb-table lb-mengen-table lm-summary-table"><thead><tr>
           ${spalten.map(([f,label]) => `<th scope="col" aria-sort="${feld === f ? richtung === 1 ? 'ascending' : 'descending' : 'none'}"><button type="button" data-lm-sort="${f}">${label} ${feld === f ? richtung === 1 ? '↑' : '↓' : '↕'}</button></th>`).join('')}
         </tr></thead><tbody>${gruppen.map(g => `<tr>
           <td>${esc(g.lieferantLabel)}<small>${g.lieferantNr ? 'Nr. ' + esc(g.lieferantNr) : 'Zuordnung über Bezeichnung'}</small></td>
@@ -5348,7 +5517,7 @@
       if (!gruppen.some(g => g.key === this._spediteurDetailKey)) this._spediteurDetailKey = null;
       host.innerHTML = `<p class="lb-context">${daten.anzahlSpediteure} Frachtführer/Spediteure · ${daten.anzahlTes} zugeordnete TEs · ${daten.verspaetet} verspätete TEs · ${modus === 'schlechteste' ? `die ${topKeys.size} niedrigsten bewertbaren Pünktlichkeitsquoten` : 'alle Frachtführer'} · ${esc(bereichLabel(this._bereich))}${suche ? ` · ${gruppen.length} von ${daten.gruppen.length} Zeilen angezeigt` : ''}</p>
         ${daten.fehlend || daten.mehrdeutig ? `<p class="lb-context">Nicht zugeordnet: ${daten.fehlend} TEs ohne Frachtführer · ${daten.mehrdeutig} TEs mit mehrdeutiger Frachtführerzuordnung.</p>` : ''}
-        ${gruppen.length ? `<div class="lb-scroll" tabindex="0" role="region" aria-label="Frachtführerbewertung nach Transportmittel scrollen"><table class="lb-table lb-mengen-table"><thead><tr>${cols.map(([f,l]) => `<th scope="col" aria-sort="${feld === f ? richtung === 1 ? 'ascending' : 'descending' : 'none'}"><button type="button" data-fg-sort="${f}">${l} ${feld === f ? richtung === 1 ? '↑' : '↓' : '↕'}</button></th>`).join('')}</tr></thead><tbody>${gruppen.map(g => `<tr>
+        ${gruppen.length ? `<div class="lb-scroll" tabindex="0" role="region" aria-label="Frachtführerbewertung nach Transportmittel scrollen"><table class="lb-table lb-mengen-table fb-summary-table"><thead><tr>${cols.map(([f,l]) => `<th scope="col" aria-sort="${feld === f ? richtung === 1 ? 'ascending' : 'descending' : 'none'}"><button type="button" data-fg-sort="${f}">${l} ${feld === f ? richtung === 1 ? '↑' : '↓' : '↕'}</button></th>`).join('')}</tr></thead><tbody>${gruppen.map(g => `<tr>
           <th scope="row"><button type="button" class="fb-name-btn" data-fb-detail="${esc(encodeURIComponent(g.key))}" aria-expanded="${this._spediteurDetailKey === g.key}" aria-controls="spediteur-detail">${esc(g.label)}<span class="fb-chevron" aria-hidden="true">${this._spediteurDetailKey === g.key ? '▾' : '›'}</span><small>${g.nr ? 'Schlüssel ' + esc(g.nr) : 'Zuordnung über Bezeichnung'} · Details öffnen</small></button></th><td>${esc(g.transportLabel)}</td>
           <td class="lb-num">${g.anzahl}</td><td class="lb-num">${g.puenktlich}</td><td class="lb-num${g.verspaetet ? ' lb-diff' : ''}">${g.verspaetet}</td><td class="lb-num">${g.nb}</td>
           <td class="lb-num">${g.quote == null ? 'n. b.' : fmtProzent(g.quote)}<div class="lb-track" aria-hidden="true"><span style="width:${g.quote ?? 0}%"></span></div></td>
@@ -5377,7 +5546,7 @@
     }
 
     _updateKopf() {
-      const name  = bereichName(this._bereich);
+      const name  = this._bereichQuelle==='standard' ? 'Standard-Vorbelegung' : bereichName(this._bereich);
       const datum = bereichLabel(this._bereich);
       const tage  = bereichTage(this._bereich);
       const tes   = this._tesZeitraum();
@@ -5442,7 +5611,7 @@
       const vp=vorperiode(this._bereich),kalender=this._dauerKalender();
       const basis=tes=>kalender ? aggregiere(tes.map(te=>({...te,durchlaufzeitMin:prozessDauer(te,PROZESS_DEFS.find(d=>d.id==='gesamt'),kalender).min}))) : aggregiere(tes);
       const aktiv=basis(this._tesZeitraum()),vgl=basis(this._tesZeitraum(vp));
-      const def={id:'durchlaufzeit',label:`Ø Durchlaufzeit · ${this._dauerBasisText()}`};
+      const def={id:'durchlaufzeit',label:`Ø Gesamtdurchlaufzeit · ${this._dauerBasisText()}`};
       host.innerHTML=this._kpiCardHTML(def,aktiv,vgl,`Vorperiode: ${bereichLabel(vp)}`);
     }
 
@@ -5851,6 +6020,13 @@
       const teOtifHost = this._$('otif-te');
       const teMengenHost = this._$('mengentreue-te');
       if (!host) return;
+      // Bestehende TE-Container vor innerHTML behalten: DOM- und Leserichtung identisch.
+      const teKarten=[teOtifHost?.closest?.('.te-kpi'),teMengenHost?.closest?.('.te-kpi')].filter(Boolean);
+      const ordneKarten=()=>{
+        if(!host.insertBefore)return;
+        const karten=[...host.children].filter(el=>el.classList.contains('kpi-card'));
+        teKarten.forEach((karte,i)=>host.insertBefore(karte,karten[i]??null));
+      };
       const ui=this._analyseUiVorRender(host);
       const vp=vorperiode(this._bereich),tesAktiv=this._tesZeitraum(),tesVgl=this._tesZeitraum(vp);
       const alleTes=[...(this._teMap?.values() ?? [...tesAktiv,...tesVgl])];
@@ -5867,11 +6043,12 @@
         if (ladestellenHost) ladestellenHost.innerHTML = '';
         if (teOtifHost) teOtifHost.innerHTML = this._kpiCardHTML({id:'otif',label:'OTIF · TE'},aktiv,vgl,`Vorperiode: ${bereichLabel(vp)}`);
         if (teMengenHost) teMengenHost.innerHTML = this._kpiCardHTML({id:'mengentreu',label:'Mengentreue · TE'},aktiv,vgl,`Vorperiode: ${bereichLabel(vp)}`);
+        ordneKarten();
         return;
       }
 
       const vglName = `Vorperiode: ${bereichLabel(vp)}`;
-      host.innerHTML = KPI_DEFS.filter(def => def.id !== 'durchlaufzeit').map(def => def.id==='otif'
+      host.innerHTML = ['otif','mengentreu','puenktlich','abwMenge'].map(id=>KPI_DEFS.find(def=>def.id===id)).map(def => def.id==='otif'
         ? this._anlieferungsKarteHTML(anlieferungAktiv,anlieferungVgl,vglName)
         : def.id==='mengentreu'
         ? this._anlieferungsKarteHTML(anlieferungAktiv,anlieferungVgl,vglName,'mengentreu')
@@ -5879,6 +6056,7 @@
       this._analyseUiNachRender(host,ui);
       if(teOtifHost)teOtifHost.innerHTML=this._kpiCardHTML({id:'otif',label:'OTIF · TE'},aktiv,vgl,vglName);
       if(teMengenHost)teMengenHost.innerHTML=this._kpiCardHTML({id:'mengentreu',label:'Mengentreue · TE'},aktiv,vgl,vglName);
+      ordneKarten();
       if (zeitHost) this._renderZeitKpi();
       if (ladestellenHost) ladestellenHost.innerHTML = this._ladestellenVerteilungHTML(aktiv);
 
@@ -6025,7 +6203,8 @@
       let trendHTML = '<span class="kpi-trend gleich">–</span>';
       if (aWert != null && vWert != null && (def.id !== 'abwMenge' || (a.einheiten?.[0]?.einheit ?? '')===(v.einheiten?.[0]?.einheit ?? ''))) {
         const delta = aWert - vWert;
-        const rund  = Math.round(delta * 10) / 10;
+        const faktor = def.id==='durchlaufzeit' ? 1 : def.id==='abwMenge' ? 100 : 10;
+        const rund = Math.sign(delta)*Math.round(Math.abs(delta)*faktor)/faktor;
         const cls   = rund === 0 ? 'gleich' : ((rund > 0) === besserWennHoeher ? 'auf' : 'ab');
         const pfeil = rund === 0 ? '±' : (rund > 0 ? '▲' : '▼');
         const betrag = def.id === 'durchlaufzeit'
@@ -6061,6 +6240,7 @@
     _renderTabelle() {
       const host = this._$('te-liste');
       if (!host) return;
+      const uiScroll = this._analyseUiVorRender(host);
 
       const gefiltert = this._sortiere(this._gefilterteTes());
       const gesamtImZeitraum = this._tesZeitraum().length;
@@ -6071,6 +6251,7 @@
             ? 'Keine Transporteinheiten in diesem Zeitraum'
             : 'Keine Transporteinheiten für die aktive Filterkombination'}
         </div></div>`;
+        this._analyseUiNachRender(host, uiScroll);
         return;
       }
 
@@ -6100,7 +6281,7 @@
       const zeilen = sichtbar.map(te => this._teZeileHTML(te)).join('');
 
       host.innerHTML = `
-        <div class="te-tabelle-wrap">
+        <div class="te-tabelle-wrap" tabindex="0" role="region" aria-label="Transporteinheiten scrollen">
           <table class="te-tabelle">
             <thead><tr>${kopf}</tr></thead>
             <tbody>${zeilen}</tbody>
@@ -6113,6 +6294,7 @@
           <span>·</span>
           <span>„n. b.“ = nicht bewertbar (unvollständige Daten)</span>
         </div>`;
+      this._analyseUiNachRender(host, uiScroll);
 
       // Sortierung per Spaltenkopf
       host.querySelectorAll('th[data-sort]').forEach(th => {
@@ -6188,10 +6370,12 @@
     }
 
     _renderDetail(teNr) {
+      const selbeTe = this._activeTE === teNr && this._activeView === 'detail';
       this._activeTE = teNr;
       const te = this._teMap.get(teNr);
       const content = this._$('detail-content');
       if (!te || !content) return;
+      const uiScroll = selbeTe ? this._analyseUiVorRender(content) : [];
 
       // Herkunfts-View merken, damit der Zurück-Button dorthin zurückführt
       // (sonst landet man immer in der Übersicht, auch wenn man aus dem
@@ -6201,6 +6385,7 @@
       }
 
       content.innerHTML = this._detailHTML(te);
+      this._analyseUiNachRender(content, uiScroll);
       this._switchView('detail');
     }
 
@@ -6428,7 +6613,7 @@
           linienHTML += `
             <div class="zs-soll-drop" style="left:${r.toFixed(2)}%">
               <span class="zs-soll-tick ende"></span>
-              <span class="zs-soll-time">${fmtTime(te.geplantEnde)}</span>
+              ${te.geplantStart?.getTime() === te.geplantEnde.getTime() ? '' : `<span class="zs-soll-time${te.geplantStart && Math.abs(r-l)<10 ? ' zs-soll-time-offset' : ''}">${fmtTime(te.geplantEnde)}</span>`}
             </div>`;
         }
         sollHTML = bandHTML + linienHTML;
@@ -6498,7 +6683,7 @@
       }).join('');
 
       return `
-        <div class="pt-scroll">
+        <div class="pt-scroll" tabindex="0" role="region" aria-label="TE-Positionen scrollen">
           <table class="pt-table">
             <thead>
               <tr>
@@ -6747,6 +6932,7 @@
     set puenktlichkeitToleranzMin(v) {
       const n = Number(v);
       this._cfg.toleranzMin = Number.isFinite(n) && n >= 0 ? n : VERZOEGERUNG_SCHWELLE_MIN;
+      this._aktualisiereHilfe();
       this._neuBerechnen();
     }
     get puenktlichkeitToleranzMin() { return this._cfg.toleranzMin; }
@@ -6754,6 +6940,7 @@
     set mengenToleranzProzent(v) {
       const n = Number(v);
       this._cfg.mengenToleranzPct = Number.isFinite(n) && n >= 0 ? n : 0;
+      this._aktualisiereHilfe();
       this._neuBerechnen();
     }
     get mengenToleranzProzent() { return this._cfg.mengenToleranzPct; }
@@ -6826,6 +7013,7 @@
       const erlaubt = ['gestern', 'dieseWoche', 'letzteWoche', 'standard'];
       if (!erlaubt.includes(preset)) return;
       this._bereich = presetBereich(preset);
+      this._bereichQuelle = preset;
       this._syncSlider();
       if (this._teMap.size) this._renderUebersicht();
     }
@@ -6843,6 +7031,7 @@
       let bisTag = tagStart(b);
       if (bisTag < vonTag) { const t = vonTag; vonTag = bisTag; bisTag = t; }
       this._bereich = { von: vonTag, bis: new Date(bisTag.getTime() + TAG_MS) };
+      this._bereichQuelle = 'manuell';
       this._syncSlider();
       if (this._teMap.size) this._renderUebersicht();
     }
