@@ -1,6 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
 //  SAP Custom Widget – Wareneingang Analyse (WE-Analyse)
-//  JavaScript-Arbeitsstand 2.1.74 – Abweichende Menge direkt nach Mengentreue
+//  JavaScript-Arbeitsstand 2.1.78 – Sichtbarkeit und Endposition der horizontalen Leisten
 //
 //  Umbau des Live-Trackers zur nachträglichen Auswertung.
 //
@@ -3600,13 +3600,13 @@
 
 
       .pz-transport { margin-top:18px; padding:22px; background:var(--c-bg2); border:1px solid var(--c-border); border-radius:var(--r-lg); box-shadow:var(--shadow-sm); }
-      .pz-matrix-scroll { overflow-x:auto; margin-top:20px; border:1px solid var(--c-border); border-radius:8px; }
+      .pz-matrix-scroll { overflow:auto; max-height:560px; scroll-padding-top:72px; position:relative; isolation:isolate; margin-top:20px; border:1px solid var(--c-border); border-radius:8px; }
       .pz-matrix { width:100%; min-width:1040px; border-collapse:separate; border-spacing:0; table-layout:fixed; }
       .pz-matrix caption { text-align:left; padding:12px; color:var(--c-text2); font-size:11px; }
       .pz-matrix th, .pz-matrix td { padding:7px; border-bottom:1px solid var(--c-border); vertical-align:middle; }
-      .pz-matrix thead th { background:var(--c-bg3); color:var(--c-text2); font-size:11px; }
+      .pz-matrix thead th { position:sticky; top:0; z-index:2; background:var(--c-bg3); color:var(--c-text2); font-size:11px; }
       .pz-matrix th:first-child { position:sticky; left:0; width:190px; background:var(--c-bg2); z-index:1; text-align:left; border-right:1px solid var(--c-border); }
-      .pz-matrix thead th:first-child { background:var(--c-bg3); z-index:2; }
+      .pz-matrix thead th:first-child { top:0; background:var(--c-bg3); z-index:3; }
       .pz-matrix tbody tr:last-child th, .pz-matrix tbody tr:last-child td { border-bottom:0; }
       .pz-matrix .pz-matrix-total { border-left:2px solid var(--c-border2); background:var(--c-bg3); }
       .pz-sort { width:100%; color:inherit; padding:8px 2px; font:600 11px var(--font); line-height:1.5; min-height:48px; }
@@ -3654,10 +3654,21 @@
       .tz-controls { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
       .tz-controls label { color:var(--c-text2); font-size:11px; }
       .tz-controls select { min-width:150px; padding:8px 10px; color:var(--c-text); background:var(--c-bg); border:1px solid var(--c-border2); border-radius:7px; font:11px var(--font); }
-      .tz-scroll { overflow:auto; margin-top:18px; border:1px solid var(--c-border); border-radius:8px; background:var(--c-bg); }
+      .tz-scroll { overflow-anchor:none; overflow:auto; max-height:560px; scroll-padding-top:var(--tz-head-height,57px); position:relative; isolation:isolate; margin-top:18px; border:1px solid var(--c-border); border-radius:8px; background:var(--c-bg); }
+      .tz-scroll:focus-visible, .pz-matrix-scroll:focus-visible { outline:2px solid var(--c-red-light); outline-offset:2px; }
       .tz-canvas { min-width:100%; padding-bottom:8px; padding-right:52px; }
       .tz-axis, .tz-row { display:grid; grid-template-columns:250px minmax(0,1fr); }
       .tz-axis { position:sticky; top:0; z-index:4; min-height:56px; background:var(--c-bg3); border-bottom:1px solid var(--c-border2); }
+      .tz-pan { grid-column:1/-1; position:sticky; left:0; display:flex; align-items:center; gap:10px; width:100%; max-width:100%; height:34px; padding:4px 12px; background:var(--c-bg3); border-top:1px solid var(--c-border2); color:var(--c-text2); font:10px var(--font); }
+      .tz-pan[hidden] { display:none; }
+      .tz-pan span { flex:0 0 auto; }
+      .tz-pan input { appearance:none; -webkit-appearance:none; display:block; flex:1; width:100%; min-width:0; height:20px; margin:0; background:transparent; cursor:grab; }
+      .tz-pan input:active { cursor:grabbing; }
+      .tz-pan input:focus-visible { outline:2px solid var(--c-red-light); outline-offset:2px; border-radius:4px; }
+      .tz-pan input::-webkit-slider-runnable-track { height:10px; border-radius:6px; background:var(--c-bg4); box-shadow:inset 0 0 0 1px var(--c-border2); }
+      .tz-pan input::-webkit-slider-thumb { appearance:none; -webkit-appearance:none; width:var(--tz-thumb-width,30px); height:10px; border-radius:6px; background:var(--c-text2); }
+      .tz-pan input::-moz-range-track { height:10px; border-radius:6px; background:var(--c-bg4); box-shadow:inset 0 0 0 1px var(--c-border2); }
+      .tz-pan input::-moz-range-thumb { width:var(--tz-thumb-width,30px); height:10px; border:0; border-radius:6px; background:var(--c-text2); }
       .tz-axis-label { position:sticky; left:0; z-index:5; display:flex; align-items:center; padding:10px 12px; color:var(--c-text2); background:var(--c-bg3); border-right:1px solid var(--c-border2); font:10px var(--font-mono); }
       .tz-axis-track, .tz-track { position:relative; min-width:0; }
       .tz-axis-track { height:56px; }
@@ -3698,6 +3709,27 @@
       .tz-shift-swatch { width:3px; height:15px; background:var(--c-red-light); box-shadow:0 0 0 1px var(--c-red-dim); }
       .tz-summary { margin-top:12px; color:var(--c-text2); font-size:10px; line-height:1.6; }
       @container (max-width:520px) { .tz-widget { padding:14px; } .tz-axis, .tz-row { grid-template-columns:220px minmax(0,1fr); } }
+
+
+      /* Zusätzliche Bedienwege für lange, in beiden Richtungen scrollende Tabellen. */
+      .table-pan { position:sticky; top:0; left:0; z-index:5; width:100%; max-width:100%; background:var(--c-bg3); }
+      .table-pan[hidden], .table-pan-row[hidden] { display:none; }
+      .table-pan-row { display:flex; align-items:center; gap:10px; height:34px; padding:4px 12px; border-bottom:1px solid var(--c-border2); color:var(--c-text2); font:10px var(--font); }
+      .table-pan-row span { flex:0 1 auto; max-width:45%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .table-pan-row input { appearance:none; -webkit-appearance:none; display:block; flex:1; width:100%; min-width:0; height:20px; margin:0; background:transparent; cursor:grab; }
+      .table-pan-row input:active { cursor:grabbing; }
+      .table-pan-row input:focus-visible { outline:2px solid var(--c-red-light); outline-offset:2px; border-radius:4px; }
+      .table-pan-row input::-webkit-slider-runnable-track { height:10px; border-radius:6px; background:var(--c-bg4); box-shadow:inset 0 0 0 1px var(--c-border2); }
+      .table-pan-row input::-webkit-slider-thumb { appearance:none; -webkit-appearance:none; width:var(--table-thumb-width,30px); height:10px; border-radius:6px; background:var(--c-text2); }
+      .table-pan-row input::-moz-range-track { height:10px; border-radius:6px; background:var(--c-bg4); box-shadow:inset 0 0 0 1px var(--c-border2); }
+      .table-pan-row input::-moz-range-thumb { width:var(--table-thumb-width,30px); height:10px; border:0; border-radius:6px; background:var(--c-text2); }
+      .te-tabelle-wrap, .pt-scroll, .pz-matrix-scroll { overflow-anchor:none; position:relative; isolation:isolate; }
+      .te-tabelle-wrap, .pt-scroll, .pz-matrix-scroll, .lb-scroll { scroll-padding-top:var(--table-head-height,72px); }
+      .te-tabelle-wrap > table > thead > tr > th,
+      .pt-scroll > table > thead > tr > th,
+      .pz-matrix-scroll > table > thead > tr > th:first-child,
+      .pz-matrix-scroll > table > thead > tr > th,
+      .lb-scroll > table.lb-table > thead > tr > th { top:var(--table-pan-height,0px); }
 
       .analyse-tabs { display:flex; gap:6px; overflow-x:auto; border-bottom:1px solid var(--c-border2); margin:0 0 20px; }
       .analyse-tab { color:var(--c-text2); font-size:14px; font-weight:600; white-space:nowrap; flex-shrink:0; padding:13px 20px; border-bottom:3px solid transparent; border-radius:7px 7px 0 0; }
@@ -4273,6 +4305,11 @@
       this._log('connectedCallback — Widget wird ins DOM eingehängt');
       if (this._ac.signal.aborted) this._ac = new AbortController();
       this._bindEvents();
+      // toggle läuft nicht nach oben; Capture erfasst auch Details außerhalb des Scrollziels.
+      this._shadow.addEventListener('toggle',()=>{
+        this._tabellenScrollBindungen?.forEach(binding=>binding.sync());
+      },{capture:true,signal:this._ac.signal});
+      this._bindeTabellenScrollleisten(this._shadow);
       this._applyTheme();
       this._syncSlider();
       const state = this._dataBinding?.state;
@@ -4286,6 +4323,10 @@
     disconnectedCallback() {
       this._log('disconnectedCallback — Widget wird aus dem DOM entfernt');
       this._ac.abort();
+      this._tabellenScrollBindungen?.forEach(binding=>binding.destroy());
+      this._tabellenScrollBindungen?.clear();
+      this._tzScrollObserver?.disconnect();
+      this._tzScrollObserver=null;
       const hilfe=this._$('hilfe-dialog');
       if(hilfe?.open)hilfe.close();
       this._$('hilfe-btn')?.setAttribute('aria-expanded','false');
@@ -4386,9 +4427,111 @@
         const key = `${host.id}|${partner}|${detail.dataset?.analysisKey ?? `${detail.className}|${i}`}`;
         if (this._analyseOffeneErklaerungen?.has(key)) detail.open = this._analyseOffeneErklaerungen.get(key);
       });
+      this._bindeTabellenScrollleisten(host);
       host.querySelectorAll('.lb-scroll, .lb-chart-scroll, .pz-matrix-scroll, .tz-scroll, .te-tabelle-wrap, .pt-scroll').forEach(el => {
         const saved = scrolls.find(item => item.label === el.getAttribute('aria-label'));
         if (saved) { el.scrollTop = saved.top; el.scrollLeft = saved.left; }
+      });
+      this._tabellenScrollBindungen?.forEach(binding=>binding.sync());
+    }
+
+
+    // Ein gemeinsamer vertikaler Scrollbereich bleibt auch bei Partnerdetails bestehen.
+    // Deren horizontale Bedienwege werden im fixierten Kopf der Haupttabelle angeboten.
+    _horizontalerScrollBereich(el) {
+      this._horizontalMaxima ??= new WeakMap();
+      const key=`${el.scrollWidth}|${el.clientWidth}|${el.offsetWidth}`;
+      const cached=this._horizontalMaxima.get(el);
+      if (cached?.key===key) return cached.max;
+      const left=el.scrollLeft;
+      const behavior=el.style.scrollBehavior;
+      el.style.scrollBehavior='auto';
+      el.scrollLeft=Number.MAX_SAFE_INTEGER;
+      const max=el.scrollLeft;
+      el.scrollLeft=left;
+      el.style.scrollBehavior=behavior;
+      this._horizontalMaxima.set(el,{key,max});
+      return max;
+    }
+
+    _bindeTabellenScrollleisten(host) {
+      if (!host?.querySelectorAll || typeof ResizeObserver!=='function') return;
+      const selector='.lb-scroll, .pz-matrix-scroll, .te-tabelle-wrap, .pt-scroll';
+      this._tabellenScrollBindungen ??= new Map();
+      for (const [el,binding] of this._tabellenScrollBindungen) {
+        if (!el.isConnected) { binding.destroy(); this._tabellenScrollBindungen.delete(el); }
+      }
+      host.querySelectorAll(selector).forEach(owner=>{
+        if (owner.parentElement?.closest(selector)) return;
+        const current=this._tabellenScrollBindungen.get(owner);
+        if (current) { current.sync(); return; }
+        const table=Array.from(owner.children).find(el=>el.tagName==='TABLE');
+        if (!table) return;
+        const pane=document.createElement('div');
+        pane.className='table-pan';pane.hidden=true;
+        owner.prepend(pane);
+        const targets=[owner,...owner.querySelectorAll('.lb-scroll')];
+        const controls=targets.map(target=>{
+          const row=document.createElement('label');row.className='table-pan-row';row.hidden=true;
+          const text=document.createElement('span');
+          const label=(target.getAttribute('aria-label') || 'Tabelle').replace(/ scrollen$/,'');
+          text.textContent=target===owner ? 'Horizontal verschieben' : label;
+          text.title=label;
+          const range=document.createElement('input');range.type='range';range.min='0';range.max='0';range.step='1';range.value='0';range.disabled=true;
+          range.setAttribute('aria-label',`${label}: horizontal verschieben`);
+          range.title=`${label}: horizontal verschieben; Pfeiltasten, Bild auf/ab, Pos1 und Ende`;
+          row.append(text,range);pane.append(row);
+          return {target,row,range};
+        });
+        const sync=()=>{
+          if (!owner.clientWidth) return;
+          const width=`${owner.clientWidth}px`;
+          if (pane.style.width!==width) pane.style.width=width;
+          // Ohne die Zusatzzeilen messen, damit sie bei kurzen Tabellen keinen Bedarf erzeugen.
+          const long=owner.scrollHeight-pane.offsetHeight>owner.clientHeight+1;
+          let any=false;
+          controls.forEach(({target,row,range})=>{
+            const visible=target.clientWidth>0 && !target.closest('details:not([open]), [hidden]') && target.checkVisibility?.()!==false;
+            const max=visible ? this._horizontalerScrollBereich(target) : 0;
+            const show=long && visible && max>4;
+            row.hidden=!show;range.disabled=!show;any ||= show;
+            range.max=String(max);range.value=String(target.scrollLeft);
+            range.setAttribute('aria-valuetext',max ? `${Math.round(target.scrollLeft/max*100)} Prozent des horizontalen Bereichs` : 'Tabelle vollständig sichtbar');
+          });
+          pane.hidden=!any;
+          controls.forEach(({target,row,range})=>{
+            if (!row.hidden) range.style.setProperty('--table-thumb-width',`${Math.max(24,Math.min(range.clientWidth*0.5,range.clientWidth*target.clientWidth/target.scrollWidth))}px`);
+          });
+          const height=`${pane.offsetHeight}px`;
+          if (owner.style.getPropertyValue('--table-pan-height')!==height) owner.style.setProperty('--table-pan-height',height);
+          const head=`${pane.offsetHeight+(table.querySelector('thead')?.offsetHeight ?? 0)}px`;
+          if (owner.style.getPropertyValue('--table-head-height')!==head) owner.style.setProperty('--table-head-height',head);
+        };
+        controls.forEach(({target,range})=>{
+          target.addEventListener('scroll',sync,{passive:true});
+          range.oninput=()=>{target.scrollLeft=Number(range.value);sync();};
+          range.onkeydown=e=>{
+            if (e.key==='ArrowUp' || e.key==='ArrowDown') { e.preventDefault();e.stopPropagation();return; }
+            let next;
+            if (e.key==='ArrowLeft') next=target.scrollLeft-40;
+            else if (e.key==='ArrowRight') next=target.scrollLeft+40;
+            else if (e.key==='PageUp') next=target.scrollLeft-target.clientWidth*0.9;
+            else if (e.key==='PageDown') next=target.scrollLeft+target.clientWidth*0.9;
+            else if (e.key==='Home') next=0;
+            else if (e.key==='End') next=Number(range.max);
+            else return;
+            e.preventDefault();e.stopPropagation();target.scrollLeft=next;sync();
+          };
+        });
+        const observer=new ResizeObserver(sync);
+        observer.observe(owner);
+        controls.forEach(({target})=>{
+          if (target!==owner) observer.observe(target);
+          const t=Array.from(target.children).find(el=>el.tagName==='TABLE');
+          if (t) observer.observe(t);
+        });
+        const binding={sync,destroy:()=>{observer.disconnect();controls.forEach(({target})=>target.removeEventListener('scroll',sync));pane.remove();}};
+        this._tabellenScrollBindungen.set(owner,binding);sync();
       });
     }
 
@@ -4400,7 +4543,7 @@
       if (!wrapper || !row) return;
       const box = wrapper.getBoundingClientRect(), rect = row.getBoundingClientRect();
       const head = wrapper.querySelector('thead')?.getBoundingClientRect().height ?? 0;
-      const top = box.top + wrapper.clientTop + head, bottom = box.top + wrapper.clientTop + wrapper.clientHeight;
+      const top = box.top + wrapper.clientTop + head + (wrapper.querySelector(':scope > .table-pan')?.offsetHeight ?? 0), bottom = box.top + wrapper.clientTop + wrapper.clientHeight;
       if (rect.top < top) wrapper.scrollTop += rect.top - top;
       else if (button.getAttribute('aria-expanded') === 'true' && rect.top > top + 80) {
         // Auch bei einem Klick am unteren Rand bleibt der Detailkopf erreichbar.
@@ -5693,6 +5836,8 @@
     _renderProzesszeiten() {
       const host = this._$('prozesszeiten');
       if (!host) return;
+      this._tzScrollObserver?.disconnect();
+      this._tzScrollObserver=null;
       const uiScroll=this._analyseUiVorRender(host);
       const tes = this._tesZeitraum();
       this._renderNettoInfo();
@@ -5763,6 +5908,7 @@
         Entladung: reguläres Entladeende ohne Ersatzwert; Vereinnahmung: tatsächliches Entladeende bis WE-Buchung. Die Zuordnung des regulären Stempels zum ersten Entladeende bleibt fachlich zu prüfen.
         Unterschiedliche Fallzahlen je Schritt: Phasendurchschnitte nicht zur Gesamtdauer addieren. Die beiden Durchlaufzeiten werden direkt ab Ankunft beziehungsweise Entladestart bis Fertigstellung berechnet.
       </details>`;
+      this._bindeZeitstrahlScrollleiste(host);
       this._analyseUiNachRender(host,uiScroll);
       host.onclick = e => {
         const button = e.target.closest('[data-pz-modus], [data-pz-fokus], [data-pz-sort], [data-pz-cell], [data-tz-te]');
@@ -5803,6 +5949,52 @@
       };
     }
 
+    // Zusätzliche horizontale Bedienleiste im fixierten Zeitachsenkopf.
+    // Sie verändert ausschließlich scrollLeft; die vertikale TE-Position bleibt bestehen.
+    _bindeZeitstrahlScrollleiste(host) {
+      const scroll=host?.querySelector?.('.tz-scroll');
+      const canvas=scroll?.querySelector('.tz-canvas');
+      const pane=scroll?.querySelector('.tz-pan');
+      const range=pane?.querySelector('input');
+      const axis=scroll?.querySelector('.tz-axis');
+      if (!scroll || !canvas || !pane || !range || !axis) return;
+      const sync=()=>{
+        if (!scroll.clientWidth) return;
+        const viewportWidth=`${scroll.clientWidth}px`;
+        if (pane.style.width!==viewportWidth) pane.style.width=viewportWidth;
+        const max=this._horizontalerScrollBereich(scroll);
+        pane.hidden=max<1;
+        range.disabled=max<1;
+        range.max=String(max);
+        range.value=String(scroll.scrollLeft);
+        range.setAttribute('aria-valuetext',max ? `${Math.round(scroll.scrollLeft/max*100)} Prozent des horizontalen Bereichs` : 'Zeitstrahl vollständig sichtbar');
+        if (max) range.style.setProperty('--tz-thumb-width',`${Math.max(24,Math.min(range.clientWidth*0.5,range.clientWidth*scroll.clientWidth/scroll.scrollWidth))}px`);
+        const h=`${axis.offsetHeight}px`;
+        if (scroll.style.getPropertyValue('--tz-head-height')!==h) scroll.style.setProperty('--tz-head-height',h);
+      };
+      scroll.onscroll=sync;
+      range.oninput=()=>{scroll.scrollLeft=Number(range.value);sync();};
+      range.onkeydown=e=>{
+        if (e.key==='ArrowUp' || e.key==='ArrowDown') { e.preventDefault();e.stopPropagation();return; }
+        let target;
+        if (e.key==='ArrowLeft') target=scroll.scrollLeft-40;
+        else if (e.key==='ArrowRight') target=scroll.scrollLeft+40;
+        else if (e.key==='PageUp') target=scroll.scrollLeft-scroll.clientWidth*0.9;
+        else if (e.key==='PageDown') target=scroll.scrollLeft+scroll.clientWidth*0.9;
+        else if (e.key==='Home') target=0;
+        else if (e.key==='End') target=Number(range.max);
+        else return;
+        e.preventDefault();e.stopPropagation();
+        scroll.scrollLeft=target;sync();
+      };
+      if (typeof ResizeObserver==='function') {
+        this._tzScrollObserver=new ResizeObserver(sync);
+        this._tzScrollObserver.observe(scroll);
+        this._tzScrollObserver.observe(canvas);
+      }
+      sync();
+    }
+
     _transportzeitenHTML(tes, modus) {
       const gruppen = aggregiereTransportzeiten(tes, this._dauerKalender());
       const spalten = [
@@ -5832,7 +6024,7 @@
             <button data-pz-modus="mittel" aria-pressed="${modus==='mittel'}">Durchschnitt</button>
             <button data-pz-modus="median" aria-pressed="${modus==='median'}">Median</button>
           </div></div>
-        <div class="pz-matrix-scroll" role="region" aria-label="Transportmittelmatrix, horizontal scrollbar" tabindex="0">
+        <div class="pz-matrix-scroll" role="region" aria-label="Transportmittelmatrix, horizontal und vertikal scrollbar" tabindex="0">
           <table class="pz-matrix"><caption>Zeitwerte in Minuten · ${this._dauerBasisText()} · Spaltenüberschrift zum Sortieren anklicken</caption>
             <thead><tr><th scope="col" aria-sort="${sortAttr('name')}"><button class="pz-sort" data-pz-sort="name">Transportmittel <span>${sortIcon('name')}</span></button></th>
               ${spalten.map(c=>`<th scope="col" class="${c.gesamt?'pz-matrix-total':''}" aria-sort="${sortAttr(c.id)}"><button class="pz-sort" data-pz-sort="${c.id}">${c.label} <span>${sortIcon(c.id)}</span></button></th>`).join('')}
@@ -5922,13 +6114,13 @@
             <div class="tz-axis"><div class="tz-axis-label">${datumsLabel(daten.datum)}</div><div class="tz-axis-track">
               ${ticks.map(t=>`<i class="tz-tick${t.tageswechsel ? ' tz-day-change' : ''}${t.letzter ? ' tz-last' : ''}" style="left:${t.pos.toFixed(3)}%"><span>${t.datumKurz ? `<b>${esc(t.datumKurz)}</b><em>${esc(t.label)}</em>` : esc(t.label)}</span></i>`).join('')}
               ${(daten.schichtMarkers??[]).map(ms=>`<i class="tz-shift-axis" style="left:${pct(ms).toFixed(3)}%"><span>Schichtwechsel 14:30</span></i>`).join('')}
-            </div></div>${zeilen}
+            </div><label class="tz-pan" hidden><span>Horizontal verschieben</span><input type="range" class="tz-pan-range" min="0" max="0" step="1" value="0" disabled aria-label="Zeitstrahl horizontal verschieben" title="Zeitstrahl horizontal verschieben; Pfeiltasten, Bild auf/ab, Pos1 und Ende"></label></div>${zeilen}
           </div></div>
         <div class="tz-legend">${TE_ZEITSTRAHL_PHASES.map((def,i)=>`<span class="tz-legend-item"><i class="tz-swatch tz-phase-${i}"></i>${esc(def.label)}</span>`).join('')}
           <span class="tz-legend-item"><i class="tz-shift-swatch"></i>Schichtwechsel 14:30</span></div>
         <div class="tz-summary">${daten.alleZeilen} von ${daten.kandidaten} TEs mit gültiger Gesamtdurchlaufzeit · ${daten.fehlend} mit fehlenden Zeitstempeln · ${daten.ungueltig} mit ungültiger Zeitfolge${daten.weitere ? ` · weitere ${daten.weitere} TEs aus Darstellungsgründen nicht eingeblendet` : ''}. Zeile anklicken, um die TE-Details zu öffnen.</div>
         <details class="pz-info" data-analysis-key="zeitstrahlregeln"><summary>Darstellung und Datenregeln</summary>
-          Jede Zeile zeigt die Gesamtdurchlaufzeit von Ankunft bis zur vollständigen Fertigstellung aller Positionen. Die Zeitachse verwendet durchgehend einen festen Stundentakt; bei Tageswechseln wird zusätzlich das Datum angezeigt. Mehrtägige Achsen sind horizontal scrollbar. Jede TE bleibt in einer eigenen Zeile, auch wenn mehrere TEs gleichzeitig durchlaufen. Überlappende Phasen innerhalb derselben TE stehen in zusätzlichen Spuren untereinander; ihre tatsächlichen Start- und Endzeiten werden nicht verschoben. Aufeinanderfolgende Phasen bleiben in einer Spur. 0-Minuten-Phasen erscheinen als schmale Markierungen. Die Gesamtdurchlaufzeit wird weiterhin direkt aus Ankunft und vollständiger Fertigstellung berechnet; die Phasendauern werden wegen möglicher Überlappungen nicht dafür addiert. Die fünf farbigen Abschnitte entsprechen den vorhandenen Prozessdefinitionen; bei einem fehlenden oder ungültigen Phasenpaar bleibt der betreffende Abschnitt frei. Die hervorgehobenen Linien bei 14:30 markieren den Schichtwechsel an jedem Tag innerhalb der dargestellten Achse. Phasen außerhalb der eigenen TE-Gesamtdurchlaufzeit werden nicht gezeichnet. Die Tageszuordnung folgt der Zeitraumlogik des Widgets: geplanter Start, ersatzweise Ankunft, ersatzweise vollständige Fertigstellung. Bestandsarten bleiben unberücksichtigt. Pro Tag werden höchstens ${TE_ZEITSTRAHL_MAX_ZEILEN} vollständige TEs dargestellt; die Auswertung darüber bleibt unverändert.</details>
+          Jede Zeile zeigt die Gesamtdurchlaufzeit von Ankunft bis zur vollständigen Fertigstellung aller Positionen. Die Zeitachse verwendet durchgehend einen festen Stundentakt; bei Tageswechseln wird zusätzlich das Datum angezeigt. Mehrtägige Achsen sind horizontal scrollbar. Bei vielen TEs wird innerhalb des Zeitstrahls vertikal gescrollt; die Zeitachse bleibt am oberen Rand der Liste sichtbar. Bei horizontalem Überlauf kann die zusätzliche Leiste direkt im Zeitachsenkopf verwendet werden, ohne zur letzten TE zu scrollen. Beide horizontalen Bedienwege sind synchronisiert. Jede TE bleibt in einer eigenen Zeile, auch wenn mehrere TEs gleichzeitig durchlaufen. Überlappende Phasen innerhalb derselben TE stehen in zusätzlichen Spuren untereinander; ihre tatsächlichen Start- und Endzeiten werden nicht verschoben. Aufeinanderfolgende Phasen bleiben in einer Spur. 0-Minuten-Phasen erscheinen als schmale Markierungen. Die Gesamtdurchlaufzeit wird weiterhin direkt aus Ankunft und vollständiger Fertigstellung berechnet; die Phasendauern werden wegen möglicher Überlappungen nicht dafür addiert. Die fünf farbigen Abschnitte entsprechen den vorhandenen Prozessdefinitionen; bei einem fehlenden oder ungültigen Phasenpaar bleibt der betreffende Abschnitt frei. Die hervorgehobenen Linien bei 14:30 markieren den Schichtwechsel an jedem Tag innerhalb der dargestellten Achse. Phasen außerhalb der eigenen TE-Gesamtdurchlaufzeit werden nicht gezeichnet. Die Tageszuordnung folgt der Zeitraumlogik des Widgets: geplanter Start, ersatzweise Ankunft, ersatzweise vollständige Fertigstellung. Bestandsarten bleiben unberücksichtigt. Pro Tag werden höchstens ${TE_ZEITSTRAHL_MAX_ZEILEN} vollständige TEs dargestellt; die Auswertung darüber bleibt unverändert.</details>
       </section>`;
     }
 
